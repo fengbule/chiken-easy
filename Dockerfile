@@ -13,6 +13,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/server ./server
 COPY --from=build /app/agent ./agent
+COPY --from=build /app/shared ./shared
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/templates ./templates
 EXPOSE 7788

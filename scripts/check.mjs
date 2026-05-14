@@ -2,7 +2,10 @@ import fs from "fs";
 
 const files = [
   "server/index.js",
+  "server/installers.js",
   "agent/index.js",
+  "agent/systemProbe.js",
+  "shared/configFactory.js",
   "web/src/App.jsx",
   "web/src/style.css",
   "templates/protocols.json",

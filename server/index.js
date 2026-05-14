@@ -7,6 +7,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { buildConfig, buildForwardConfig, buildForwardRule, forwardCatalog, protocolCatalog } from "./configFactory.js";
+import { buildAgentInstallScript, buildInstallCommand, createInstallBundle, pruneInstallBundles, resolvePublicBaseUrl, resolvePublicWsUrl } from "./installers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -24,6 +25,7 @@ const defaultState = {
   configVersions: {},
   forwardRules: {},
   sshProfiles: {},
+  installBundles: {},
   commands: [
     { id: "status", label: "查询 sing-box 状态", type: "service", action: "status" },
     { id: "restart", label: "重启 sing-box", type: "service", action: "restart" },
@@ -39,6 +41,7 @@ const loadState = () => {
 };
 
 let state = loadState();
+pruneInstallBundles(state);
 
 if (process.env.CHIKEN_BOOTSTRAP_TOKEN && !state.tokens.some((item) => item.token === process.env.CHIKEN_BOOTSTRAP_TOKEN)) {
   state.tokens.push({ token: process.env.CHIKEN_BOOTSTRAP_TOKEN, createdAt: new Date().toISOString(), used: false, bootstrap: true });
@@ -54,6 +57,7 @@ const logStreams = new Map();
 const commandWaiters = new Map();
 const configCommandRefs = new Map();
 const forwardCommandRefs = new Map();
+const metricHistories = new Map();
 
 function audit(actor, action, target, detail = {}) {
   const row = { id: nanoid(), at: new Date().toISOString(), actor, action, target, detail };
@@ -112,8 +116,31 @@ function publicAgent(agent) {
     sshConfigured: ssh.ready,
     sshHost: ssh.host,
     sshPort: ssh.port,
-    sshMode: ssh.mode
+    sshMode: ssh.mode,
+    metrics: agent.metrics || null
   };
+}
+
+function detailAgent(agent) {
+  return {
+    ...publicAgent(agent),
+    metricsHistory: metricHistories.get(agent.id) || [],
+    lastConfig: agent.lastConfig || null
+  };
+}
+
+function pushMetricHistory(agentId, metrics) {
+  if (!metrics) return;
+  const list = metricHistories.get(agentId) || [];
+  list.push({
+    at: metrics.collectedAt || new Date().toISOString(),
+    cpu: Number(metrics.cpu?.usage || 0),
+    memory: Number(metrics.memory?.usage || 0),
+    disk: Number(metrics.disk?.usage || 0),
+    rxRate: Number(metrics.network?.rxRate || 0),
+    txRate: Number(metrics.network?.txRate || 0)
+  });
+  metricHistories.set(agentId, list.slice(-72));
 }
 
 function publicForwardRules(agentId) {
@@ -248,18 +275,19 @@ function getSshConnectConfig(agentId, override = {}) {
   };
 }
 
-function execSshCommand(connectConfig, command) {
+function execSshCommand(connectConfig, command, options = {}) {
   return new Promise((resolve, reject) => {
     const conn = new SshClient();
     conn
       .on("ready", () => {
-        conn.exec(command, (error, stream) => {
+        conn.exec(command, options.execOptions || {}, (error, stream) => {
           if (error) {
             conn.end();
             return reject(error);
           }
           let stdout = "";
           let stderr = "";
+          if (options.stdin) stream.end(options.stdin);
           stream.on("close", (code) => {
             conn.end();
             resolve({
@@ -282,49 +310,108 @@ function execSshCommand(connectConfig, command) {
 }
 
 function attachAgentExecTerminal(ws, agentId) {
-  ws.send(JSON.stringify({ type: "output", output: `Connected to ${state.agents[agentId].name || agentId} via agent exec.\n$ ` }));
+  const prompt = "$ ";
+  let currentLine = "";
+  let busy = false;
 
-  ws.on("message", (raw) => {
-    const text = raw.toString();
-    let command = text;
-    try {
-      const msg = JSON.parse(text);
-      if (msg && typeof msg === "object") command = msg.data ?? msg.command ?? msg.input ?? "";
-    } catch {
-      command = text;
-    }
+  const emit = (output) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "output", output }));
+  };
 
-    command = String(command).trim();
-    if (!command) {
-      ws.send(JSON.stringify({ type: "output", output: "$ " }));
-      return;
-    }
+  const renderPrompt = () => emit(prompt);
 
-    if (["exit", "quit", "logout"].includes(command.toLowerCase())) {
-      ws.send(JSON.stringify({ type: "output", output: "terminal closed\n" }));
-      ws.close();
-      return;
-    }
-
+  const runCommand = (command) => {
     let commandId = "";
+    busy = true;
     try {
       commandId = sendCommand(agentId, "exec", { command });
       audit("admin", "terminal_exec", agentId, { commandId, command: command.slice(0, 120), transport: "agent" });
     } catch (error) {
-      ws.send(JSON.stringify({ type: "output", output: `${error.message}\n$ ` }));
+      busy = false;
+      emit(`${error.message}\r\n${prompt}`);
       return;
     }
 
     commandWaiters.set(commandId, (result) => {
-      ws.send(JSON.stringify({ type: "output", output: `${result.output || ""}\n$ ` }));
       commandWaiters.delete(commandId);
+      busy = false;
+      const body = result.output ? `${result.output}\r\n` : "";
+      emit(`${body}${prompt}`);
     });
 
     setTimeout(() => {
       if (!commandWaiters.has(commandId)) return;
       commandWaiters.delete(commandId);
-      ws.send(JSON.stringify({ type: "output", output: "command timeout\n$ " }));
+      busy = false;
+      emit(`command timeout\r\n${prompt}`);
     }, 35000);
+  };
+
+  emit(`Connected to ${state.agents[agentId].name || agentId} via agent exec.\r\n${prompt}`);
+
+  ws.on("message", (raw) => {
+    let payload = { type: "input", data: raw.toString() };
+    try {
+      const parsed = JSON.parse(raw.toString());
+      if (parsed && typeof parsed === "object") payload = parsed;
+    } catch {}
+
+    if (payload.type === "resize") return;
+    const data = String(payload.data ?? payload.input ?? "").replace(/\r\n/g, "\n");
+    if (!data) return;
+
+    for (const char of data) {
+      if (busy) {
+        if (char === "\u0003") {
+          emit("^C\r\n");
+        }
+        continue;
+      }
+
+      if (char === "\r" || char === "\n") {
+        emit("\r\n");
+        const command = currentLine.trim();
+        currentLine = "";
+        if (!command) {
+          renderPrompt();
+          continue;
+        }
+
+        if (["exit", "quit", "logout"].includes(command.toLowerCase())) {
+          emit("terminal closed\r\n");
+          ws.close();
+          return;
+        }
+
+        runCommand(command);
+        continue;
+      }
+
+      if (char === "\u0003") {
+        currentLine = "";
+        emit("^C\r\n");
+        renderPrompt();
+        continue;
+      }
+
+      if (char === "\u000c") {
+        emit("\u001b[2J\u001b[H");
+        renderPrompt();
+        continue;
+      }
+
+      if (char === "\u0008" || char === "\u007f") {
+        if (!currentLine) continue;
+        currentLine = currentLine.slice(0, -1);
+        emit("\b \b");
+        continue;
+      }
+
+      if (char >= " " || char === "\t") {
+        currentLine += char;
+        emit(char);
+      }
+    }
   });
 }
 
@@ -415,11 +502,18 @@ app.get("/api/health", (_, res) => res.json({ ok: true, name: "chiken-easy" }));
 
 app.get("/api/dashboard", (_, res) => {
   const agents = Object.values(state.agents).map(publicAgent);
+  const onlineMetrics = agents.filter((agent) => agent.connected && agent.metrics);
+  const averageCpu = onlineMetrics.length ? onlineMetrics.reduce((sum, agent) => sum + Number(agent.metrics?.cpu?.usage || 0), 0) / onlineMetrics.length : 0;
+  const totalRxRate = onlineMetrics.reduce((sum, agent) => sum + Number(agent.metrics?.network?.rxRate || 0), 0);
+  const totalTxRate = onlineMetrics.reduce((sum, agent) => sum + Number(agent.metrics?.network?.txRate || 0), 0);
   res.json({
     total: agents.length,
     online: agents.filter((agent) => agent.connected).length,
     offline: agents.filter((agent) => !agent.connected).length,
     activeSingbox: agents.filter((agent) => agent.singboxStatus === "active").length,
+    averageCpu: Math.round(averageCpu * 100) / 100,
+    totalRxRate,
+    totalTxRate,
     recent: agents.sort((a, b) => String(b.lastSeen).localeCompare(String(a.lastSeen))).slice(0, 8)
   });
 });
@@ -429,7 +523,7 @@ app.get("/api/agents", (_, res) => res.json(Object.values(state.agents).map(publ
 app.get("/api/agents/:id", (req, res) => {
   const agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: "agent not found" });
-  res.json(publicAgent(agent));
+  res.json(detailAgent(agent));
 });
 
 app.get("/api/agents/:id/ssh-profile", (req, res) => {
@@ -471,6 +565,69 @@ app.post("/api/agents/:id/ssh-profile/test", async (req, res) => {
     res.json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/agents/:id/install-command", (req, res) => {
+  const agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: "agent not found" });
+
+  pruneInstallBundles(state);
+  const baseUrl = resolvePublicBaseUrl(req);
+  const bundle = createInstallBundle(state, req.params.id, {
+    mode: req.body?.mode,
+    appDir: req.body?.appDir,
+    wsUrl: resolvePublicWsUrl(req),
+    agentName: req.body?.agentName || agent.name,
+    agentHost: req.body?.agentHost || agent.host,
+    probeInterval: req.body?.probeInterval
+  });
+  saveState();
+
+  const scriptUrl = new URL("/install/agent.sh", baseUrl);
+  scriptUrl.searchParams.set("bundle", bundle.id);
+  audit("admin", "prepare_install_command", req.params.id, { mode: bundle.mode, appDir: bundle.appDir, expiresAt: bundle.expiresAt });
+  res.json({
+    ok: true,
+    mode: bundle.mode,
+    appDir: bundle.appDir,
+    expiresAt: bundle.expiresAt,
+    wsUrl: bundle.wsUrl,
+    scriptUrl: scriptUrl.toString(),
+    command: buildInstallCommand(baseUrl, bundle.id)
+  });
+});
+
+app.post("/api/agents/:id/deploy", async (req, res) => {
+  const agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: "agent not found" });
+  if (!publicSshProfile(req.params.id).ready) return res.status(400).json({ error: "SSH profile is required before deployment" });
+
+  pruneInstallBundles(state);
+  const baseUrl = resolvePublicBaseUrl(req);
+  const bundle = createInstallBundle(state, req.params.id, {
+    mode: req.body?.mode,
+    appDir: req.body?.appDir,
+    wsUrl: resolvePublicWsUrl(req),
+    agentName: req.body?.agentName || agent.name,
+    agentHost: req.body?.agentHost || agent.host,
+    probeInterval: req.body?.probeInterval
+  });
+  saveState();
+
+  try {
+    const result = await execSshCommand(getSshConnectConfig(req.params.id), "sh -s", { stdin: buildAgentInstallScript(bundle) });
+    audit("admin", "deploy_agent", req.params.id, { mode: bundle.mode, appDir: bundle.appDir, ok: result.ok });
+    res.json({
+      ok: result.ok,
+      mode: bundle.mode,
+      appDir: bundle.appDir,
+      wsUrl: bundle.wsUrl,
+      command: buildInstallCommand(baseUrl, bundle.id),
+      output: result.output
+    });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
   }
 });
 
@@ -708,6 +865,14 @@ app.get("/api/audit", (_, res) => {
   res.json(rows.reverse().slice(0, 300));
 });
 
+app.get("/install/agent.sh", (req, res) => {
+  pruneInstallBundles(state);
+  const bundleId = String(req.query.bundle || "").trim();
+  const bundle = state.installBundles?.[bundleId];
+  if (!bundle) return res.status(404).type("text/plain").send("install bundle not found or expired");
+  res.type("text/x-shellscript").send(buildAgentInstallScript(bundle));
+});
+
 if (fs.existsSync(webDist)) app.use(express.static(webDist));
 app.get("*", (_, res, next) => {
   const index = path.join(webDist, "index.html");
@@ -779,6 +944,7 @@ wss.on("connection", (ws) => {
         registeredAt: state.agents[agentId]?.registeredAt || new Date().toISOString(),
         lastSeen: new Date().toISOString()
       };
+      pushMetricHistory(agentId, msg.agent.metrics);
       if (token) token.used = true;
       clients.set(agentId, ws);
       saveState();
@@ -791,6 +957,7 @@ wss.on("connection", (ws) => {
 
     if (msg.type === "heartbeat") {
       Object.assign(state.agents[agentId], msg.status, { lastSeen: new Date().toISOString() });
+      pushMetricHistory(agentId, msg.status?.metrics);
       saveState();
     }
 

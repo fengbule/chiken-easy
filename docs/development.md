@@ -6,22 +6,22 @@
 
 - 本文档以 `main` 分支当前实现为准。
 - 如果仓库里存在重复描述，以这里记录的最新行为为准。
-- 当前版本已经把“真实 SSH”、“协议切换自动换表单”、“独立转发引擎”、“API Token 直入主控”纳入正式能力，不再是待办项。
+- 当前版本已经把“WebSSH 终端”、“一键部署 Agent”、“实时探针”、“独立转发引擎”、“API Token 直入主控”纳入正式能力，不再是待办项。
 
 ## 2. 项目定位
 
 `chiken-easy` 是一个以 `sing-box` 为核心的多服务器控制面板：
 
-- 主控 `server` 提供 Web 面板、HTTP API、Agent WebSocket、SSH/WebSocket 终端和审计日志。
+- 主控 `server` 提供 Web 面板、HTTP API、Agent WebSocket、WebSSH 终端、安装脚本下发和审计日志。
 - 每台目标服务器部署一个 `agent`。
-- `agent` 负责下发和回滚 `sing-box` 配置、控制服务、读取日志、管理独立转发容器。
-- 面板既可以通过 Agent 执行命令，也可以通过保存的 SSH 凭据直接进入目标服务器。
+- `agent` 负责下发和回滚 `sing-box` 配置、控制服务、读取日志、管理独立转发容器、采集实时探针指标。
+- 面板既可以通过 Agent 执行命令，也可以通过保存的 SSH 凭据直接进入目标服务器或远程执行一键部署。
 
 ## 3. 技术栈
 
 - Server: Node.js, Express, ws, ssh2
 - Agent: Node.js, ws, Docker CLI
-- Web: React 19, Vite, lucide-react
+- Web: React 19, Vite, xterm.js, lucide-react
 - Runtime: Docker Compose
 - 状态文件: `data/state.json`
 - 审计日志: `data/audit.jsonl`
@@ -32,9 +32,14 @@
 server/
   index.js
   configFactory.js
+  installers.js
 
 agent/
   index.js
+  systemProbe.js
+
+shared/
+  configFactory.js
 
 web/src/
   App.jsx
@@ -92,6 +97,7 @@ docker compose -f docker-compose.agent.yml up -d --build
 
 - `./data/sing-box:/etc/sing-box`
 - `./data/forwarders:/app/forwarders`
+- `/:/hostfs:ro`
 
 关键环境变量：
 
@@ -101,11 +107,16 @@ docker compose -f docker-compose.agent.yml up -d --build
 - `SINGBOX_CONFIG_VOLUME=${PWD}/data/sing-box`
 - `CHIKEN_REALM_IMAGE=4points/realm:latest`
 - `CHIKEN_GOST_IMAGE=gogost/gost:latest`
+- `CHIKEN_PROBE_INTERVAL=5`
+- `CHIKEN_HOST_ROOT=/hostfs`
+- `CHIKEN_PUBLIC_BASE_URL=https://panel.example.com`
+- `CHIKEN_PUBLIC_WS_URL=wss://panel.example.com/agent`
 
 说明：
 
 - 端口转发依赖 Agent 的 Docker 模式。
 - 节点主配置和转发规则已经解耦，转发不会再覆盖主 `sing-box` 配置。
+- Docker 模式下探针通过只读挂载宿主机根目录来读取更接近真实机器的磁盘与系统指标。
 
 ## 7. API 与鉴权
 
@@ -136,6 +147,12 @@ SSH：
 - `POST /api/agents/:id/ssh-profile/test`
 - `POST /api/agents/:id/ssh`
 - `WebSocket /terminal?agentId=...&mode=ssh`
+
+部署：
+
+- `POST /api/agents/:id/install-command`
+- `POST /api/agents/:id/deploy`
+- `GET /install/agent.sh?bundle=...`
 
 节点向导：
 
@@ -192,19 +209,20 @@ CHIKEN_API_TOKEN=ck_bootstrap_token
 
 则除 `/api/health` 外，其余 API、日志流和终端入口都需要合法 token。
 
-## 9. 真实 SSH 工作流
+## 9. WebSSH 工作流
 
-当前版本已经支持“从服务器列表一键进入真实 SSH”：
+当前版本已经支持“从服务器列表一键进入 WebSSH”：
 
 1. 在“服务器”页或服务器详情页点击 `SSH`。
 2. 首次进入后填写 `host / port / username / password` 或私钥。
 3. 点击“保存 SSH”，再点“测试连接”。
-4. 保存成功后，服务器列表右侧就会保留这个入口，后续点击 `SSH` 会直接进入该机器的 shell。
+4. 保存成功后，服务器列表右侧就会保留这个入口，后续点击 `SSH` 会直接进入该机器的交互式终端。
 
 实现细节：
 
-- `mode=ssh` 表示通过 `ssh2` 建立真实 SSH shell，会话走 `/terminal` WebSocket。
-- `mode=agent` 是兼容模式，本质是通过 Agent 执行单条命令。
+- `mode=ssh` 通过 `ssh2` 建立真实 SSH shell，会话走 `/terminal` WebSocket。
+- 前端使用 `xterm.js` 渲染终端，支持原始按键、粘贴和窗口 resize。
+- `mode=agent` 是兼容模式，底层仍通过 Agent 执行命令，便于 SSH 未就绪时兜底。
 - 如果该 Agent 还没有配置可用的 SSH 凭据，终端会自动回退到 `agent` 模式。
 - SSH 凭据由主控保存到 `state.json`，因此主控本身必须视为高敏感资产。
 
@@ -213,7 +231,57 @@ CHIKEN_API_TOKEN=ck_bootstrap_token
 - 日常运维、安装 Agent、排查系统问题，优先使用真实 SSH。
 - 只需要快速跑一条命令时，再切回 `Agent 执行`。
 
-## 10. 节点协议与向导行为
+## 10. 一键部署 Agent
+
+SSH 页面现在同时提供：
+
+- 复制可直接执行的一键部署命令
+- 通过已保存的 SSH 凭据，直接从面板远程执行部署
+
+支持两种部署模式：
+
+### `service`
+
+- 目标是 `systemd + Node.js`
+- 适合目标机已经有 sing-box 服务的场景
+- 会写入最小化 Agent 运行时、systemd 服务文件并启动
+
+### `docker`
+
+- 目标是 `Docker Compose`
+- 适合从零接入的机器
+- 会准备 `sing-box` 容器、Agent 容器、探针挂载和转发目录
+
+实现方式：
+
+- 主控为每次部署生成短时效安装 bundle
+- 面板可复制 `curl -fsSL .../install/agent.sh?bundle=... | bash`
+- 也可以直接把同一份脚本通过 SSH `sh -s` 推到远端执行
+
+注意：
+
+- 部署命令依赖 `CHIKEN_PUBLIC_BASE_URL / CHIKEN_PUBLIC_WS_URL` 正确可达，尤其是在反代或多网卡环境下。
+- 如果直接通过面板 SSH 执行部署，远端不需要再额外访问 GitHub 下载 Agent 源码。
+
+## 11. 实时探针
+
+Agent 会持续上报：
+
+- `CPU` 使用率、核心数、`load1 / load5 / load15`
+- 内存和 Swap
+- 根分区磁盘占用
+- 网络上下行实时速率
+- 网络累计流量
+- 运行时长
+
+实现要点：
+
+- 采集逻辑位于 `agent/systemProbe.js`
+- Linux 优先读取 `/proc` 和 `df`
+- Docker 模式下通过 `CHIKEN_HOST_ROOT=/hostfs` 读取只读宿主机视角
+- 主控会保留最近一段采样历史，用于前端趋势图展示
+
+## 12. 节点协议与向导行为
 
 当前面板向导支持：
 
@@ -240,7 +308,7 @@ CHIKEN_API_TOKEN=ck_bootstrap_token
 - `Shadowsocks`：确认密码和加密方法匹配后可正常访问公网。
 - `Mixed`：确认 HTTP/SOCKS 代理都能正常工作，不只是面板显示下发成功。
 
-## 11. 端口转发实现
+## 13. 端口转发实现
 
 端口转发现在是独立能力，不再复用主节点配置。
 
@@ -264,7 +332,7 @@ CHIKEN_API_TOKEN=ck_bootstrap_token
 - 规则的创建、更新、删除由 `apply_forward_rule` / `remove_forward_rule` 完成。
 - 当前转发能力要求 Agent 运行在 Docker 模式。
 
-## 12. Agent 关键行为
+## 14. Agent 关键行为
 
 配置下发：
 
@@ -286,17 +354,22 @@ TLS 自动补齐：
 
 日志与审计：
 
-- 所有配置、服务控制、SSH、转发动作都会写审计日志
+- 所有配置、服务控制、SSH、部署、转发动作都会写审计日志
 - Agent 的命令输出会回流到主控，用于前端展示和状态追踪
 
-## 13. 测试清单
+## 15. 测试清单
 
-2026-05-14 当前版本应至少覆盖以下联调：
+2026-05-14 当前版本至少应覆盖以下联调：
 
-- SSH
+- WebSSH
 - `ssh-profile/test` 可返回 `ssh ok`
-- 保存凭据后，服务器列表点击 `SSH` 可直接进入 shell
-- `mode=ssh` 与 `mode=agent` 都能正常收发命令
+- `/terminal?mode=ssh` 能直连远端并执行 `pwd`
+- `mode=agent` 兜底终端仍可正常执行命令
+
+- 一键部署
+- `POST /api/agents/:id/install-command` 能返回 `service / docker` 两种命令
+- `GET /install/agent.sh?bundle=...` 能返回完整安装脚本
+- 生成脚本应通过 `sh -n`
 
 - API Token
 - Header 模式通过
@@ -316,16 +389,21 @@ TLS 自动补齐：
 - `Realm` 的 `tcp / udp / tcp_udp`
 - `GOST` 的 `tcp / udp / tcp_udp`
 
+- 探针
+- `/api/dashboard` 能返回 `averageCpu / totalRxRate / totalTxRate`
+- `/api/agents/:id` 能返回 `metrics` 和 `metricsHistory`
+
 推荐测试方法：
 
 - 节点协议：从另一台服务器或真实客户端经该节点访问公网，确认拿到正常响应，而不是只看端口已监听。
 - TCP 转发：可把目标设为 `example.com:80`，访问转发端口后确认能拿到 `Example Domain`。
 - UDP 转发：可把目标设为 `1.1.1.1:53`，发送真实 DNS 查询并确认有响应。
 
-## 14. 安全注意事项
+## 16. 安全注意事项
 
 - 生产环境必须放在 HTTPS 反代后。
 - API Token 等价于主控管理权限，必须按需撤销和轮换。
 - SSH 凭据保存在主控 `state.json`，必须限制主控访问范围和磁盘权限。
+- `GET /install/agent.sh?bundle=...` 使用的是短时效 bundle，仍然应避免泄露给无关方。
 - `Mixed` 协议不适合长期暴露在公网。
 - Agent 挂载 Docker Socket 时，等价于拥有宿主机级别的容器控制能力。

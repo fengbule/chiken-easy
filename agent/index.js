@@ -4,7 +4,8 @@ import fs from "fs";
 import path from "path";
 import { exec, execFile } from "child_process";
 import { nanoid } from "nanoid";
-import { buildForwardPlan } from "../server/configFactory.js";
+import { buildForwardPlan } from "../shared/configFactory.js";
+import { createProbeCollector } from "./systemProbe.js";
 
 const stateDir = process.env.CHIKEN_AGENT_STATE || path.resolve("agent-state");
 const stateFile = path.join(stateDir, "agent.json");
@@ -12,12 +13,15 @@ const configPath = process.env.SINGBOX_CONFIG || "/etc/sing-box/config.json";
 const backupDir = process.env.SINGBOX_BACKUP_DIR || "/etc/sing-box/chiken-backups";
 const forwardDir = process.env.CHIKEN_FORWARDER_DIR || path.resolve("forwarders");
 const forwardHostDir = process.env.CHIKEN_FORWARDER_HOST_DIR || forwardDir;
+const hostRoot = process.env.CHIKEN_HOST_ROOT || "/";
 const serviceMode = process.env.CHIKEN_SERVICE_MODE || (process.platform === "win32" ? "mock" : "systemd");
 const singboxContainer = process.env.SINGBOX_CONTAINER || "chiken-singbox";
 const singboxImage = process.env.SINGBOX_IMAGE || "ghcr.io/sagernet/sing-box:latest";
 const singboxConfigVolume = process.env.SINGBOX_CONFIG_VOLUME || "chiken-singbox-config";
 const realmImage = process.env.CHIKEN_REALM_IMAGE || "4points/realm:latest";
 const gostImage = process.env.CHIKEN_GOST_IMAGE || "gogost/gost:latest";
+const probeIntervalMs = Math.max(3000, Math.min(30000, (Number(process.env.CHIKEN_PROBE_INTERVAL || 5) || 5) * 1000));
+const collectProbe = createProbeCollector({ hostRoot });
 
 fs.mkdirSync(stateDir, { recursive: true });
 fs.mkdirSync(forwardDir, { recursive: true });
@@ -248,6 +252,32 @@ async function handle(ws, msg) {
   return { commandId: msg.id, ok: false, output: "unknown command" };
 }
 
+async function buildAgentHello(state) {
+  return {
+    ...state,
+    name: process.env.CHIKEN_AGENT_NAME || state.name || os.hostname(),
+    host: process.env.CHIKEN_AGENT_HOST || os.hostname(),
+    ip:
+      process.env.CHIKEN_AGENT_IP ||
+      Object.values(os.networkInterfaces())
+        .flat()
+        .find((item) => item && !item.internal && item.family === "IPv4")?.address ||
+      "-",
+    os: process.platform,
+    arch: process.arch,
+    singboxVersion: await singboxVersion(),
+    singboxStatus: (await service("status")).output || "unknown",
+    metrics: await collectProbe().catch(() => null)
+  };
+}
+
+async function buildHeartbeatStatus() {
+  return {
+    singboxStatus: (await service("status")).output || "unknown",
+    metrics: await collectProbe().catch(() => null)
+  };
+}
+
 async function connect() {
   const state = readState();
   const server = process.env.CHIKEN_SERVER || "ws://127.0.0.1:7788/agent";
@@ -258,27 +288,21 @@ async function connect() {
     ca: process.env.CHIKEN_CA ? fs.readFileSync(process.env.CHIKEN_CA) : undefined
   });
 
+  let heartbeatTimer = null;
+
   ws.on("open", async () => {
     ws.send(
       JSON.stringify({
         type: "hello",
         token,
-        agent: {
-          ...state,
-          name: process.env.CHIKEN_AGENT_NAME || state.name || os.hostname(),
-          host: process.env.CHIKEN_AGENT_HOST || os.hostname(),
-          ip: process.env.CHIKEN_AGENT_IP || Object.values(os.networkInterfaces()).flat().find((item) => item && !item.internal && item.family === "IPv4")?.address || "-",
-          os: process.platform,
-          arch: process.arch,
-          singboxVersion: await singboxVersion(),
-          singboxStatus: (await service("status")).output || "unknown"
-        }
+        agent: await buildAgentHello(state)
       })
     );
 
-    setInterval(async () => {
-      ws.send(JSON.stringify({ type: "heartbeat", status: { singboxStatus: (await service("status")).output || "unknown" } }));
-    }, 15000);
+    heartbeatTimer = setInterval(async () => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: "heartbeat", status: await buildHeartbeatStatus() }));
+    }, probeIntervalMs);
   });
 
   ws.on("message", async (raw) => {
@@ -293,8 +317,14 @@ async function connect() {
     }
   });
 
-  ws.on("close", () => setTimeout(connect, 5000));
-  ws.on("error", () => {});
+  ws.on("close", () => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    setTimeout(connect, 5000);
+  });
+
+  ws.on("error", () => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+  });
 }
 
 connect();

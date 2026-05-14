@@ -12,10 +12,10 @@ import {
   Save,
   Settings,
   Shuffle,
-  Terminal,
   Trash2,
   Unplug
 } from "lucide-react";
+import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 
 const TOKEN_KEY = "chiken_api_token";
@@ -226,6 +226,38 @@ function defaultForwardForm() {
   };
 }
 
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let size = bytes;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  const digits = size >= 100 || index === 0 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(digits)} ${units[index]}`;
+}
+
+function formatSpeed(value) {
+  return `${formatBytes(value)}/s`;
+}
+
+function formatPercent(value) {
+  return `${Math.round(Number(value || 0))}%`;
+}
+
+function formatUptime(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds || 0)));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 function StatusDot({ on }) {
   return <span className={`dot ${on ? "ok" : ""}`} />;
 }
@@ -329,7 +361,111 @@ function AccessTokenBar({ tokenDraft, setTokenDraft, saveToken, clearToken, hasT
   );
 }
 
-function Dashboard({ openAgent }) {
+function MetricPill({ label, value, accent }) {
+  return (
+    <div className={`metric-pill ${accent || ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function TrendChart({ points, color = "#348dff" }) {
+  const values = (points || []).map((item) => Number(item || 0));
+  const width = 220;
+  const height = 54;
+  if (!values.length || values.every((value) => value === 0)) {
+    return (
+      <svg viewBox={`0 0 ${width} ${height}`} className="trend-chart">
+        <line x1="0" y1={height - 10} x2={width} y2={height - 10} stroke="rgba(52,141,255,0.18)" strokeWidth="2" />
+      </svg>
+    );
+  }
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const step = values.length > 1 ? width / (values.length - 1) : width;
+  const coordinates = values.map((value, index) => {
+    const x = Math.round(index * step * 100) / 100;
+    const y = Math.round((height - 8 - ((value - min) / range) * (height - 18)) * 100) / 100;
+    return [x, y];
+  });
+  const linePath = coordinates.map(([x, y], index) => `${index ? "L" : "M"} ${x} ${y}`).join(" ");
+  const areaPath = `${linePath} L ${coordinates[coordinates.length - 1][0]} ${height} L ${coordinates[0][0]} ${height} Z`;
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="trend-chart">
+      <path d={areaPath} fill="rgba(52,141,255,0.14)" />
+      <path d={linePath} fill="none" stroke={color} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ProbeOverview({ metrics }) {
+  if (!metrics) return <p className="panel-message">探针正在等待首个心跳，通常几秒内会刷新。</p>;
+
+  return (
+    <div className="probe-grid">
+      <MetricPill label="CPU" value={formatPercent(metrics.cpu?.usage)} accent="cpu" />
+      <MetricPill label="内存" value={`${formatPercent(metrics.memory?.usage)} / ${formatBytes(metrics.memory?.used)} / ${formatBytes(metrics.memory?.total)}`} accent="memory" />
+      <MetricPill label="磁盘" value={`${formatPercent(metrics.disk?.usage)} / ${formatBytes(metrics.disk?.used)} / ${formatBytes(metrics.disk?.total)}`} accent="disk" />
+      <MetricPill label="网络" value={`↓ ${formatSpeed(metrics.network?.rxRate)}  ↑ ${formatSpeed(metrics.network?.txRate)}`} accent="network" />
+      <MetricPill label="累计流量" value={`↓ ${formatBytes(metrics.network?.rxTotal)}  ↑ ${formatBytes(metrics.network?.txTotal)}`} />
+      <MetricPill label="运行时长" value={formatUptime(metrics.uptimeSec)} />
+      <MetricPill label="负载" value={`${metrics.cpu?.load1 || 0} / ${metrics.cpu?.load5 || 0} / ${metrics.cpu?.load15 || 0}`} />
+      <MetricPill label="接口" value={(metrics.network?.interfaces || []).join(", ") || "-"} />
+    </div>
+  );
+}
+
+function ProbeTrends({ history }) {
+  const rows = [
+    ["CPU", (history || []).map((item) => item.cpu), `${formatPercent(history?.at(-1)?.cpu || 0)}`],
+    ["内存", (history || []).map((item) => item.memory), `${formatPercent(history?.at(-1)?.memory || 0)}`],
+    ["下行", (history || []).map((item) => item.rxRate), formatSpeed(history?.at(-1)?.rxRate || 0)],
+    ["上行", (history || []).map((item) => item.txRate), formatSpeed(history?.at(-1)?.txRate || 0)]
+  ];
+
+  if (!history?.length) return <p className="panel-message">暂时还没有足够的实时样本用于绘图。</p>;
+
+  return (
+    <div className="trend-grid">
+      {rows.map(([label, values, current]) => (
+        <div className="trend-card" key={label}>
+          <div className="trend-head">
+            <strong>{label}</strong>
+            <span>{current}</span>
+          </div>
+          <TrendChart points={values} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AgentMetricSummary({ metrics }) {
+  if (!metrics) return <span className="muted">等待探针</span>;
+  return (
+    <div className="metric-inline">
+      <span>CPU {formatPercent(metrics.cpu?.usage)}</span>
+      <span>MEM {formatPercent(metrics.memory?.usage)}</span>
+      <span>DISK {formatPercent(metrics.disk?.usage)}</span>
+    </div>
+  );
+}
+
+function AgentTrafficSummary({ metrics }) {
+  if (!metrics) return <span className="muted">等待探针</span>;
+  return (
+    <div className="metric-inline">
+      <span>↓ {formatSpeed(metrics.network?.rxRate)}</span>
+      <span>↑ {formatSpeed(metrics.network?.txRate)}</span>
+    </div>
+  );
+}
+
+function Dashboard({ openAgent, openSsh }) {
   const [data, setData] = useState(null);
 
   useEffect(() => {
@@ -348,9 +484,12 @@ function Dashboard({ openAgent }) {
         <Card label="在线" value={data.online} green />
         <Card label="离线" value={data.offline} />
         <Card label="sing-box 活跃" value={data.activeSingbox} blue />
+        <Card label="平均 CPU" value={formatPercent(data.averageCpu)} />
+        <Card label="总下行" value={formatSpeed(data.totalRxRate)} />
+        <Card label="总上行" value={formatSpeed(data.totalTxRate)} />
       </div>
       <Panel title="最近接入">
-        <AgentTable agents={data.recent} openAgent={openAgent} />
+        <AgentTable agents={data.recent} openAgent={openAgent} openSsh={openSsh} />
       </Panel>
     </section>
   );
@@ -423,6 +562,8 @@ function AgentTable({ agents, openAgent, openSsh }) {
           <th>sing-box</th>
           <th>版本</th>
           <th>SSH</th>
+          <th>监控</th>
+          <th>网络</th>
           <th>最近心跳</th>
           <th>操作</th>
         </tr>
@@ -444,14 +585,22 @@ function AgentTable({ agents, openAgent, openSsh }) {
             </td>
             <td>{agent.singboxVersion}</td>
             <td>{agent.sshConfigured ? `${agent.sshMode}@${agent.sshPort}` : "未配置"}</td>
+            <td>
+              <AgentMetricSummary metrics={agent.metrics} />
+            </td>
+            <td>
+              <AgentTrafficSummary metrics={agent.metrics} />
+            </td>
             <td>{agent.lastSeen || "-"}</td>
             <td className="actions-cell">
               <button className="link" onClick={() => openAgent(agent.id)}>
                 详情
               </button>
-              <button className="link" onClick={() => openSsh(agent.id)}>
-                SSH
-              </button>
+              {openSsh ? (
+                <button className="link" onClick={() => openSsh(agent.id)}>
+                  SSH
+                </button>
+              ) : null}
             </td>
           </tr>
         ))}
@@ -468,6 +617,8 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh }) {
 
   useEffect(() => {
     load().catch(() => {});
+    const timer = setInterval(() => load().catch(() => {}), 5000);
+    return () => clearInterval(timer);
   }, [id]);
 
   const service = async (action) => {
@@ -483,6 +634,7 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh }) {
   };
 
   if (!agent) return null;
+  const infoEntries = Object.entries(agent).filter(([key]) => !["metrics", "metricsHistory", "lastConfig"].includes(key));
 
   return (
     <section>
@@ -502,15 +654,8 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh }) {
       </div>
 
       <div className="grid2">
-        <Panel title="基本信息">
-          <dl>
-            {Object.entries(agent).map(([key, value]) => (
-              <React.Fragment key={key}>
-                <dt>{key}</dt>
-                <dd>{Array.isArray(value) ? value.join(", ") : String(value)}</dd>
-              </React.Fragment>
-            ))}
-          </dl>
+        <Panel title="实时探针">
+          <ProbeOverview metrics={agent.metrics} />
         </Panel>
 
         <Panel title="服务控制">
@@ -529,40 +674,127 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh }) {
           <pre>{result}</pre>
         </Panel>
       </div>
+
+      <Panel title="监控趋势">
+        <ProbeTrends history={agent.metricsHistory} />
+      </Panel>
+
+      <div className="grid2">
+        <Panel title="基本信息">
+          <dl>
+            {infoEntries.map(([key, value]) => (
+              <React.Fragment key={key}>
+                <dt>{key}</dt>
+                <dd>{Array.isArray(value) ? value.join(", ") : typeof value === "object" && value !== null ? JSON.stringify(value) : String(value)}</dd>
+              </React.Fragment>
+            ))}
+          </dl>
+        </Panel>
+
+        <Panel title="探针摘要">
+          <div className="panel-stack">
+            <p className="muted">CPU: {formatPercent(agent.metrics?.cpu?.usage)}</p>
+            <p className="muted">内存: {formatBytes(agent.metrics?.memory?.used)} / {formatBytes(agent.metrics?.memory?.total)}</p>
+            <p className="muted">磁盘: {formatBytes(agent.metrics?.disk?.used)} / {formatBytes(agent.metrics?.disk?.total)}</p>
+            <p className="muted">下行: {formatSpeed(agent.metrics?.network?.rxRate)}</p>
+            <p className="muted">上行: {formatSpeed(agent.metrics?.network?.txRate)}</p>
+            <p className="muted">累计流量: ↓ {formatBytes(agent.metrics?.network?.rxTotal)} / ↑ {formatBytes(agent.metrics?.network?.txTotal)}</p>
+          </div>
+        </Panel>
+      </div>
     </section>
   );
 }
 
 function TerminalPanel({ agentId, agentName, mode, connectNonce }) {
   const [connected, setConnected] = useState(false);
-  const [input, setInput] = useState("");
-  const [output, setOutput] = useState("");
+  const [error, setError] = useState("");
   const wsRef = useRef(null);
   const boxRef = useRef(null);
 
   useEffect(() => {
-    setOutput("");
     setConnected(false);
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${window.location.host}${buildAuthUrl("/terminal", { agentId, mode })}`);
-    wsRef.current = ws;
+    setError("");
+    let disposed = false;
+    let cleanup = () => {};
 
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      setOutput((current) => current + (message.output || ""));
-      setTimeout(() => boxRef.current?.scrollTo(0, boxRef.current.scrollHeight), 0);
+    (async () => {
+      const [{ Terminal: XTerm }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
+      if (disposed) return;
+
+      const term = new XTerm({
+        cursorBlink: true,
+        convertEol: true,
+        fontFamily: 'Consolas, "SFMono-Regular", monospace',
+        fontSize: 13,
+        lineHeight: 1.3,
+        scrollback: 4000,
+        theme: {
+          background: "#09111b",
+          foreground: "#d6e2f0",
+          cursor: "#7cc5ff",
+          selectionBackground: "rgba(124, 197, 255, 0.28)"
+        }
+      });
+      const fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(boxRef.current);
+      fit.fit();
+      term.writeln(`Connecting to ${agentName} (${mode === "ssh" ? "SSH" : "Agent"})...`);
+      term.focus();
+
+      const resizeObserver = new ResizeObserver(() => {
+        fit.fit();
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        }
+      });
+      resizeObserver.observe(boxRef.current);
+
+      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${window.location.host}${buildAuthUrl("/terminal", { agentId, mode })}`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setConnected(true);
+        fit.fit();
+        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      };
+      ws.onclose = () => {
+        setConnected(false);
+        term.writeln("\r\n[connection closed]");
+      };
+      ws.onerror = () => {
+        setError("终端连接失败，请检查 SSH 配置或 API Token。");
+      };
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        if (message.output) term.write(message.output);
+      };
+
+      const disposable = term.onData((data) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
+      });
+
+      cleanup = () => {
+        disposable.dispose();
+        resizeObserver.disconnect();
+        ws.close();
+        term.dispose();
+      };
+    })().catch(() => {
+      if (!disposed) setError("终端初始化失败。");
+    });
+
+    return () => {
+      disposed = true;
+      cleanup();
     };
-
-    return () => ws.close();
   }, [agentId, mode, connectNonce]);
 
-  const send = () => {
-    if (!input || wsRef.current?.readyState !== WebSocket.OPEN) return;
-    const payload = `${input.endsWith("\n") ? input : `${input}\n`}`;
-    wsRef.current.send(JSON.stringify({ type: "input", data: payload }));
-    setInput("");
+  const sendControl = (data) => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: "input", data }));
   };
 
   return (
@@ -575,16 +807,17 @@ function TerminalPanel({ agentId, agentName, mode, connectNonce }) {
         </span>
       }
     >
-      <div className="terminal" ref={boxRef}>
-        {output}
-      </div>
-      <div className="terminal-input">
-        <input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && send()} placeholder="输入命令，回车执行" />
-        <button onClick={send}>
-          <Terminal size={16} />
-          发送
+      <div className="terminal-toolbar">
+        <button onClick={() => sendControl("\u0003")} disabled={!connected}>
+          Ctrl+C
         </button>
+        <button onClick={() => sendControl("\u000c")} disabled={!connected}>
+          Clear
+        </button>
+        <span className="muted">支持原始按键、粘贴和窗口自动调整大小。</span>
       </div>
+      <div className="terminal-shell" ref={boxRef} />
+      {error ? <p className="panel-message">{error}</p> : null}
     </Panel>
   );
 }
@@ -595,16 +828,30 @@ function SshPage({ id, back }) {
   const [message, setMessage] = useState("");
   const [mode, setMode] = useState("ssh");
   const [connectNonce, setConnectNonce] = useState(0);
+  const [deployMode, setDeployMode] = useState("service");
+  const [deployAppDir, setDeployAppDir] = useState("/opt/chiken-easy");
+  const [deployPreview, setDeployPreview] = useState("");
+  const [deployResult, setDeployResult] = useState("");
+  const [deployBusy, setDeployBusy] = useState(false);
 
   useEffect(() => {
-    Promise.all([api(`/api/agents/${id}`), api(`/api/agents/${id}/ssh-profile`)])
-      .then(([agentData, sshData]) => {
-        setAgent(agentData);
-        setProfile((current) => ({ ...current, ...sshData, password: "", privateKey: "" }));
-        if (!sshData.ready) setMode("agent");
-      })
-      .catch((error) => setMessage(error.message));
+    const load = () =>
+      Promise.all([api(`/api/agents/${id}`), api(`/api/agents/${id}/ssh-profile`)])
+        .then(([agentData, sshData]) => {
+          setAgent(agentData);
+          setProfile((current) => ({ ...current, ...sshData, password: "", privateKey: "" }));
+          if (!sshData.ready) setMode("agent");
+        })
+        .catch((error) => setMessage(error.message));
+
+    load();
+    const timer = setInterval(load, 5000);
+    return () => clearInterval(timer);
   }, [id]);
+
+  useEffect(() => {
+    setDeployAppDir(deployMode === "docker" ? "/opt/chiken-easy-docker" : "/opt/chiken-easy");
+  }, [deployMode]);
 
   const patch = (key, value) => setProfile((current) => ({ ...current, [key]: value }));
 
@@ -664,6 +911,44 @@ function SshPage({ id, back }) {
     }
   };
 
+  const previewDeploy = async () => {
+    try {
+      const response = await api(`/api/agents/${id}/install-command`, {
+        method: "POST",
+        body: JSON.stringify({ mode: deployMode, appDir: deployAppDir })
+      });
+      setDeployPreview(response.command);
+      setDeployResult(`脚本地址：${response.scriptUrl}\n过期时间：${response.expiresAt}\n连接地址：${response.wsUrl}`);
+    } catch (error) {
+      setDeployResult(error.message);
+    }
+  };
+
+  const copyDeploy = async () => {
+    if (!deployPreview) {
+      await previewDeploy();
+      return;
+    }
+    await navigator.clipboard.writeText(deployPreview);
+    setDeployResult("部署命令已复制到剪贴板。");
+  };
+
+  const deploy = async () => {
+    try {
+      setDeployBusy(true);
+      const response = await api(`/api/agents/${id}/deploy`, {
+        method: "POST",
+        body: JSON.stringify({ mode: deployMode, appDir: deployAppDir })
+      });
+      setDeployPreview(response.command || "");
+      setDeployResult(response.output || "部署命令执行完成。");
+    } catch (error) {
+      setDeployResult(error.message);
+    } finally {
+      setDeployBusy(false);
+    }
+  };
+
   if (!agent) return null;
 
   return (
@@ -677,8 +962,10 @@ function SshPage({ id, back }) {
         </button>
       </div>
 
-      <div className="grid2">
-        <Panel title="SSH 配置" right={<span className="muted">保存后点列表里的 SSH 就能直接进入</span>}>
+      <TerminalPanel agentId={id} agentName={agent.name} mode={mode} connectNonce={connectNonce} />
+
+      <div className="grid2 ssh-grid">
+        <Panel title="SSH 配置" right={<span className="muted">列表里的 SSH 现在会直接进入这个终端</span>}>
           <div className="form-grid">
             <Field label="主机" value={profile.host} onChange={(value) => patch("host", value)} />
             <Field label="端口" type="number" value={profile.port} onChange={(value) => patch("port", value)} />
@@ -712,7 +999,31 @@ function SshPage({ id, back }) {
           {message ? <pre>{message}</pre> : null}
         </Panel>
 
-        <TerminalPanel agentId={id} agentName={agent.name} mode={mode} connectNonce={connectNonce} />
+        <Panel title="一键部署 Agent" right={<span className="muted">支持 systemd 和 Docker，两种方式都会复用当前 SSH 凭据</span>}>
+          <div className="form-grid">
+            <Field
+              label="部署方式"
+              type="select"
+              value={deployMode}
+              onChange={(value) => setDeployMode(value)}
+              options={[
+                ["service", "systemd / Node"],
+                ["docker", "Docker Compose"]
+              ]}
+            />
+            <Field label="安装目录" value={deployAppDir} onChange={setDeployAppDir} />
+          </div>
+          <p className="panel-tip">`systemd` 更适合机器上已经有 sing-box 服务的场景；`Docker` 会同时准备 agent 容器、sing-box 容器和探针挂载。</p>
+          <div className="actions">
+            <button onClick={previewDeploy}>生成命令</button>
+            <button onClick={copyDeploy}>复制命令</button>
+            <button className="primary" onClick={deploy} disabled={deployBusy || !profile.ready}>
+              {deployBusy ? "部署中..." : "通过 SSH 立即部署"}
+            </button>
+          </div>
+          <pre>{deployPreview || "先点击“生成命令”，可以拿到可直接粘贴执行的一键部署命令。"}</pre>
+          {deployResult ? <pre>{deployResult}</pre> : null}
+        </Panel>
       </div>
     </section>
   );
@@ -1194,7 +1505,9 @@ function Audit() {
 function Tutorial() {
   const cards = [
     ["节点配置", "切换协议时表单会自动更新为该协议的字段与默认值，不再保留上一种协议的残留参数。"],
-    ["真实 SSH", "服务器列表右侧现在有 SSH 入口。保存好该机器的 SSH 配置后，点一下就能直接进入对应服务器的 SSH 窗口。"],
+    ["真实 SSH", "服务器列表右侧现在有 SSH 入口。保存好该机器的 SSH 配置后，点一下就会直接进入交互式 WebSSH 终端。"],
+    ["一键部署", "SSH 页面可以直接生成 systemd 或 Docker 的一键部署命令，也可以复用当前 SSH 凭据直接执行部署。"],
+    ["实时探针", "Agent 会持续上报 CPU、内存、磁盘、网络速率和累计流量，效果更接近 Komari / 哪吒这类监控面板。"],
     ["独立转发", "端口转发支持 sing-box、Realm、GOST 三种引擎，并且通过独立容器运行，不再覆盖节点配置。"],
     ["TLS 自动补齐", "Trojan 和 Hysteria2 首次下发时会自动生成自签名证书，先把服务端跑起来，再做客户端验证。"],
     ["API Token", "把 token 放进地址栏 `?token=ck_xxx` 或面板顶部，即可让 API、日志和终端请求都自动带认证。"]
@@ -1282,7 +1595,7 @@ function App() {
   };
 
   const content = useMemo(() => {
-    if (page === "dashboard") return <Dashboard openAgent={openAgent} />;
+    if (page === "dashboard") return <Dashboard openAgent={openAgent} openSsh={openSsh} />;
     if (page === "servers") return <Servers openAgent={openAgent} openSsh={openSsh} />;
     if (page === "nodes") return <NodeWizard agents={agents} />;
     if (page === "forward") return <ForwardWizard agents={agents} />;

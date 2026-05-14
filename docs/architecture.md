@@ -5,13 +5,16 @@
 ```mermaid
 flowchart LR
   Admin["Web 面板 / 浏览器"] --> Server["ChikenEasy Server"]
+  Admin --> Install["/install/agent.sh?bundle=..."]
   Server <-->|"WebSocket /agent"| Agent1["Agent A"]
   Server <-->|"WebSocket /agent"| Agent2["Agent B"]
   Server <-->|"WebSocket /terminal?mode=ssh"| SSH["目标机 SSH Shell"]
   Agent1 --> SB1["sing-box"]
   Agent1 --> FW1["Forward Containers"]
+  Agent1 --> Probe1["System Probe"]
   Agent2 --> SB2["sing-box"]
   Agent2 --> FW2["Forward Containers"]
+  Agent2 --> Probe2["System Probe"]
   Server --> State["data/state.json"]
   Server --> Audit["data/audit.jsonl"]
 ```
@@ -24,9 +27,9 @@ flowchart LR
 
 - 提供 Web 面板和 REST API
 - 接收 Agent 长连接并下发命令
-- 保存 Agent 元数据、配置版本、SSH 凭据、转发规则、API Token
-- 提供日志 SSE、终端 WebSocket、审计日志
-- 在直接 SSH 和 Agent 执行之间做路由选择
+- 保存 Agent 元数据、配置版本、SSH 凭据、转发规则、API Token、安装 bundle
+- 提供日志 SSE、终端 WebSocket、审计日志和一键安装脚本
+- 在直接 SSH、Agent 执行和远程部署之间做路由选择
 
 ### Agent
 
@@ -40,6 +43,7 @@ Agent 只接受主控命令，主要动作包括：
 - `apply_forward_rule`: 创建或更新独立转发容器
 - `remove_forward_rule`: 删除独立转发容器
 - `uninstall_agent`: 卸载 Agent
+- `heartbeat`: 持续上报 sing-box 状态和系统探针数据
 
 ### Web 面板
 
@@ -49,14 +53,16 @@ Agent 只接受主控命令，主要动作包括：
 - 管理 API Token
 - 保存当前浏览器会话使用的 token
 - 在切换节点协议时，自动切换为该协议对应的表单和默认值
-- 从服务器列表或详情页直接打开 SSH 页面
+- 从服务器列表或详情页直接打开 WebSSH 页面
+- 在 SSH 页面生成或执行一键部署命令
+- 展示实时探针卡片和趋势图
 
 ## 2. 鉴权与接入链路
 
 ### Agent 接入
 
 - Agent 通过 `/agent` WebSocket 向主控发起连接。
-- 首条消息为 `hello`，携带接入 token 和机器信息。
+- 首条消息为 `hello`，携带接入 token、机器信息和首个探针快照。
 - 主控校验成功后建立在线状态，并开始接收心跳、日志和命令结果。
 
 ### API Token
@@ -74,7 +80,16 @@ API Token 是主控级别的访问凭据：
 
 如果设置 `CHIKEN_REQUIRE_API_TOKEN=1`，除 `/api/health` 外都必须带合法 token。
 
-## 3. SSH 与终端架构
+### 安装 Bundle
+
+一键部署不复用 API Token，而是走独立的短时效 bundle：
+
+- 面板先调用 `POST /api/agents/:id/install-command`
+- 主控生成一次性 Agent 接入 token 和短期安装 bundle
+- 浏览器得到一个可复制执行的 `curl -fsSL .../install/agent.sh?bundle=... | bash`
+- 或者主控直接通过 SSH 把同一份脚本推到远端 `sh -s`
+
+## 3. WebSSH 与终端架构
 
 终端入口统一走 `/terminal` WebSocket，但底层有两种模式：
 
@@ -86,6 +101,7 @@ API Token 是主控级别的访问凭据：
 - 主控从 `state.json` 读取该 Agent 对应的 SSH profile
 - 使用 `ssh2` 直接连到目标机
 - 建立真实 shell，会话输入输出通过 WebSocket 透传
+- 前端用 `xterm.js` 渲染终端，并同步窗口大小
 
 兼容 Agent 模式：
 
@@ -118,7 +134,33 @@ API Token 是主控级别的访问凭据：
 
 前提是配置里启用了 TLS 且目标证书路径不存在。
 
-## 5. 转发架构
+## 5. 探针架构
+
+实时探针由 Agent 内建完成，不依赖额外监控组件。
+
+采集内容：
+
+- CPU 使用率与负载
+- 内存与 Swap
+- 根分区磁盘
+- 网络上下行速率
+- 累计流量
+- 运行时长
+
+工作方式：
+
+- Agent 以固定间隔采集并在 `heartbeat` 中上报
+- Server 把最新指标挂到 `agent.metrics`
+- Server 额外保留一段内存中的 `metricsHistory`
+- 前端轮询 `/api/dashboard` 和 `/api/agents/:id`，展示卡片和趋势图
+
+Docker 模式下：
+
+- Agent 通过 `/:/hostfs:ro`
+- 再配合 `CHIKEN_HOST_ROOT=/hostfs`
+- 读取更接近宿主机视角的系统指标
+
+## 6. 转发架构
 
 端口转发已经从“覆盖主配置”改为“独立容器”模型。
 
@@ -142,7 +184,30 @@ API Token 是主控级别的访问凭据：
 - 每条转发规则可以独立启停和替换
 - Agent 需要 Docker 模式才能启用转发能力
 
-## 6. 数据持久化
+## 7. 一键部署架构
+
+一键部署分为两条路径：
+
+### 手工命令路径
+
+1. 前端请求 `install-command`
+2. Server 生成 bundle 与命令
+3. 用户拿到 `curl | bash`
+4. 远端机器执行安装脚本并连回主控
+
+### 面板直推路径
+
+1. 前端请求 `deploy`
+2. Server 生成相同 bundle
+3. Server 通过 SSH 对目标机执行 `sh -s`
+4. 远端机器完成安装并启动 Agent
+
+支持两种落地形态：
+
+- `service`: systemd + Node.js
+- `docker`: Docker Compose
+
+## 8. 数据持久化
 
 主控侧：
 
@@ -153,9 +218,10 @@ API Token 是主控级别的访问凭据：
 - `configVersions`
 - `forwardRules`
 - `sshProfiles`
+- `installBundles`
 
 - `data/audit.jsonl`
-- 记录配置、SSH、服务控制、转发、接入等审计事件
+- 记录配置、SSH、服务控制、部署、转发、接入等审计事件
 
 Agent 侧：
 
@@ -164,9 +230,10 @@ Agent 侧：
 - `/etc/sing-box/chiken-backups`
 - `forwarders/<rule-id>/...`
 
-## 7. 当前实现要点
+## 9. 当前实现要点
 
 - “服务器列表点一下就进 SSH”已经是正式能力，不再依赖手工复制命令。
-- 协议切换会自动替换字段和默认值，避免不同协议表单串味。
+- SSH 页面已经同时承担终端、SSH 配置和一键部署入口。
 - API Token 可以直接进入并控制主控，所以必须按管理权限对待。
 - `Realm` / `GOST` 转发和主节点配置是并列能力，不应再按旧文档理解为覆盖式配置。
+- 探针历史目前保存在主控内存中，用于前端实时趋势展示；重启主控后历史会重新累计。
