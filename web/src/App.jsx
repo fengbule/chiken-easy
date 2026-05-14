@@ -103,9 +103,18 @@ function ConfigPage({ id, back }) {
   const [msg, setMsg] = useState("");
   const loadVersions = () => api(`/api/agents/${id}/config/versions`).then(setVersions);
   useEffect(() => { loadVersions(); }, [id]);
+  const readCurrent = async () => {
+    const first = await api(`/api/agents/${id}/config`);
+    if (first.config) setText(JSON.stringify(first.config, null, 2));
+    setMsg(first.config ? "已读取当前配置" : "已请求 Agent 读取配置，稍后自动刷新");
+    setTimeout(async () => {
+      const next = await api(`/api/agents/${id}/config`);
+      if (next.config) setText(JSON.stringify(next.config, null, 2));
+    }, 900);
+  };
   const format = () => setText(JSON.stringify(JSON.parse(text), null, 2));
   const apply = async () => { const r = await api(`/api/agents/${id}/config`, { method: "POST", body: JSON.stringify({ config: JSON.parse(text), restart: true }) }); setMsg(JSON.stringify(r)); loadVersions(); };
-  return <section><div className="toolbar"><button onClick={back}>返回</button><h1>sing-box 配置</h1><button onClick={format}>格式化</button><button onClick={() => { JSON.parse(text); setMsg("JSON 校验通过"); }}>校验</button><button className="primary" onClick={apply}>应用并重启</button></div>
+  return <section><div className="toolbar"><button onClick={back}>返回</button><h1>sing-box 配置</h1><button onClick={readCurrent}>读取当前</button><button onClick={format}>格式化</button><button onClick={() => { JSON.parse(text); setMsg("JSON 校验通过"); }}>校验</button><button className="primary" onClick={apply}>应用并重启</button></div>
     <div className="grid-config"><Panel title="JSON 编辑器" right={<span>{new Blob([text]).size} bytes</span>}><textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}/><p>{msg}</p></Panel>
     <Panel title="历史版本" right={<button onClick={loadVersions}>刷新</button>}>{versions.length ? versions.map((v) => <div className="version" key={v.id}><span>{v.at}</span><button onClick={async () => { await api(`/api/agents/${id}/config/rollback/${v.id}`, { method: "POST" }); setMsg("已请求回滚"); }}><RotateCcw size={15}/>回滚</button></div>) : <div className="empty">暂无数据</div>}</Panel></div></section>;
 }

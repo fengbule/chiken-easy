@@ -111,8 +111,9 @@ async function connect() {
       token,
       agent: {
         ...state,
-        host: os.hostname(),
-        ip: Object.values(os.networkInterfaces()).flat().find((i) => i && !i.internal && i.family === "IPv4")?.address || "-",
+        name: process.env.CHIKEN_AGENT_NAME || state.name || os.hostname(),
+        host: process.env.CHIKEN_AGENT_HOST || os.hostname(),
+        ip: process.env.CHIKEN_AGENT_IP || Object.values(os.networkInterfaces()).flat().find((i) => i && !i.internal && i.family === "IPv4")?.address || "-",
         os: process.platform,
         arch: process.arch,
         singboxVersion: await singboxVersion(),

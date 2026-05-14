@@ -116,7 +116,7 @@ app.post("/api/agents/:id/service/:action", (req, res) => {
   try {
     const commandId = sendCommand(id, "service", { action });
     audit("admin", `service_${action}`, id, { commandId });
-    res.json({ ok: true, commandId });
+    res.json({ ok: true, commandId, config: state.agents[req.params.id]?.lastConfig || null });
   } catch (error) {
     res.status(409).json({ error: error.message });
   }
@@ -240,6 +240,9 @@ wss.on("connection", (ws, req) => {
       if (msg.log) pushLog(agentId, { at: new Date().toISOString(), line: msg.log });
     }
     if (msg.type === "config") {
+      state.agents[agentId].lastConfig = msg.config;
+      state.agents[agentId].lastSeen = new Date().toISOString();
+      saveState();
       audit("agent", "config_read", agentId, { bytes: JSON.stringify(msg.config || {}).length });
       pushLog(agentId, { at: new Date().toISOString(), line: `[config] ${JSON.stringify(msg.config)}` });
     }

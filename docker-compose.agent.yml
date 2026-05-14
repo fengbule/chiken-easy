@@ -20,6 +20,9 @@ services:
     environment:
       CHIKEN_SERVER: "${CHIKEN_SERVER}"
       CHIKEN_TOKEN: "${CHIKEN_TOKEN}"
+      CHIKEN_AGENT_NAME: "${CHIKEN_AGENT_NAME:-agent}"
+      CHIKEN_AGENT_HOST: "${CHIKEN_AGENT_HOST:-agent}"
+      CHIKEN_AGENT_IP: "${CHIKEN_AGENT_IP:-}"
       CHIKEN_SERVICE_MODE: docker
       SINGBOX_CONTAINER: chiken-singbox
       SINGBOX_CONFIG_VOLUME: ${PWD}/data/sing-box
