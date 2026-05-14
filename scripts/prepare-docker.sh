@@ -11,6 +11,7 @@ if [ ! -f .env ]; then
   {
     echo "CHIKEN_BOOTSTRAP_TOKEN=$TOKEN"
     echo "CHIKEN_TOKEN=$TOKEN"
+    echo "CHIKEN_API_TOKEN="
     echo "CHIKEN_SERVER=ws://127.0.0.1:7788/agent"
     echo "CHIKEN_AGENT_NAME=$(hostname)"
     echo "CHIKEN_AGENT_HOST=$(hostname)"

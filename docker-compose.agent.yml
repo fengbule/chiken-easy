@@ -3,11 +3,10 @@ services:
     image: ghcr.io/sagernet/sing-box:latest
     container_name: chiken-singbox
     restart: unless-stopped
+    network_mode: host
     command: ["run", "-c", "/etc/sing-box/config.json"]
     volumes:
       - ./data/sing-box:/etc/sing-box
-    ports:
-      - "2080:2080/tcp"
 
   chiken-agent:
     build: .

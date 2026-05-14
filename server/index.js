@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { buildConfig, protocolCatalog } from "./configFactory.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -17,6 +18,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 
 const defaultState = {
   tokens: [],
+  apiTokens: [],
   agents: {},
   configVersions: {},
   commands: [
@@ -35,6 +37,9 @@ const loadState = () => {
 let state = loadState();
 if (process.env.CHIKEN_BOOTSTRAP_TOKEN && !state.tokens.some((item) => item.token === process.env.CHIKEN_BOOTSTRAP_TOKEN)) {
   state.tokens.push({ token: process.env.CHIKEN_BOOTSTRAP_TOKEN, createdAt: new Date().toISOString(), used: false, bootstrap: true });
+}
+if (process.env.CHIKEN_API_TOKEN && !state.apiTokens.some((item) => item.token === process.env.CHIKEN_API_TOKEN)) {
+  state.apiTokens.push({ id: "bootstrap", name: "bootstrap", token: process.env.CHIKEN_API_TOKEN, createdAt: new Date().toISOString(), bootstrap: true });
 }
 const saveState = () => fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 const clients = new Map();
@@ -80,6 +85,15 @@ function pushLog(agentId, line) {
 
 const app = express();
 app.use(express.json({ limit: "4mb" }));
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/api/") || req.path === "/api/health") return next();
+  const tokenEnabled = process.env.CHIKEN_REQUIRE_API_TOKEN === "1";
+  if (!tokenEnabled) return next();
+  const auth = req.get("authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : req.get("x-api-token");
+  if (state.apiTokens.some((item) => item.token === token && !item.revoked)) return next();
+  res.status(401).json({ error: "API token required" });
+});
 
 app.get("/api/health", (_, res) => res.json({ ok: true, name: "chiken-easy" }));
 
@@ -108,6 +122,54 @@ app.post("/api/tokens", (_, res) => {
   saveState();
   audit("admin", "create_token", "-", { token: token.slice(0, 10) + "..." });
   res.json(item);
+});
+
+app.get("/api/api-tokens", (_, res) => {
+  res.json((state.apiTokens || []).map((item) => ({ ...item, token: `${item.token.slice(0, 10)}...` })));
+});
+
+app.post("/api/api-tokens", (req, res) => {
+  const item = { id: nanoid(), name: req.body?.name || "api", token: `ck_${nanoid(36)}`, createdAt: new Date().toISOString() };
+  state.apiTokens ||= [];
+  state.apiTokens.push(item);
+  saveState();
+  audit("admin", "create_api_token", "-", { name: item.name });
+  res.json(item);
+});
+
+app.delete("/api/api-tokens/:id", (req, res) => {
+  const item = (state.apiTokens || []).find((token) => token.id === req.params.id);
+  if (!item) return res.status(404).json({ error: "token not found" });
+  item.revoked = true;
+  saveState();
+  audit("admin", "revoke_api_token", "-", { name: item.name });
+  res.json({ ok: true });
+});
+
+app.get("/api/protocols", (_, res) => res.json(protocolCatalog));
+
+app.post("/api/config/render", (req, res) => {
+  try {
+    res.json({ config: buildConfig(req.body || {}) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/agents/:id/config/wizard", (req, res) => {
+  try {
+    const config = buildConfig(req.body || {});
+    const version = { id: nanoid(), at: new Date().toISOString(), status: "pending", config };
+    state.configVersions[req.params.id] ||= [];
+    state.configVersions[req.params.id].unshift(version);
+    state.configVersions[req.params.id] = state.configVersions[req.params.id].slice(0, 30);
+    saveState();
+    const commandId = sendCommand(req.params.id, "apply_config", { config, restart: true, versionId: version.id });
+    audit("admin", "wizard_apply_config", req.params.id, { commandId, versionId: version.id, protocol: req.body?.protocol });
+    res.json({ ok: true, commandId, versionId: version.id, config });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.post("/api/agents/:id/service/:action", (req, res) => {
@@ -169,6 +231,18 @@ app.post("/api/agents/:id/commands/:commandId", (req, res) => {
   try {
     const commandId = sendCommand(req.params.id, "preset", preset);
     audit("admin", "run_preset", req.params.id, { commandId, preset: preset.id });
+    res.json({ ok: true, commandId });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.post("/api/agents/:id/ssh", (req, res) => {
+  const command = String(req.body?.command || "").trim();
+  if (!command) return res.status(400).json({ error: "command required" });
+  try {
+    const commandId = sendCommand(req.params.id, "exec", { command });
+    audit("admin", "ssh_exec", req.params.id, { commandId, command: command.slice(0, 120) });
     res.json({ ok: true, commandId });
   } catch (error) {
     res.status(409).json({ error: error.message });

@@ -2,7 +2,7 @@ import WebSocket from "ws";
 import os from "os";
 import fs from "fs";
 import path from "path";
-import { execFile } from "child_process";
+import { exec, execFile } from "child_process";
 import { nanoid } from "nanoid";
 
 const stateDir = process.env.CHIKEN_AGENT_STATE || path.resolve("agent-state");
@@ -25,6 +25,14 @@ function readState() {
 function run(cmd, args = []) {
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout: 20000 }, (error, stdout, stderr) => {
+      resolve({ ok: !error, output: `${stdout || ""}${stderr || ""}`.trim(), code: error?.code || 0 });
+    });
+  });
+}
+
+function runShell(command) {
+  return new Promise((resolve) => {
+    exec(command, { timeout: 30000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
       resolve({ ok: !error, output: `${stdout || ""}${stderr || ""}`.trim(), code: error?.code || 0 });
     });
   });
@@ -83,6 +91,7 @@ async function handle(ws, msg) {
   if (msg.command === "service") return { commandId: msg.id, ...(await service(msg.payload.action)) };
   if (msg.command === "read_config") return { commandId: msg.id, ok: true, output: JSON.stringify(readConfig(), null, 2), config: readConfig() };
   if (msg.command === "apply_config") return { commandId: msg.id, ...(await writeConfig(msg.payload.config, msg.payload.restart)) };
+  if (msg.command === "exec") return { commandId: msg.id, ...(await runShell(msg.payload.command)) };
   if (msg.command === "tail_logs") {
     const result = await tailLogs(msg.payload.lines);
     for (const line of result.output.split("\n")) ws.send(JSON.stringify({ type: "log", line }));

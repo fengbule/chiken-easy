@@ -10,7 +10,9 @@ const files = [
   "Dockerfile",
   "docker-compose.server.yml",
   "docker-compose.agent.yml",
-  "scripts/install-docker.sh"
+  "scripts/install-docker.sh",
+  "server/configFactory.js",
+  "docs/node-config-guide.md"
 ];
 
 for (const file of files) {

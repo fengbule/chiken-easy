@@ -11,6 +11,11 @@
 - 日志查看：SSE 实时推流，支持读取最近 N 行。
 - 预设命令：状态、重启、日志、配置校验，可在服务端扩展。
 - 协议模板：覆盖 shadowsocks、vmess、vless、trojan、hysteria2、tuic、naive、wireguard、socks、http、mixed。
+- 节点向导：支持 VMess+WS、VLESS+Reality、Trojan、Hysteria2、Shadowsocks、Mixed 和 TCP/UDP 端口转发。
+- SSH / 远程命令：通过 Agent 在目标小鸡执行一次性命令。
+- API Token：支持生成自动化令牌，生产环境可强制 Bearer Token。
+
+节点配置教程见 [docs/node-config-guide.md](docs/node-config-guide.md)。
 
 ## 快速开始
 

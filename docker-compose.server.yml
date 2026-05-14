@@ -7,6 +7,7 @@ services:
     environment:
       PORT: "7788"
       CHIKEN_BOOTSTRAP_TOKEN: "${CHIKEN_BOOTSTRAP_TOKEN}"
+      CHIKEN_API_TOKEN: "${CHIKEN_API_TOKEN:-}"
     ports:
       - "7788:7788"
     volumes:
@@ -16,11 +17,10 @@ services:
     image: ghcr.io/sagernet/sing-box:latest
     container_name: chiken-singbox
     restart: unless-stopped
+    network_mode: host
     command: ["run", "-c", "/etc/sing-box/config.json"]
     volumes:
       - ./data/sing-box:/etc/sing-box
-    ports:
-      - "2080:2080/tcp"
 
   chiken-agent:
     image: chiken-easy:latest
