@@ -26,10 +26,13 @@ services:
       SINGBOX_CONTAINER: chiken-singbox
       SINGBOX_CONFIG_VOLUME: ${PWD}/data/sing-box
       SINGBOX_CONFIG: /etc/sing-box/config.json
+      CHIKEN_FORWARDER_DIR: /app/forwarders
+      CHIKEN_FORWARDER_HOST_DIR: ${PWD}/data/forwarders
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - chiken-agent-state:/app/agent-state
       - ./data/sing-box:/etc/sing-box
+      - ./data/forwarders:/app/forwarders
 
 volumes:
   chiken-agent-state:

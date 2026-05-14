@@ -7,7 +7,7 @@ RUN npm run build
 
 FROM node:24-alpine AS runtime
 WORKDIR /app
-RUN apk add --no-cache docker-cli
+RUN apk add --no-cache docker-cli openssl
 ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev

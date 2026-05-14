@@ -1,79 +1,133 @@
-# 节点配置教程
+# 节点配置与转发指南
 
-## 基本流程
+## 1. 服务器接入
 
-1. 打开面板，进入“服务器”，确认目标小鸡在线。
-2. 进入“节点配置”配置代理协议，或进入“端口转发”配置 TCP/UDP 转发。
-3. 选择服务器、协议和端口。
-4. UUID、密码、short_id、端口、WS 路径等字段可点随机按钮生成。
-5. 点击“预览 JSON”检查 sing-box 配置。
-6. 点击“下发并重启”，Agent 会写入配置、执行 `sing-box check`，通过后重启 sing-box。
-7. 如配置有问题，可进入服务器详情的“配置”页面回滚历史版本。
+1. 打开面板的“服务器”页。
+1. 点击“生成接入 Token”。
+1. 在目标机部署 Agent，并让它连到主控。
+1. 确认服务器状态为 `online`。
 
-## VMess + WebSocket
+## 2. 真实 SSH
 
-面板选择 `VMess + WebSocket`，常用字段：
+现在服务器列表右侧直接有 `SSH` 入口。
 
-- 监听端口：例如 `443` 或 `8080`
-- UUID：客户端也要使用同一个 UUID
-- WS 路径：例如 `/ws`
+首次使用：
 
-生成的是 sing-box `vmess` inbound，并带 `transport.type=ws`。
+1. 进入目标服务器的 `SSH` 页面。
+1. 填写 `host / port / username / password` 或私钥。
+1. 点击“保存 SSH”。
+1. 点击“测试连接”。
+1. 之后从服务器列表点 `SSH` 即可直接进入该机器的 shell。
 
-## VLESS + Reality
+如果只是临时执行命令，也可以切到 `Agent 执行` 模式。
 
-面板选择 `VLESS + Reality`，常用字段：
+## 3. 节点配置
 
-- 监听端口：常用 `443`
-- UUID：客户端使用同一个 UUID
-- SNI：例如 `www.cloudflare.com`
-- Reality 私钥和 short_id
+进入“节点配置”页面：
 
-Reality 密钥可以在小鸡上执行：
+1. 选择服务器。
+1. 选择协议。
+1. 表单会自动切换为该协议的字段。
+1. 点击“预览 JSON”确认生成结果。
+1. 点击“下发并重启”。
+
+## 4. 各协议要点
+
+### VMess + WebSocket
+
+- 常用字段：端口、UUID、WS 路径
+- 适合标准 WS 入站
+
+### VLESS + Reality
+
+- 常用字段：端口、UUID、SNI、私钥、short_id
+- 客户端需要：
+  - `public key`
+  - `short_id`
+  - `uTLS`
+
+生成 Reality 密钥：
 
 ```bash
 docker exec chiken-singbox sing-box generate reality-keypair
 ```
 
-把 private key 填进面板，public key 给客户端使用。
+### Trojan + TLS
 
-## 端口转发
+- 只要填密码和域名即可
+- 如果证书文件不存在，Agent 会自动生成自签名证书
+
+### Hysteria2
+
+- 填密码、域名、上下行速率
+- 也会自动生成自签名证书
+
+### Shadowsocks
+
+- 默认使用 `aes-256-gcm`
+- 适合快速做基础可用性验证
+
+### Mixed
+
+- 会开放一个 HTTP/SOCKS 混合代理端口
+- 不适合长期暴露在公网
+
+## 5. 端口转发
 
 进入“端口转发”页面：
 
-- 监听端口：公网入口端口
-- 转发目标地址：目标 IP 或域名
-- 转发目标端口：目标服务端口
-- 网络：`tcp`、`udp` 或 `tcp_udp`
+1. 选择服务器
+1. 选择转发引擎
+1. 选择网络类型
+1. 填写监听地址、监听端口、目标地址、目标端口
+1. 预览 JSON
+1. 下发并启动
 
-实现方式是 sing-box `direct` inbound，适合简单 TCP/UDP 端口转发。
+支持的引擎：
 
-## SSH / 远程命令
+- `sing-box Direct`
+- `Realm`
+- `GOST`
 
-进入服务器详情页，在“SSH 终端”中输入命令并按 Enter。  
-命令由 Agent 通过长连接转发执行，结果实时回显并写入审计日志。当前适合安装、排错、查看状态等命令式维护。
+特点：
 
-## 卸载 Agent
+- 每条规则都会以独立容器运行
+- 不再覆盖当前节点配置
+- 页面下方可以查看当前规则并删除
 
-服务器详情页点击“卸载 Agent”会让 Agent 自己移除 `chiken-agent` 容器。默认不会删除 sing-box，避免误删正在运行的节点服务。
+## 6. API Token
 
-## API Token
+“API 令牌”页面可以生成主控访问 token。
 
-进入“API 令牌”页面生成 Token。自动化请求可以带：
+使用方式：
 
 ```bash
 curl -H "Authorization: Bearer ck_xxx" http://panel:7788/api/agents
 ```
 
-默认面板不强制 API Token；但如果请求头带了错误 Token，会直接拒绝。生产环境可设置：
+也可以直接带到浏览器：
 
-```bash
-CHIKEN_REQUIRE_API_TOKEN=1
-CHIKEN_API_TOKEN=ck_your_bootstrap_token
+```text
+http://panel:7788/?token=ck_xxx
 ```
 
-这样除 `/api/health` 外，API 都需要 Token。
+这样前端会自动带着 token 调 API、日志和终端。
 
-## Docker 端口说明
+## 7. 建议测试方法
 
-Docker 部署中 sing-box 使用 `network_mode: host`。因此通过面板新增的监听端口会直接在宿主机开放，不需要每次改 Compose 的 `ports`。
+### 节点协议
+
+不要只看端口有没有监听，最好：
+
+1. 下发协议
+1. 用另一台服务器或临时客户端连上
+1. 通过该节点访问公网
+1. 确认拿到正常 HTTP 响应
+
+### TCP 转发
+
+可把目标设成 `example.com:80`，然后请求转发端口并检查是否返回 `Example Domain`。
+
+### UDP 转发
+
+可把目标设成 `1.1.1.1:53`，然后发送真实 DNS 查询确认有回包。
