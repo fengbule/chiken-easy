@@ -1,0 +1,17 @@
+[Unit]
+Description=ChikenEasy sing-box agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/chiken-easy
+Environment=CHIKEN_SERVER=wss://panel.example.com/agent
+Environment=CHIKEN_TOKEN=ce_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Environment=SINGBOX_CONFIG=/etc/sing-box/config.json
+ExecStart=/usr/bin/node agent/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
