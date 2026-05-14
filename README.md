@@ -23,6 +23,7 @@ PORT=7788 npm start
 Docker 部署中控和本机 Agent：
 
 ```bash
+sh scripts/install-docker.sh
 sh scripts/prepare-docker.sh
 docker compose -f docker-compose.server.yml up -d --build
 ```
@@ -30,6 +31,7 @@ docker compose -f docker-compose.server.yml up -d --build
 仅部署 Agent 到其他小鸡：
 
 ```bash
+sh scripts/install-docker.sh
 sh scripts/prepare-docker.sh
 printf "CHIKEN_SERVER=ws://中控IP:7788/agent\nCHIKEN_TOKEN=中控.env里的Token\n" > .env
 docker compose -f docker-compose.agent.yml up -d --build

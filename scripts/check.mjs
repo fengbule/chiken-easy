@@ -9,7 +9,8 @@ const files = [
   "templates/docker-singbox-config.json",
   "Dockerfile",
   "docker-compose.server.yml",
-  "docker-compose.agent.yml"
+  "docker-compose.agent.yml",
+  "scripts/install-docker.sh"
 ];
 
 for (const file of files) {
