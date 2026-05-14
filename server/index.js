@@ -316,8 +316,21 @@ app.get("*", (_, res, next) => {
 });
 
 const server = createServer(app);
-const wss = new WebSocketServer({ server, path: "/agent" });
-const terminalWss = new WebSocketServer({ server, path: "/terminal" });
+const wss = new WebSocketServer({ noServer: true });
+const terminalWss = new WebSocketServer({ noServer: true });
+
+server.on("upgrade", (req, socket, head) => {
+  const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
+  if (pathname === "/agent") {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+    return;
+  }
+  if (pathname === "/terminal") {
+    terminalWss.handleUpgrade(req, socket, head, (ws) => terminalWss.emit("connection", ws, req));
+    return;
+  }
+  socket.destroy();
+});
 
 terminalWss.on("connection", (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
