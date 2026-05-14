@@ -341,8 +341,20 @@ terminalWss.on("connection", (ws, req) => {
   }
   ws.send(JSON.stringify({ type: "output", output: `Connected to ${state.agents[agentId].name || agentId}. Type a command and press Enter.\n$ ` }));
   ws.on("message", (raw) => {
-    const command = raw.toString().trim();
+    const text = raw.toString();
+    let command = text;
+    try {
+      const msg = JSON.parse(text);
+      if (msg && typeof msg === "object") command = msg.data ?? msg.command ?? msg.input ?? "";
+    } catch {
+      command = text;
+    }
+    command = String(command).trim();
     if (!command) return ws.send(JSON.stringify({ type: "output", output: "$ " }));
+    if (["exit", "quit", "logout"].includes(command.toLowerCase())) {
+      ws.send(JSON.stringify({ type: "output", output: "terminal closed\n" }));
+      return ws.close();
+    }
     let commandId = "";
     try {
       commandId = sendCommand(agentId, "exec", { command });
