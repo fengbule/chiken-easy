@@ -116,7 +116,7 @@ app.post("/api/agents/:id/service/:action", (req, res) => {
   try {
     const commandId = sendCommand(id, "service", { action });
     audit("admin", `service_${action}`, id, { commandId });
-    res.json({ ok: true, commandId, config: state.agents[req.params.id]?.lastConfig || null });
+    res.json({ ok: true, commandId });
   } catch (error) {
     res.status(409).json({ error: error.message });
   }
@@ -126,7 +126,7 @@ app.get("/api/agents/:id/config", (req, res) => {
   try {
     const commandId = sendCommand(req.params.id, "read_config");
     audit("admin", "read_config", req.params.id, { commandId });
-    res.json({ ok: true, commandId });
+    res.json({ ok: true, commandId, config: state.agents[req.params.id]?.lastConfig || null });
   } catch (error) {
     res.status(409).json({ error: error.message });
   }
