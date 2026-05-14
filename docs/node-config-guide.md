@@ -1,11 +1,13 @@
-# 节点配置、SSH 与转发指引
+# 节点、SSH、订阅与转发操作指南
+
+这份文档面向日常使用，默认你已经能打开主控面板。
 
 ## 1. 服务器接入
 
-1. 打开面板的“服务器”页。
-2. 点击“生成接入 Token”或进入 SSH 页生成一键部署命令。
-3. 在目标机上部署 Agent。
-4. 确认服务器状态为 `online`。
+1. 打开“服务器”页
+2. 点击“生成接入 Token”或进入某台机器的 SSH 页生成一键部署命令
+3. 在目标机上部署 Agent
+4. 确认该机器状态变为 `online`
 
 ## 2. WebSSH
 
@@ -13,16 +15,16 @@
 
 首次使用：
 
-1. 进入目标服务器的 `SSH` 页面。
-2. 填写 `host / port / username / password` 或私钥。
-3. 点击“保存 SSH”。
-4. 点击“测试连接”。
-5. 之后从服务器列表点 `SSH` 即可直接进入交互式终端。
+1. 进入目标服务器的 `SSH` 页面
+2. 填写 `host / port / username / password` 或私钥
+3. 点击“保存 SSH”
+4. 点击“测试连接”
+5. 之后从服务器列表点击 `SSH` 就会直接进入交互式终端
 
 说明：
 
-- 默认优先走真实 SSH。
-- 如果 SSH 凭据还没配好，也可以切换到 `Agent 执行` 兼容模式。
+- 默认优先走真实 SSH
+- 如果 SSH 凭据还没配好，也可以切换到 `Agent 执行` 兼容模式
 
 ## 3. 一键部署 Agent
 
@@ -36,33 +38,46 @@ SSH 页面支持两种方式：
 curl -fsSL http://panel:7788/install/agent.sh?bundle=xxxx | bash
 ```
 
-### 直接通过 SSH 部署
+### 通过 SSH 立即部署
 
-保存好 SSH 凭据后，点击“通过 SSH 立即部署”，主控会把同一份安装脚本直接推到目标机执行。
+保存好 SSH 凭据后，点击“通过 SSH 立即部署”，主控会把同一份脚本直接推到目标机执行。
 
 ### 部署模式
 
 `systemd / Node`
 
 - 适合目标机已经有 sing-box 服务的情况
-- 会写入最小化 Agent 运行时并启动 systemd 服务
 
 `Docker Compose`
 
 - 适合从零接入的机器
-- 会准备 sing-box 容器、Agent 容器、探针挂载和转发目录
+- 会同时准备 sing-box、agent、探针挂载和转发目录
 
 ## 4. 节点配置
 
 进入“节点配置”页面：
 
-1. 选择服务器。
-2. 选择协议。
-3. 表单会自动切换为该协议的字段。
-4. 点击“预览 JSON”确认生成结果。
-5. 点击“下发并重启”。
+1. 选择服务器
+2. 选择协议
+3. 表单会自动切换到该协议自己的字段
+4. 可选填写
+   - `订阅节点名称`
+   - `订阅出口地址`
+5. 点击“预览 JSON”
+6. 点击“下发并重启”
 
-## 5. 各协议要点
+### 额外导出字段
+
+为了让后续订阅聚合可以直接导出本地节点，推荐一起填写：
+
+- `订阅节点名称`
+  - 默认会使用“服务器名 + 协议名”
+- `订阅出口地址`
+  - 默认会使用该服务器 IP
+- `VLESS + Reality` 的 `public key`
+  - 仅有私钥不足以直接导出为可用订阅
+
+## 5. 各协议注意点
 
 ### VMess + WebSocket
 
@@ -71,7 +86,7 @@ curl -fsSL http://panel:7788/install/agent.sh?bundle=xxxx | bash
 
 ### VLESS + Reality
 
-- 常用字段：端口、UUID、SNI、私钥、short_id
+- 常用字段：端口、UUID、SNI、私钥、公钥、short_id
 - 客户端需要：
   - `public key`
   - `short_id`
@@ -85,7 +100,7 @@ docker exec chiken-singbox sing-box generate reality-keypair
 
 ### Trojan + TLS
 
-- 只要填密码和域名即可
+- 填密码和域名即可
 - 如果证书文件不存在，Agent 会自动生成自签名证书
 
 ### Hysteria2
@@ -101,9 +116,48 @@ docker exec chiken-singbox sing-box generate reality-keypair
 ### Mixed
 
 - 会开放一个 HTTP/SOCKS 混合代理端口
-- 不适合长期暴露在公网
+- 适合临时验证，不建议长期直接暴露公网
 
-## 6. 端口转发
+## 6. 订阅聚合
+
+进入“订阅聚合”页面后，可以把本地节点和外部原始内容混合成同一个订阅。
+
+### 支持的来源
+
+- 已经通过面板下发过的本地节点
+- 外部 URI 列表
+- 外部 Base64 订阅正文
+- 外部 Clash YAML 的 `proxies:` 段
+
+### 使用方式
+
+1. 先在“节点配置”里至少给某台机器下发过一次节点
+2. 打开“订阅聚合”
+3. 勾选要加入的本地节点
+4. 如果需要，再把外部原始内容直接粘贴进去
+5. 选择模板
+6. 点击“生成预览”
+7. 确认后点击“保存订阅”
+8. 复制生成的订阅链接
+
+### 当前内置模板
+
+- `Clash Rule Basic`
+- `Clash Global`
+- `Clash Fallback`
+
+### 公开订阅链接
+
+```text
+http://panel:7788/sub/<public-token>
+```
+
+说明：
+
+- 预览可以先看结果
+- 只有保存之后，公开订阅链接才会真正生效
+
+## 7. 端口转发
 
 进入“端口转发”页面：
 
@@ -114,7 +168,7 @@ docker exec chiken-singbox sing-box generate reality-keypair
 5. 预览 JSON
 6. 下发并启动
 
-支持的引擎：
+支持引擎：
 
 - `sing-box Direct`
 - `Realm`
@@ -126,42 +180,26 @@ docker exec chiken-singbox sing-box generate reality-keypair
 - 不再覆盖当前节点配置
 - 页面下方可以查看当前规则并删除
 
-## 7. 实时探针
-
-服务器详情页现在会实时展示：
-
-- CPU
-- 内存
-- 磁盘
-- 网络上下行速率
-- 累计流量
-- 趋势图
-
-如果是 Docker 模式，请确保 Agent 容器保留：
-
-- `/:/hostfs:ro`
-- `CHIKEN_HOST_ROOT=/hostfs`
-
-否则磁盘等指标会更偏向容器视角。
-
 ## 8. 建议测试方法
 
 ### 节点协议
 
-不要只看端口有没有监听，最好：
+不要只看端口是否监听，最好按下面的口径：
 
-1. 下发协议
-2. 用另一台服务器或临时客户端连上
+1. 通过面板下发协议
+2. 用客户端真实连上
 3. 通过该节点访问公网
 4. 确认拿到正常 HTTP 响应
 
+在 **2026-05-14** 的最新验证里，`VMess / VLESS Reality / Trojan / Hysteria2 / Shadowsocks / Mixed` 已经全部按真实联通口径重新测过一次。
+
 ### TCP 转发
 
-可把目标设成 `example.com:80`，然后请求转发端口并检查是否返回 `Example Domain`。
+可把目标设成 `example.com:80`，再访问转发端口并检查是否返回 `Example Domain`。
 
 ### UDP 转发
 
-可把目标设成 `1.1.1.1:53`，然后发送真实 DNS 查询确认有回包。
+可把目标设成 `1.1.1.1:53`，再发送真实 DNS 查询确认有回包。
 
 ### WebSSH
 
@@ -179,4 +217,4 @@ docker exec chiken-singbox sing-box generate reality-keypair
 1. `systemd` 命令可生成
 2. `Docker` 命令可生成
 3. 安装脚本可通过 `sh -n`
-4. 通过 SSH 直推时，目标机能正常写入服务或 Compose 文件
+4. 通过 SSH 直推时，目标机能正常写入服务文件或 Compose 文件

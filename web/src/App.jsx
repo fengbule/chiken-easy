@@ -5,6 +5,7 @@ import {
   ClipboardList,
   Code2,
   KeyRound,
+  Link2,
   Monitor,
   PlugZap,
   RefreshCw,
@@ -70,6 +71,7 @@ const nav = [
   ["dashboard", Activity, "仪表盘"],
   ["servers", Monitor, "服务器"],
   ["nodes", Code2, "节点配置"],
+  ["subscriptions", Link2, "订阅聚合"],
   ["forward", PlugZap, "端口转发"],
   ["tokens", KeyRound, "API 令牌"],
   ["audit", ClipboardList, "审计日志"],
@@ -105,8 +107,10 @@ const protocolDefinitions = {
       serverName: "www.cloudflare.com",
       serverPort: 443,
       privateKey: "CHANGE_ME_REALITY_PRIVATE_KEY",
+      publicKey: "",
       shortId: randShortId(),
-      flow: "xtls-rprx-vision"
+      flow: "xtls-rprx-vision",
+      clientFingerprint: "chrome"
     }),
     fields: [
       { key: "port", label: "监听端口", type: "number", random: () => 443 },
@@ -114,8 +118,10 @@ const protocolDefinitions = {
       { key: "serverName", label: "SNI / 握手域名", random: () => ["www.cloudflare.com", "www.microsoft.com", "www.apple.com", "www.yahoo.com"][Math.floor(Math.random() * 4)] },
       { key: "serverPort", label: "握手端口", type: "number" },
       { key: "privateKey", label: "Reality 私钥" },
+      { key: "publicKey", label: "Reality 公钥" },
       { key: "shortId", label: "Reality short_id", random: () => randShortId() },
       { key: "flow", label: "Flow" },
+      { key: "clientFingerprint", label: "客户端指纹" },
       { key: "listen", label: "监听地址", placeholder: "::" }
     ]
   },
@@ -211,7 +217,11 @@ const forwardNetworkOptions = [
 ];
 
 function defaultProtocolForm(protocol = "vmess-ws") {
-  return protocolDefinitions[protocol]?.defaults() || protocolDefinitions["vmess-ws"].defaults();
+  return {
+    exportName: "",
+    exportHost: "",
+    ...(protocolDefinitions[protocol]?.defaults() || protocolDefinitions["vmess-ws"].defaults())
+  };
 }
 
 function defaultForwardForm() {
@@ -223,6 +233,31 @@ function defaultForwardForm() {
     targetHost: "example.com",
     targetPort: 80,
     name: ""
+  };
+}
+
+const subscriptionTemplateFallback = [
+  ["clash-basic", "Clash Rule Basic"],
+  ["clash-global", "Clash Global"],
+  ["clash-fallback", "Clash Fallback"]
+];
+
+function defaultSubscriptionForm() {
+  return {
+    id: "",
+    name: "",
+    template: "clash-basic",
+    publicToken: "",
+    localNodes: [],
+    imports: []
+  };
+}
+
+function defaultSubscriptionImport() {
+  return {
+    id: newUuid(),
+    name: "外部原始内容",
+    content: ""
   };
 }
 
@@ -1044,7 +1079,9 @@ function NodeWizard({ agents }) {
   const switchProtocol = (nextProtocol) => {
     setForm((current) => ({
       agentId: current.agentId,
-      ...defaultProtocolForm(nextProtocol)
+      ...defaultProtocolForm(nextProtocol),
+      exportName: current.exportName || "",
+      exportHost: current.exportHost || ""
     }));
     setPreview("");
     setResult("");
@@ -1087,6 +1124,8 @@ function NodeWizard({ agents }) {
               onChange={switchProtocol}
               options={Object.entries(protocolDefinitions).map(([id, item]) => [id, item.name])}
             />
+            <Field label="订阅节点名称" value={form.exportName || ""} onChange={(value) => patch("exportName", value)} placeholder="默认用服务器名 + 协议名" />
+            <Field label="订阅出口地址" value={form.exportHost || ""} onChange={(value) => patch("exportHost", value)} placeholder="默认使用该服务器 IP" />
             {definition.fields.map((field) => (
               <Field
                 key={field.key}
@@ -1102,6 +1141,7 @@ function NodeWizard({ agents }) {
             ))}
           </div>
           <div className="panel-tip">{definition.note}</div>
+          <div className="panel-tip">这里填写的“订阅出口地址”会用于订阅聚合导出；`VLESS + Reality` 想让订阅可直接用，还要把对应公钥一起填进去。</div>
           <div className="actions">
             <button className="primary" onClick={apply}>
               下发并重启
@@ -1249,6 +1289,287 @@ function ForwardWizard({ agents }) {
       <Panel title="当前转发规则" right={<button onClick={() => loadRules(form.agentId)}>刷新</button>}>
         <ForwardRuleTable rules={rules} removeRule={removeRule} />
       </Panel>
+    </section>
+  );
+}
+
+function SubscriptionsPage() {
+  const [meta, setMeta] = useState({ templates: [], nodes: [] });
+  const [profiles, setProfiles] = useState([]);
+  const [form, setForm] = useState(() => defaultSubscriptionForm());
+  const [draftImport, setDraftImport] = useState(() => defaultSubscriptionImport());
+  const [preview, setPreview] = useState("");
+  const [uriPreview, setUriPreview] = useState("");
+  const [warnings, setWarnings] = useState([]);
+  const [message, setMessage] = useState("");
+  const [link, setLink] = useState("");
+
+  const templateOptions = meta.templates.length ? meta.templates.map((item) => [item.id, item.name]) : subscriptionTemplateFallback;
+
+  const loadMeta = () => api("/api/subscriptions/meta").then(setMeta);
+  const loadProfiles = () => api("/api/subscriptions").then(setProfiles);
+
+  useEffect(() => {
+    loadMeta().catch(() => {});
+    loadProfiles().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (form.localNodes.length || !meta.nodes.length) return;
+    const firstReady = meta.nodes.find((node) => node.ready);
+    if (!firstReady) return;
+    setForm((current) => ({ ...current, localNodes: [firstReady.agentId] }));
+  }, [meta.nodes, form.localNodes.length]);
+
+  const patch = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+
+  const resetComposer = () => {
+    const firstReady = meta.nodes.find((node) => node.ready);
+    setForm({ ...defaultSubscriptionForm(), localNodes: firstReady ? [firstReady.agentId] : [] });
+    setDraftImport(defaultSubscriptionImport());
+    setPreview("");
+    setUriPreview("");
+    setWarnings([]);
+    setLink("");
+    setMessage("");
+  };
+
+  const toggleLocalNode = (agentId) => {
+    setForm((current) => ({
+      ...current,
+      localNodes: current.localNodes.includes(agentId) ? current.localNodes.filter((item) => item !== agentId) : [...current.localNodes, agentId]
+    }));
+  };
+
+  const addImport = () => {
+    if (!draftImport.content.trim()) {
+      setMessage("请先粘贴外部原始订阅内容。");
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      imports: [
+        ...current.imports,
+        {
+          ...draftImport,
+          name: draftImport.name.trim() || `导入 ${current.imports.length + 1}`
+        }
+      ]
+    }));
+    setDraftImport(defaultSubscriptionImport());
+    setMessage("外部原始内容已加入当前订阅草稿。");
+  };
+
+  const removeImport = (id) => {
+    setForm((current) => ({
+      ...current,
+      imports: current.imports.filter((item) => item.id !== id)
+    }));
+  };
+
+  const openProfile = async (id) => {
+    try {
+      const profile = await api(`/api/subscriptions/${id}`);
+      setForm(profile);
+      setDraftImport(defaultSubscriptionImport());
+      setPreview("");
+      setUriPreview("");
+      setWarnings([]);
+      setLink(profile.url || "");
+      setMessage(`已载入订阅：${profile.name}`);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const saveProfile = async (regenerateToken = false) => {
+    try {
+      const target = form.id ? `/api/subscriptions/${form.id}` : "/api/subscriptions";
+      const method = form.id ? "PUT" : "POST";
+      const response = await api(target, {
+        method,
+        body: JSON.stringify({ ...form, regenerateToken })
+      });
+      setForm(response);
+      setLink(response.url || "");
+      setMessage(regenerateToken ? "订阅已保存，并重新生成了新的订阅链接。" : "订阅已保存。");
+      loadProfiles().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const deleteProfile = async () => {
+    if (!form.id) {
+      resetComposer();
+      return;
+    }
+    if (!window.confirm(`确认删除订阅 ${form.name} 吗？`)) return;
+    try {
+      await api(`/api/subscriptions/${form.id}`, { method: "DELETE" });
+      resetComposer();
+      setMessage("订阅已删除。");
+      loadProfiles().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const renderPreview = async () => {
+    try {
+      const response = await api("/api/subscriptions/render", {
+        method: "POST",
+        body: JSON.stringify(form)
+      });
+      setPreview(response.body || "");
+      setUriPreview(response.uriContent || "");
+      setWarnings(response.warnings || []);
+      setLink(form.id ? response.profile?.url || "" : "");
+      setMessage(form.id ? `已生成 ${response.proxyCount} 个节点的订阅预览。` : `已生成 ${response.proxyCount} 个节点的订阅预览。保存后订阅链接才会正式生效。`);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const copyLink = async () => {
+    if (!form.id) {
+      setMessage("先保存订阅，公开订阅链接才会真正生效。");
+      return;
+    }
+    const nextLink = link || profiles.find((item) => item.id === form.id)?.url || "";
+    if (!nextLink) {
+      setMessage("先预览或保存一次，拿到订阅链接后再复制。");
+      return;
+    }
+    await navigator.clipboard.writeText(nextLink);
+    setMessage("订阅链接已复制。");
+  };
+
+  const copyUri = async () => {
+    if (!uriPreview) {
+      await renderPreview();
+      return;
+    }
+    await navigator.clipboard.writeText(uriPreview);
+    setMessage("原始 URI 列表已复制。");
+  };
+
+  return (
+    <section>
+      <div className="grid2 subscription-grid">
+        <Panel title="订阅列表" right={<button onClick={resetComposer}>新建订阅</button>}>
+          <div className="subscription-list">
+            {profiles.length ? (
+              profiles.map((profile) => (
+                <button key={profile.id} className={`subscription-card ${form.id === profile.id ? "active" : ""}`} onClick={() => openProfile(profile.id)}>
+                  <strong>{profile.name}</strong>
+                  <span>{profile.template}</span>
+                  <span>
+                    {profile.localNodeCount} 个本地节点 / {profile.importCount} 份外部导入
+                  </span>
+                </button>
+              ))
+            ) : (
+              <div className="empty">还没有订阅聚合配置。</div>
+            )}
+          </div>
+        </Panel>
+
+        <div className="panel-stack">
+          <Panel title="订阅编排" right={<span className="muted">支持本地节点、外部原始内容和模板切换</span>}>
+            <div className="form-grid">
+              <Field label="订阅名称" value={form.name || ""} onChange={(value) => patch("name", value)} placeholder="例如：办公机房聚合" />
+              <Field label="订阅模板" type="select" value={form.template || "clash-basic"} onChange={(value) => patch("template", value)} options={templateOptions} />
+            </div>
+            <div className="panel-tip">本地节点来自你已经在“节点配置”里下发过的服务器；外部内容可以直接粘贴 Clash YAML、URI 列表，或者 Base64 订阅正文。</div>
+            <div className="subscription-node-grid">
+              {meta.nodes.length ? (
+                meta.nodes.map((node) => {
+                  const checked = form.localNodes.includes(node.agentId);
+                  return (
+                    <label key={node.agentId} className={`subscription-node ${checked ? "active" : ""} ${node.ready ? "" : "disabled"}`}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleLocalNode(node.agentId)} />
+                      <div>
+                        <strong>{node.name}</strong>
+                        <span>
+                          {node.protocolLabel} · {node.server}:{node.port || "-"}
+                        </span>
+                        <span>{node.ready ? "可直接导出到订阅" : node.reason}</span>
+                      </div>
+                    </label>
+                  );
+                })
+              ) : (
+                <div className="empty">先去“节点配置”页面至少下发一次节点，订阅聚合这里才会出现可选项。</div>
+              )}
+            </div>
+            <div className="actions">
+              <button className="primary" onClick={() => saveProfile(false)}>
+                保存订阅
+              </button>
+              <button onClick={renderPreview}>生成预览</button>
+              <button onClick={copyLink}>复制订阅链接</button>
+              <button onClick={copyUri}>复制原始 URI</button>
+              <button onClick={() => saveProfile(true)} disabled={!form.id}>
+                重置订阅链接
+              </button>
+              <button className="red-bg" onClick={deleteProfile}>
+                {form.id ? "删除订阅" : "清空草稿"}
+              </button>
+            </div>
+            {message ? <p className="panel-message">{message}</p> : null}
+          </Panel>
+
+          <Panel title="外部原始内容导入" right={<span className="muted">不是订阅链接，而是直接粘贴订阅正文</span>}>
+            <div className="form-grid">
+              <Field label="导入名称" value={draftImport.name} onChange={(value) => setDraftImport((current) => ({ ...current, name: value }))} />
+            </div>
+            <div className="subscription-editor">
+              <label>
+                原始内容
+                <textarea
+                  className="inline-textarea"
+                  rows={10}
+                  value={draftImport.content}
+                  onChange={(event) => setDraftImport((current) => ({ ...current, content: event.target.value }))}
+                  placeholder="支持三种格式：1. Clash YAML（至少含 proxies:）；2. 纯 URI 列表；3. Base64 编码后的订阅正文。"
+                />
+              </label>
+            </div>
+            <div className="actions">
+              <button onClick={addImport}>加入当前订阅</button>
+            </div>
+            <div className="subscription-import-list">
+              {form.imports.length ? (
+                form.imports.map((item) => (
+                  <div className="subscription-import-item" key={item.id}>
+                    <div className="subscription-import-head">
+                      <strong>{item.name}</strong>
+                      <button className="link" onClick={() => removeImport(item.id)}>
+                        移除
+                      </button>
+                    </div>
+                    <pre>{item.content.slice(0, 420)}{item.content.length > 420 ? "\n..." : ""}</pre>
+                  </div>
+                ))
+              ) : (
+                <div className="empty">暂时还没有外部原始内容导入。</div>
+              )}
+            </div>
+          </Panel>
+
+          <Panel title="订阅预览" right={form.id && link ? <span className="muted">{link}</span> : <span className="muted">保存后会生成可访问的订阅链接</span>}>
+            {warnings.length ? (
+              <div className="subscription-warnings">
+                {warnings.map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+              </div>
+            ) : null}
+            <pre className="preview subscription-preview">{preview || "点击“生成预览”后，这里会显示渲染后的 Clash 模板内容。"}</pre>
+          </Panel>
+        </div>
+      </div>
     </section>
   );
 }
@@ -1505,6 +1826,7 @@ function Audit() {
 function Tutorial() {
   const cards = [
     ["节点配置", "切换协议时表单会自动更新为该协议的字段与默认值，不再保留上一种协议的残留参数。"],
+    ["订阅聚合", "可以把已经下发过的本地节点聚合成订阅链接，也能直接导入外部原始内容，并切换内置 Clash 模板。"],
     ["真实 SSH", "服务器列表右侧现在有 SSH 入口。保存好该机器的 SSH 配置后，点一下就会直接进入交互式 WebSSH 终端。"],
     ["一键部署", "SSH 页面可以直接生成 systemd 或 Docker 的一键部署命令，也可以复用当前 SSH 凭据直接执行部署。"],
     ["实时探针", "Agent 会持续上报 CPU、内存、磁盘、网络速率和累计流量，效果更接近 Komari / 哪吒这类监控面板。"],
@@ -1598,6 +1920,7 @@ function App() {
     if (page === "dashboard") return <Dashboard openAgent={openAgent} openSsh={openSsh} />;
     if (page === "servers") return <Servers openAgent={openAgent} openSsh={openSsh} />;
     if (page === "nodes") return <NodeWizard agents={agents} />;
+    if (page === "subscriptions") return <SubscriptionsPage />;
     if (page === "forward") return <ForwardWizard agents={agents} />;
     if (page === "detail") {
       return (

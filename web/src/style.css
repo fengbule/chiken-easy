@@ -523,6 +523,136 @@ textarea {
   padding: 20px;
 }
 
+.subscription-grid {
+  align-items: start;
+}
+
+.subscription-list,
+.subscription-import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+}
+
+.subscription-card {
+  height: auto;
+  min-height: 92px;
+  justify-content: flex-start;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  text-align: left;
+}
+
+.subscription-card strong,
+.subscription-node strong,
+.subscription-import-head strong {
+  font-size: 15px;
+  color: #213243;
+}
+
+.subscription-card span,
+.subscription-node span,
+.subscription-import-head span,
+.subscription-warnings p {
+  color: #64758a;
+  line-height: 1.6;
+}
+
+.subscription-card.active {
+  border-color: #348dff;
+  background: #f4f9ff;
+  color: #0c65c9;
+}
+
+.subscription-node-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 14px;
+  padding: 0 20px 20px;
+}
+
+.subscription-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #e4eaf2;
+  border-radius: 10px;
+  background: #fbfdff;
+  cursor: pointer;
+}
+
+.subscription-node input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  accent-color: #348dff;
+  border: 0;
+  padding: 0;
+}
+
+.subscription-node div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.subscription-node.active {
+  border-color: #348dff;
+  background: #eef6ff;
+}
+
+.subscription-node.disabled {
+  border-style: dashed;
+}
+
+.subscription-editor {
+  padding: 0 20px 20px;
+}
+
+.subscription-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #697789;
+  font-size: 13px;
+}
+
+.subscription-import-item {
+  border: 1px solid #e7edf5;
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.subscription-import-item pre {
+  margin: 0;
+  border-top: 1px solid #edf2f8;
+  border-radius: 0 0 10px 10px;
+}
+
+.subscription-import-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.subscription-warnings {
+  padding: 16px 20px 0;
+}
+
+.subscription-warnings p {
+  margin: 0 0 8px;
+}
+
+.subscription-preview {
+  height: 520px;
+}
+
 .guide-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -576,7 +706,8 @@ code {
   .grid-config,
   .stats,
   .probe-grid,
-  .trend-grid {
+  .trend-grid,
+  .subscription-node-grid {
     grid-template-columns: 1fr;
   }
 }

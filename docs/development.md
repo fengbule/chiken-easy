@@ -1,21 +1,30 @@
 # chiken-easy 开发文档
 
-本文档面向继续开发、二次部署、联调测试和线上排障。
+本文档以 `main` 分支在 **2026-05-14** 的实现为准。
 
-## 1. 文档口径
+如果仓库里出现重复描述，以本文档记录的最新行为为准。
 
-- 本文档以 `main` 分支当前实现为准。
-- 如果仓库里存在重复描述，以这里记录的最新行为为准。
-- 当前版本已经把“WebSSH 终端”、“一键部署 Agent”、“实时探针”、“独立转发引擎”、“API Token 直入主控”纳入正式能力，不再是待办项。
+## 1. 当前范围
+
+当前版本已经正式包含：
+
+- WebSSH 终端
+- 一键部署 Agent
+- 实时探针
+- 独立端口转发
+- API Token 直接进入主控
+- 订阅聚合与模板切换
+
+这些能力都已经是现有实现，不再是计划项。
 
 ## 2. 项目定位
 
 `chiken-easy` 是一个以 `sing-box` 为核心的多服务器控制面板：
 
-- 主控 `server` 提供 Web 面板、HTTP API、Agent WebSocket、WebSSH 终端、安装脚本下发和审计日志。
-- 每台目标服务器部署一个 `agent`。
-- `agent` 负责下发和回滚 `sing-box` 配置、控制服务、读取日志、管理独立转发容器、采集实时探针指标。
-- 面板既可以通过 Agent 执行命令，也可以通过保存的 SSH 凭据直接进入目标服务器或远程执行一键部署。
+- `server` 提供 Web 面板、HTTP API、Agent WebSocket、WebSSH、订阅链接和审计日志
+- 每台目标服务器部署一个 `agent`
+- `agent` 负责配置下发、服务控制、日志读取、转发容器管理和实时探针
+- 面板既可以通过 Agent 执行命令，也可以直接通过保存的 SSH 凭据进入真实终端或远程执行部署
 
 ## 3. 技术栈
 
@@ -33,6 +42,7 @@ server/
   index.js
   configFactory.js
   installers.js
+  subscriptions.js
 
 agent/
   index.js
@@ -72,7 +82,7 @@ npm run build
 npm run lint
 ```
 
-Windows PowerShell 如果执行策略拦截：
+Windows PowerShell：
 
 ```powershell
 npm.cmd run build
@@ -101,26 +111,24 @@ docker compose -f docker-compose.agent.yml up -d --build
 
 关键环境变量：
 
-- `CHIKEN_FORWARDER_DIR=/app/forwarders`
-- `CHIKEN_FORWARDER_HOST_DIR=${PWD}/data/forwarders`
-- `SINGBOX_CONFIG=/etc/sing-box/config.json`
-- `SINGBOX_CONFIG_VOLUME=${PWD}/data/sing-box`
-- `CHIKEN_REALM_IMAGE=4points/realm:latest`
-- `CHIKEN_GOST_IMAGE=gogost/gost:latest`
-- `CHIKEN_PROBE_INTERVAL=5`
-- `CHIKEN_HOST_ROOT=/hostfs`
 - `CHIKEN_PUBLIC_BASE_URL=https://panel.example.com`
 - `CHIKEN_PUBLIC_WS_URL=wss://panel.example.com/agent`
+- `CHIKEN_PROBE_INTERVAL=5`
+- `CHIKEN_HOST_ROOT=/hostfs`
+- `CHIKEN_FORWARDER_DIR=/app/forwarders`
+- `CHIKEN_FORWARDER_HOST_DIR=${PWD}/data/forwarders`
+- `CHIKEN_REALM_IMAGE=4points/realm:latest`
+- `CHIKEN_GOST_IMAGE=gogost/gost:latest`
 
 说明：
 
-- 端口转发依赖 Agent 的 Docker 模式。
-- 节点主配置和转发规则已经解耦，转发不会再覆盖主 `sing-box` 配置。
-- Docker 模式下探针通过只读挂载宿主机根目录来读取更接近真实机器的磁盘与系统指标。
+- 端口转发依赖 Agent 的 Docker 模式
+- Docker 模式下探针通过只读挂载宿主机根目录获取更接近真实宿主机的数据
+- 一键部署命令依赖 `CHIKEN_PUBLIC_BASE_URL / CHIKEN_PUBLIC_WS_URL` 正确可达
 
-## 7. API 与鉴权
+## 7. API 总览
 
-所有接口默认在 `http://host:7788/api` 下。
+所有 API 默认在 `http://host:7788/api` 下。
 
 基础接口：
 
@@ -159,6 +167,17 @@ SSH：
 - `GET /api/protocols`
 - `POST /api/config/render`
 - `POST /api/agents/:id/config/wizard`
+
+订阅聚合：
+
+- `GET /api/subscriptions/meta`
+- `GET /api/subscriptions`
+- `GET /api/subscriptions/:id`
+- `POST /api/subscriptions/render`
+- `POST /api/subscriptions`
+- `PUT /api/subscriptions/:id`
+- `DELETE /api/subscriptions/:id`
+- `GET /sub/:publicToken`
 
 转发向导：
 
@@ -209,34 +228,28 @@ CHIKEN_API_TOKEN=ck_bootstrap_token
 
 则除 `/api/health` 外，其余 API、日志流和终端入口都需要合法 token。
 
-## 9. WebSSH 工作流
+## 9. WebSSH
 
-当前版本已经支持“从服务器列表一键进入 WebSSH”：
+当前版本已经支持从服务器列表一键进入真实 WebSSH：
 
-1. 在“服务器”页或服务器详情页点击 `SSH`。
-2. 首次进入后填写 `host / port / username / password` 或私钥。
-3. 点击“保存 SSH”，再点“测试连接”。
-4. 保存成功后，服务器列表右侧就会保留这个入口，后续点击 `SSH` 会直接进入该机器的交互式终端。
+1. 在“服务器”页或服务器详情页点击 `SSH`
+2. 首次进入后填写 `host / port / username / password` 或私钥
+3. 点击“保存 SSH”，再点击“测试连接”
+4. 之后从服务器列表点击 `SSH` 会直接进入该机器的交互式终端
 
 实现细节：
 
-- `mode=ssh` 通过 `ssh2` 建立真实 SSH shell，会话走 `/terminal` WebSocket。
-- 前端使用 `xterm.js` 渲染终端，支持原始按键、粘贴和窗口 resize。
-- `mode=agent` 是兼容模式，底层仍通过 Agent 执行命令，便于 SSH 未就绪时兜底。
-- 如果该 Agent 还没有配置可用的 SSH 凭据，终端会自动回退到 `agent` 模式。
-- SSH 凭据由主控保存到 `state.json`，因此主控本身必须视为高敏感资产。
-
-推荐：
-
-- 日常运维、安装 Agent、排查系统问题，优先使用真实 SSH。
-- 只需要快速跑一条命令时，再切回 `Agent 执行`。
+- `mode=ssh` 通过 `ssh2` 建立真实 SSH shell，会话走 `/terminal` WebSocket
+- 前端使用 `xterm.js` 渲染终端，支持原始按键、粘贴和窗口 resize
+- `mode=agent` 是兼容模式，底层仍通过 Agent 执行命令
+- 如果 SSH 凭据不可用，终端会自动回退到 `agent` 模式
 
 ## 10. 一键部署 Agent
 
-SSH 页面现在同时提供：
+SSH 页面同时提供：
 
-- 复制可直接执行的一键部署命令
-- 通过已保存的 SSH 凭据，直接从面板远程执行部署
+- 可复制的一键部署命令
+- 通过当前保存的 SSH 凭据直接远程执行部署
 
 支持两种部署模式：
 
@@ -244,24 +257,18 @@ SSH 页面现在同时提供：
 
 - 目标是 `systemd + Node.js`
 - 适合目标机已经有 sing-box 服务的场景
-- 会写入最小化 Agent 运行时、systemd 服务文件并启动
 
 ### `docker`
 
 - 目标是 `Docker Compose`
 - 适合从零接入的机器
-- 会准备 `sing-box` 容器、Agent 容器、探针挂载和转发目录
+- 会准备 `sing-box`、`agent`、探针挂载和转发目录
 
 实现方式：
 
 - 主控为每次部署生成短时效安装 bundle
 - 面板可复制 `curl -fsSL .../install/agent.sh?bundle=... | bash`
-- 也可以直接把同一份脚本通过 SSH `sh -s` 推到远端执行
-
-注意：
-
-- 部署命令依赖 `CHIKEN_PUBLIC_BASE_URL / CHIKEN_PUBLIC_WS_URL` 正确可达，尤其是在反代或多网卡环境下。
-- 如果直接通过面板 SSH 执行部署，远端不需要再额外访问 GitHub 下载 Agent 源码。
+- 也可以直接把同一份脚本通过 SSH `sh -s` 推送到远端执行
 
 ## 11. 实时探针
 
@@ -278,10 +285,10 @@ Agent 会持续上报：
 
 - 采集逻辑位于 `agent/systemProbe.js`
 - Linux 优先读取 `/proc` 和 `df`
-- Docker 模式下通过 `CHIKEN_HOST_ROOT=/hostfs` 读取只读宿主机视角
-- 主控会保留最近一段采样历史，用于前端趋势图展示
+- Docker 模式下通过 `CHIKEN_HOST_ROOT=/hostfs` 读取宿主机视角
+- 主控保留最近一段 `metricsHistory` 供前端显示趋势图
 
-## 12. 节点协议与向导行为
+## 12. 节点协议与测试口径
 
 当前面板向导支持：
 
@@ -292,118 +299,99 @@ Agent 会持续上报：
 - `shadowsocks`
 - `mixed`
 
-最新实现的关键点：
+最新实现重点：
 
-- 切换协议时，前端会自动重置为该协议对应的字段和默认值，不再沿用上一个协议的残留表单。
-- `Trojan` / `Hysteria2` 首次下发时，如果证书文件不存在，Agent 会自动生成自签名证书。
-- `VLESS + Reality` 需要服务端私钥，客户端还需要 `public key + short_id + uTLS`。
-- `Shadowsocks` 默认算法为 `aes-256-gcm`。
+- 切换协议时，前端会自动重置为该协议自己的字段和默认值
+- `Trojan / Hysteria2` 首次下发时会自动补齐自签名证书
+- `VLESS + Reality` 订阅导出额外要求填写 `public key`
+- 节点向导额外提供“订阅节点名称”和“订阅出口地址”
 
-各协议测试时不要只看端口监听，要验证真实可用性：
+**2026-05-14 验证结果**
 
-- `VMess + WebSocket`：客户端通过 WS 入站访问公网，确认可正常拿到 HTTP 200。
-- `VLESS + Reality`：客户端带完整 Reality 参数连接，确认能正常握手并访问公网。
-- `Trojan + TLS`：先确认服务端自动补证书成功，再用客户端验证链路。
-- `Hysteria2`：确认上/下行参数生效，客户端能正常跑通。
-- `Shadowsocks`：确认密码和加密方法匹配后可正常访问公网。
-- `Mixed`：确认 HTTP/SOCKS 代理都能正常工作，不只是面板显示下发成功。
+在一台远端测试服务器上，使用 Docker 中的 `sing-box` 服务端 / 客户端回环联调，已经逐个验证通过：
 
-## 13. 端口转发实现
+- `VMess + WebSocket`
+- `VLESS + Reality`
+- `Trojan + TLS`
+- `Hysteria2`
+- `Shadowsocks`
+- `Mixed HTTP/SOCKS`
 
-端口转发现在是独立能力，不再复用主节点配置。
+验证口径不是只看端口监听，而是实际经由该协议访问公网 `https://www.gstatic.com/generate_204` 并拿到 `204`。
 
-支持的转发引擎：
+## 13. 订阅聚合
+
+订阅聚合的目标是做成类似 `sublinkpro` 的“本地节点 + 外部内容聚合器”，但不依赖外部订阅链接。
+
+当前支持：
+
+- 把已经通过面板下发过的本地节点直接加入订阅
+- 手动粘贴外部原始订阅内容
+- 自动识别以下输入
+  - Clash YAML 中的 `proxies:` 段
+  - 纯 URI 列表
+  - Base64 编码后的订阅正文
+- 切换内置 Clash 模板
+  - `Clash Rule Basic`
+  - `Clash Global`
+  - `Clash Fallback`
+
+实现方式：
+
+- 节点下发成功时，主控同时保存一份 `nodeProfiles`
+- 订阅页保存 `subscriptionProfiles`
+- 渲染时聚合本地节点与外部原始内容
+- 对外暴露 `GET /sub/:publicToken`
+
+注意：
+
+- `VLESS + Reality` 如果缺少 `public key` 或 `short_id`，会被标记为不可直接导出
+- 外部 Clash YAML 导入目前只抽取 `proxies:` 节点本身，不复用对方的 `proxy-groups` 和 `rules`
+
+## 14. 端口转发
+
+端口转发已经从“覆盖主配置”改为“独立容器”模型。
+
+支持引擎：
 
 - `sing-box`
 - `Realm`
 - `GOST`
 
-实现方式：
+工作方式：
 
-- 每条转发规则都会以独立容器运行。
-- 容器名格式为 `chiken-forward-<rule-id>`。
-- `sing-box` 转发会生成独立配置文件并以 `sing-box run -c` 启动。
-- `Realm` 默认镜像为 `4points/realm:latest`。
-- `GOST` 默认镜像为 `gogost/gost:latest`。
+- Server 根据规则生成标准化转发计划
+- Agent 把计划写入 `forwarders/<rule-id>/...`
+- Agent 通过 `docker run -d` 启动独立容器
+- 容器命名格式为 `chiken-forward-<rule-id>`
 
-注意：
+这意味着：
 
-- 这些容器和主 `sing-box` 容器是并列关系，不会覆盖主配置。
-- 规则的创建、更新、删除由 `apply_forward_rule` / `remove_forward_rule` 完成。
-- 当前转发能力要求 Agent 运行在 Docker 模式。
+- 主 `sing-box` 和转发容器彼此独立
+- 每条转发规则都可以独立创建、更新和删除
+- 不会再覆盖节点配置
 
-## 14. Agent 关键行为
+## 15. 数据持久化
 
-配置下发：
+主控侧：
 
-- 写入新配置前先备份旧配置到 `/etc/sing-box/chiken-backups`
-- 写入后执行 `sing-box check`
-- 校验失败自动恢复旧配置
-- 成功后按需重启 `sing-box`
+- `data/state.json`
+  - `tokens`
+  - `apiTokens`
+  - `agents`
+  - `configVersions`
+  - `forwardRules`
+  - `nodeProfiles`
+  - `subscriptionProfiles`
+  - `sshProfiles`
+  - `installBundles`
 
-TLS 自动补齐：
+- `data/audit.jsonl`
+  - 记录配置、SSH、部署、订阅、转发和接入相关事件
 
-- 仅当 inbound 开启 TLS 且指定证书路径不存在时才自动生成
-- 依赖目标机存在 `openssl`
-- 生成结果会直接写入配置指定路径
+Agent 侧：
 
-转发规则生命周期：
-
-- `apply_forward_rule`
-- `remove_forward_rule`
-
-日志与审计：
-
-- 所有配置、服务控制、SSH、部署、转发动作都会写审计日志
-- Agent 的命令输出会回流到主控，用于前端展示和状态追踪
-
-## 15. 测试清单
-
-2026-05-14 当前版本至少应覆盖以下联调：
-
-- WebSSH
-- `ssh-profile/test` 可返回 `ssh ok`
-- `/terminal?mode=ssh` 能直连远端并执行 `pwd`
-- `mode=agent` 兜底终端仍可正常执行命令
-
-- 一键部署
-- `POST /api/agents/:id/install-command` 能返回 `service / docker` 两种命令
-- `GET /install/agent.sh?bundle=...` 能返回完整安装脚本
-- 生成脚本应通过 `sh -n`
-
-- API Token
-- Header 模式通过
-- Query 模式通过
-- Token 能透传到 API、SSE、终端 WebSocket
-
-- 节点协议
-- `VMess + WS`
-- `VLESS + Reality`
-- `Trojan + TLS`
-- `Hysteria2`
-- `Shadowsocks`
-- `Mixed`
-
-- 转发引擎
-- `sing-box` 的 `tcp / udp / tcp_udp`
-- `Realm` 的 `tcp / udp / tcp_udp`
-- `GOST` 的 `tcp / udp / tcp_udp`
-
-- 探针
-- `/api/dashboard` 能返回 `averageCpu / totalRxRate / totalTxRate`
-- `/api/agents/:id` 能返回 `metrics` 和 `metricsHistory`
-
-推荐测试方法：
-
-- 节点协议：从另一台服务器或真实客户端经该节点访问公网，确认拿到正常响应，而不是只看端口已监听。
-- TCP 转发：可把目标设为 `example.com:80`，访问转发端口后确认能拿到 `Example Domain`。
-- UDP 转发：可把目标设为 `1.1.1.1:53`，发送真实 DNS 查询并确认有响应。
-
-## 16. 安全注意事项
-
-- 生产环境必须放在 HTTPS 反代后。
-- API Token 等价于主控管理权限，必须按需撤销和轮换。
-- SSH 凭据保存在主控 `state.json`，必须限制主控访问范围和磁盘权限。
-- `GET /install/agent.sh?bundle=...` 使用的是短时效 bundle，仍然应避免泄露给无关方。
-- `Mixed` 协议不适合长期暴露在公网。
-- Agent 挂载 Docker Socket 时，等价于拥有宿主机级别的容器控制能力。
+- `agent-state/agent.json`
+- `/etc/sing-box/config.json`
+- `/etc/sing-box/chiken-backups`
+- `forwarders/<rule-id>/...`

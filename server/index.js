@@ -8,6 +8,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { buildConfig, buildForwardConfig, buildForwardRule, forwardCatalog, protocolCatalog } from "./configFactory.js";
 import { buildAgentInstallScript, buildInstallCommand, createInstallBundle, pruneInstallBundles, resolvePublicBaseUrl, resolvePublicWsUrl } from "./installers.js";
+import { buildNodeProfile, buildSubscriptionProfile, defaultSubscriptionTemplateId, listSubscriptionNodes, renderSubscription, subscriptionTemplateCatalog } from "./subscriptions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -24,6 +25,8 @@ const defaultState = {
   agents: {},
   configVersions: {},
   forwardRules: {},
+  nodeProfiles: {},
+  subscriptionProfiles: {},
   sshProfiles: {},
   installBundles: {},
   commands: [
@@ -145,6 +148,31 @@ function pushMetricHistory(agentId, metrics) {
 
 function publicForwardRules(agentId) {
   return (state.forwardRules?.[agentId] || []).map((rule) => ({ ...rule }));
+}
+
+function subscriptionUrlForRequest(req, publicToken) {
+  return new URL(`/sub/${publicToken}`, resolvePublicBaseUrl(req)).toString();
+}
+
+function publicSubscriptionProfile(req, profile, includeContent = false) {
+  const base = {
+    id: profile.id,
+    name: profile.name,
+    template: profile.template || defaultSubscriptionTemplateId,
+    publicToken: profile.publicToken,
+    url: subscriptionUrlForRequest(req, profile.publicToken),
+    localNodes: profile.localNodes || [],
+    imports: includeContent
+      ? (profile.imports || []).map((item) => ({ ...item }))
+      : (profile.imports || []).map((item) => ({ id: item.id, name: item.name, updatedAt: item.updatedAt })),
+    createdAt: profile.createdAt || null,
+    updatedAt: profile.updatedAt || null
+  };
+  return {
+    ...base,
+    localNodeCount: base.localNodes.length,
+    importCount: base.imports.length
+  };
 }
 
 function updateConfigVersion(agentId, versionId, patch) {
@@ -667,6 +695,82 @@ app.delete("/api/api-tokens/:id", (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/api/subscriptions/meta", (_, res) => {
+  res.json({
+    templates: subscriptionTemplateCatalog,
+    nodes: listSubscriptionNodes(state)
+  });
+});
+
+app.get("/api/subscriptions", (req, res) => {
+  const rows = Object.values(state.subscriptionProfiles || {})
+    .map((profile) => publicSubscriptionProfile(req, profile))
+    .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+  res.json(rows);
+});
+
+app.get("/api/subscriptions/:id", (req, res) => {
+  const profile = state.subscriptionProfiles?.[req.params.id];
+  if (!profile) return res.status(404).json({ error: "subscription not found" });
+  res.json(publicSubscriptionProfile(req, profile, true));
+});
+
+app.post("/api/subscriptions/render", (req, res) => {
+  try {
+    const current = state.subscriptionProfiles?.[req.body?.id] || {};
+    const profile = buildSubscriptionProfile(req.body || {}, current);
+    const rendered = renderSubscription(profile, state, { template: req.body?.template });
+    res.json({
+      ...rendered,
+      profile: publicSubscriptionProfile(req, profile, true)
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/subscriptions", (req, res) => {
+  try {
+    const profile = buildSubscriptionProfile(req.body || {});
+    state.subscriptionProfiles ||= {};
+    state.subscriptionProfiles[profile.id] = profile;
+    saveState();
+    audit("admin", "create_subscription", profile.id, { template: profile.template, localNodes: profile.localNodes.length, imports: profile.imports.length });
+    res.json(publicSubscriptionProfile(req, profile, true));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.put("/api/subscriptions/:id", (req, res) => {
+  const current = state.subscriptionProfiles?.[req.params.id];
+  if (!current) return res.status(404).json({ error: "subscription not found" });
+  try {
+    const profile = buildSubscriptionProfile({ ...req.body, id: current.id }, current);
+    if (req.body?.regenerateToken) profile.publicToken = nanoid(18);
+    state.subscriptionProfiles[profile.id] = profile;
+    saveState();
+    audit("admin", "update_subscription", profile.id, {
+      template: profile.template,
+      localNodes: profile.localNodes.length,
+      imports: profile.imports.length,
+      regenerateToken: Boolean(req.body?.regenerateToken)
+    });
+    res.json(publicSubscriptionProfile(req, profile, true));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.delete("/api/subscriptions/:id", (req, res) => {
+  const profile = state.subscriptionProfiles?.[req.params.id];
+  if (!profile) return res.status(404).json({ error: "subscription not found" });
+  delete state.subscriptionProfiles[req.params.id];
+  saveState();
+  audit("admin", "delete_subscription", req.params.id, { name: profile.name });
+  res.json({ ok: true });
+});
+
 app.get("/api/protocols", (_, res) => res.json(protocolCatalog));
 app.get("/api/forwards", (_, res) => res.json(forwardCatalog));
 
@@ -726,12 +830,16 @@ app.post("/api/agents/:id/forward/wizard", (req, res) => {
 });
 
 app.post("/api/agents/:id/config/wizard", (req, res) => {
+  const agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: "agent not found" });
   try {
     const config = buildConfig(req.body || {});
     const version = { id: nanoid(), at: new Date().toISOString(), status: "pending", config };
     state.configVersions[req.params.id] ||= [];
     state.configVersions[req.params.id].unshift(version);
     state.configVersions[req.params.id] = state.configVersions[req.params.id].slice(0, 30);
+    state.nodeProfiles ||= {};
+    state.nodeProfiles[req.params.id] = buildNodeProfile(agent, req.body || {}, version.id);
     saveState();
     const commandId = sendCommand(req.params.id, "apply_config", { config, restart: true, versionId: version.id });
     configCommandRefs.set(commandId, { agentId: req.params.id, versionId: version.id });
@@ -871,6 +979,18 @@ app.get("/install/agent.sh", (req, res) => {
   const bundle = state.installBundles?.[bundleId];
   if (!bundle) return res.status(404).type("text/plain").send("install bundle not found or expired");
   res.type("text/x-shellscript").send(buildAgentInstallScript(bundle));
+});
+
+app.get("/sub/:token", (req, res) => {
+  const profile = Object.values(state.subscriptionProfiles || {}).find((item) => item.publicToken === req.params.token);
+  if (!profile) return res.status(404).type("text/plain").send("subscription not found");
+  try {
+    const rendered = renderSubscription(profile, state, { template: req.query.template });
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.send(rendered.body);
+  } catch (error) {
+    res.status(400).type("text/plain").send(error.message);
+  }
 });
 
 if (fs.existsSync(webDist)) app.use(express.static(webDist));
