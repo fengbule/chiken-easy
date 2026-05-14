@@ -1,0 +1,47 @@
+services:
+  chiken-server:
+    build: .
+    image: chiken-easy:latest
+    container_name: chiken-server
+    restart: unless-stopped
+    environment:
+      PORT: "7788"
+      CHIKEN_BOOTSTRAP_TOKEN: "${CHIKEN_BOOTSTRAP_TOKEN}"
+    ports:
+      - "7788:7788"
+    volumes:
+      - chiken-data:/app/data
+
+  chiken-singbox:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: chiken-singbox
+    restart: unless-stopped
+    command: ["run", "-c", "/etc/sing-box/config.json"]
+    volumes:
+      - ./data/sing-box:/etc/sing-box
+    ports:
+      - "2080:2080/tcp"
+
+  chiken-agent:
+    image: chiken-easy:latest
+    container_name: chiken-agent
+    restart: unless-stopped
+    command: ["node", "agent/index.js"]
+    depends_on:
+      - chiken-server
+      - chiken-singbox
+    environment:
+      CHIKEN_SERVER: "ws://chiken-server:7788/agent"
+      CHIKEN_TOKEN: "${CHIKEN_BOOTSTRAP_TOKEN}"
+      CHIKEN_SERVICE_MODE: docker
+      SINGBOX_CONTAINER: chiken-singbox
+      SINGBOX_CONFIG_VOLUME: ${PWD}/data/sing-box
+      SINGBOX_CONFIG: /etc/sing-box/config.json
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - chiken-agent-state:/app/agent-state
+      - ./data/sing-box:/etc/sing-box
+
+volumes:
+  chiken-data:
+  chiken-agent-state:

@@ -9,6 +9,10 @@ const stateDir = process.env.CHIKEN_AGENT_STATE || path.resolve("agent-state");
 const stateFile = path.join(stateDir, "agent.json");
 const configPath = process.env.SINGBOX_CONFIG || "/etc/sing-box/config.json";
 const backupDir = process.env.SINGBOX_BACKUP_DIR || "/etc/sing-box/chiken-backups";
+const serviceMode = process.env.CHIKEN_SERVICE_MODE || (process.platform === "win32" ? "mock" : "systemd");
+const singboxContainer = process.env.SINGBOX_CONTAINER || "chiken-singbox";
+const singboxImage = process.env.SINGBOX_IMAGE || "ghcr.io/sagernet/sing-box:latest";
+const singboxConfigVolume = process.env.SINGBOX_CONFIG_VOLUME || "chiken-singbox-config";
 fs.mkdirSync(stateDir, { recursive: true });
 
 function readState() {
@@ -28,12 +32,23 @@ function run(cmd, args = []) {
 
 async function service(action) {
   const name = process.env.SINGBOX_SERVICE || "sing-box";
-  if (process.platform === "win32") return { ok: true, output: `mock ${action} ${name}` };
+  if (serviceMode === "mock") return { ok: true, output: `mock ${action} ${name}` };
+  if (serviceMode === "docker") {
+    if (action === "status") {
+      const result = await run("docker", ["inspect", "-f", "{{.State.Status}}", singboxContainer]);
+      return { ...result, output: result.output === "running" ? "active" : result.output };
+    }
+    return run("docker", [action, singboxContainer]);
+  }
   if (action === "status") return run("systemctl", ["is-active", name]);
   return run("systemctl", [action, name]);
 }
 
 async function singboxVersion() {
+  if (serviceMode === "docker") {
+    const result = await run("docker", ["exec", singboxContainer, "sing-box", "version"]);
+    return result.output.split(/\s+/).find((x) => /^\d+\.\d+/.test(x)) || "-";
+  }
   const result = await run(process.env.SINGBOX_BIN || "sing-box", ["version"]);
   return result.output.split(/\s+/).find((x) => /^\d+\.\d+/.test(x)) || "-";
 }
@@ -50,14 +65,17 @@ async function writeConfig(config, restart) {
     fs.copyFileSync(configPath, backup);
   }
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-  const check = await run(process.env.SINGBOX_BIN || "sing-box", ["check", "-c", configPath]);
+  const check = serviceMode === "docker"
+    ? await run("docker", ["run", "--rm", "-v", `${singboxConfigVolume}:/etc/sing-box`, singboxImage, "check", "-c", configPath])
+    : await run(process.env.SINGBOX_BIN || "sing-box", ["check", "-c", configPath]);
   if (!check.ok) return check;
   if (restart) return service("restart");
   return { ok: true, output: "config applied" };
 }
 
 async function tailLogs(lines = 200) {
-  if (process.platform === "win32") return { ok: true, output: "mock log: sing-box running" };
+  if (serviceMode === "mock") return { ok: true, output: "mock log: sing-box running" };
+  if (serviceMode === "docker") return run("docker", ["logs", "--tail", String(lines), singboxContainer]);
   return run("journalctl", ["-u", process.env.SINGBOX_SERVICE || "sing-box", "-n", String(lines), "--no-pager"]);
 }
 

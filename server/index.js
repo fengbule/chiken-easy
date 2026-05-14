@@ -33,6 +33,9 @@ const loadState = () => {
 };
 
 let state = loadState();
+if (process.env.CHIKEN_BOOTSTRAP_TOKEN && !state.tokens.some((item) => item.token === process.env.CHIKEN_BOOTSTRAP_TOKEN)) {
+  state.tokens.push({ token: process.env.CHIKEN_BOOTSTRAP_TOKEN, createdAt: new Date().toISOString(), used: false, bootstrap: true });
+}
 const saveState = () => fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 const clients = new Map();
 const logStreams = new Map();

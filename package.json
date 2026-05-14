@@ -18,10 +18,12 @@
     "express": "^4.19.2",
     "lucide-react": "^0.468.0",
     "nanoid": "^5.0.7",
-    "vite": "^6.0.3",
-    "ws": "^8.18.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "vite": "^6.0.3",
+    "ws": "^8.18.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "ssh2": "^1.17.0"
+  }
 }

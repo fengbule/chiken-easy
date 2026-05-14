@@ -5,7 +5,11 @@ const files = [
   "agent/index.js",
   "web/src/App.jsx",
   "web/src/style.css",
-  "templates/protocols.json"
+  "templates/protocols.json",
+  "templates/docker-singbox-config.json",
+  "Dockerfile",
+  "docker-compose.server.yml",
+  "docker-compose.agent.yml"
 ];
 
 for (const file of files) {
@@ -13,4 +17,5 @@ for (const file of files) {
 }
 
 JSON.parse(fs.readFileSync("templates/protocols.json", "utf8"));
+JSON.parse(fs.readFileSync("templates/docker-singbox-config.json", "utf8"));
 console.log("check ok");
