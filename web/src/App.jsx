@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, ClipboardList, Code2, KeyRound, Monitor, RefreshCw, RotateCcw, Save, Settings, Terminal, Trash2 } from "lucide-react";
+import { Activity, ClipboardList, Code2, KeyRound, Monitor, PlugZap, RefreshCw, RotateCcw, Save, Settings, Shuffle, Terminal, Trash2 } from "lucide-react";
 import "./style.css";
 
 const api = async (url, options) => {
@@ -9,10 +9,15 @@ const api = async (url, options) => {
   return res.json();
 };
 
+const randHex = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n))).map((x) => x.toString(16).padStart(2, "0")).join("");
+const randPassword = () => randHex(12);
+const randShortId = () => randHex(8);
+
 const nav = [
   ["dashboard", Activity, "仪表盘"],
   ["servers", Monitor, "服务器"],
   ["nodes", Code2, "节点配置"],
+  ["forward", PlugZap, "端口转发"],
   ["tokens", KeyRound, "API 令牌"],
   ["audit", ClipboardList, "审计日志"],
   ["settings", Settings, "教程"]
@@ -32,6 +37,10 @@ function Panel({ title, right, children }) {
 
 function Card({ label, value, green, blue }) {
   return <div className="stat"><span>{label}</span><b className={green ? "green" : blue ? "blue" : ""}>{value}</b></div>;
+}
+
+function Field({ label, value, onChange, random, type = "text" }) {
+  return <label>{label}<div className="input-row"><input type={type} value={value} onChange={(e) => onChange(e.target.value)} />{random && <button type="button" className="icon-btn" onClick={random} title="随机生成"><Shuffle size={15}/></button>}</div></label>;
 }
 
 function Dashboard({ openAgent }) {
@@ -63,24 +72,65 @@ function AgentTable({ agents, openAgent }) {
 function AgentDetail({ id, back, openConfig, openLogs }) {
   const [agent, setAgent] = useState(null);
   const [result, setResult] = useState("-");
-  const [cmd, setCmd] = useState("uname -a && docker ps --format 'table {{.Names}}\\t{{.Status}}'");
   const load = () => api(`/api/agents/${id}`).then(setAgent);
   useEffect(() => { load(); }, [id]);
   const service = async (action) => setResult(JSON.stringify(await api(`/api/agents/${id}/service/${action}`, { method: "POST" }), null, 2));
-  const ssh = async () => setResult(JSON.stringify(await api(`/api/agents/${id}/ssh`, { method: "POST", body: JSON.stringify({ command: cmd }) }), null, 2));
+  const uninstall = async () => {
+    if (!confirm("确认卸载这台机器上的 Agent？卸载后该机器会离线，需要重新安装才能接入。")) return;
+    setResult(JSON.stringify(await api(`/api/agents/${id}/uninstall`, { method: "POST", body: JSON.stringify({ removeSingbox: false }) }), null, 2));
+  };
   if (!agent) return null;
-  return <section><div className="toolbar"><button onClick={back}>返回</button><h1>{agent.name} <StatusDot on={agent.connected}/>{agent.connected ? "online" : "offline"}</h1><button onClick={() => service("status")}>刷新</button><button onClick={openConfig}>配置</button><button onClick={openLogs}>日志</button></div><div className="grid2"><Panel title="基本信息"><dl>{Object.entries(agent).map(([k, v]) => <React.Fragment key={k}><dt>{k}</dt><dd>{Array.isArray(v) ? v.join(", ") : String(v)}</dd></React.Fragment>)}</dl></Panel><Panel title="服务控制"><div className="actions"><button className="green-bg" onClick={() => service("start")}>启动</button><button className="blue-bg" onClick={() => service("restart")}>重启</button><button className="red-bg" onClick={() => service("stop")}>停止</button><button onClick={() => service("status")}>查询状态</button></div><pre>{result}</pre></Panel></div><Panel title="SSH / 远程命令" right={<button onClick={ssh}><Terminal size={16}/>执行</button>}><textarea className="sshbox" value={cmd} onChange={(e) => setCmd(e.target.value)} spellCheck={false}/></Panel></section>;
+  return <section><div className="toolbar"><button onClick={back}>返回</button><h1>{agent.name} <StatusDot on={agent.connected}/>{agent.connected ? "online" : "offline"}</h1><button onClick={() => service("status")}>刷新</button><button onClick={openConfig}>配置</button><button onClick={openLogs}>日志</button><button className="red-bg" onClick={uninstall}>卸载 Agent</button></div><div className="grid2"><Panel title="基本信息"><dl>{Object.entries(agent).map(([k, v]) => <React.Fragment key={k}><dt>{k}</dt><dd>{Array.isArray(v) ? v.join(", ") : String(v)}</dd></React.Fragment>)}</dl></Panel><Panel title="服务控制"><div className="actions"><button className="green-bg" onClick={() => service("start")}>启动</button><button className="blue-bg" onClick={() => service("restart")}>重启</button><button className="red-bg" onClick={() => service("stop")}>停止</button><button onClick={() => service("status")}>查询状态</button></div><pre>{result}</pre></Panel></div><TerminalPanel agent={agent}/></section>;
+}
+
+function TerminalPanel({ agent }) {
+  const [connected, setConnected] = useState(false);
+  const [input, setInput] = useState("");
+  const [output, setOutput] = useState("");
+  const wsRef = useRef(null);
+  const boxRef = useRef(null);
+  const connect = () => {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/terminal?agentId=${agent.id}`);
+    wsRef.current = ws;
+    ws.onopen = () => setConnected(true);
+    ws.onclose = () => setConnected(false);
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      setOutput((x) => x + msg.output);
+      setTimeout(() => boxRef.current?.scrollTo(0, boxRef.current.scrollHeight), 0);
+    };
+  };
+  useEffect(() => { connect(); return () => wsRef.current?.close(); }, [agent.id]);
+  const send = () => {
+    if (!input.trim() || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    setOutput((x) => x + input + "\n");
+    wsRef.current.send(input);
+    setInput("");
+  };
+  return <Panel title={`SSH 终端 - ${agent.name}`} right={<span><StatusDot on={connected}/>{connected ? "connected" : "closed"}</span>}><div className="terminal" ref={boxRef}>{output}</div><div className="terminal-input"><input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }} placeholder="输入命令，回车执行" /><button onClick={send}><Terminal size={16}/>发送</button></div></Panel>;
 }
 
 function NodeWizard({ agents }) {
-  const [form, setForm] = useState({ agentId: "", protocol: "vmess-ws", port: 443, uuid: crypto.randomUUID?.() || "", path: "/ws", sni: "www.cloudflare.com", serverName: "example.com", privateKey: "CHANGE_ME_REALITY_PRIVATE_KEY", shortId: "0123456789abcdef", password: "change-me", targetHost: "127.0.0.1", targetPort: 80, network: "tcp" });
+  const [form, setForm] = useState({ agentId: "", protocol: "vmess-ws", port: 443, uuid: crypto.randomUUID?.() || randHex(16), path: "/ws", sni: "www.cloudflare.com", serverName: "example.com", privateKey: "CHANGE_ME_REALITY_PRIVATE_KEY", shortId: randShortId(), password: randPassword() });
   const [preview, setPreview] = useState("");
   const [result, setResult] = useState("");
   useEffect(() => { if (!form.agentId && agents[0]) setForm((x) => ({ ...x, agentId: agents[0].id })); }, [agents, form.agentId]);
   const patch = (key, value) => setForm((x) => ({ ...x, [key]: value }));
   const render = async () => setPreview(JSON.stringify((await api("/api/config/render", { method: "POST", body: JSON.stringify(form) })).config, null, 2));
   const apply = async () => setResult(JSON.stringify(await api(`/api/agents/${form.agentId}/config/wizard`, { method: "POST", body: JSON.stringify(form) }), null, 2));
-  return <section><div className="grid2"><Panel title="节点配置向导" right={<button onClick={render}>预览 JSON</button>}><div className="form-grid"><label>服务器<select value={form.agentId} onChange={(e) => patch("agentId", e.target.value)}>{agents.map((a) => <option key={a.id} value={a.id}>{a.name} - {a.ip}</option>)}</select></label><label>协议<select value={form.protocol} onChange={(e) => patch("protocol", e.target.value)}><option value="vmess-ws">VMess + WS</option><option value="vless-reality">VLESS + Reality</option><option value="trojan">Trojan + TLS</option><option value="hysteria2">Hysteria2</option><option value="shadowsocks">Shadowsocks</option><option value="mixed">Mixed</option><option value="port-forward">端口转发</option></select></label><label>监听端口<input value={form.port} onChange={(e) => patch("port", e.target.value)} /></label><label>UUID<input value={form.uuid} onChange={(e) => patch("uuid", e.target.value)} /></label><label>WS 路径<input value={form.path} onChange={(e) => patch("path", e.target.value)} /></label><label>SNI / Reality 伪装域名<input value={form.sni} onChange={(e) => patch("sni", e.target.value)} /></label><label>Reality 私钥<input value={form.privateKey} onChange={(e) => patch("privateKey", e.target.value)} /></label><label>Reality short_id<input value={form.shortId} onChange={(e) => patch("shortId", e.target.value)} /></label><label>密码<input value={form.password} onChange={(e) => patch("password", e.target.value)} /></label><label>转发目标地址<input value={form.targetHost} onChange={(e) => patch("targetHost", e.target.value)} /></label><label>转发目标端口<input value={form.targetPort} onChange={(e) => patch("targetPort", e.target.value)} /></label><label>转发网络<select value={form.network} onChange={(e) => patch("network", e.target.value)}><option value="tcp">tcp</option><option value="udp">udp</option></select></label></div><div className="actions"><button className="primary" onClick={apply}>下发并重启</button></div><pre>{result}</pre></Panel><Panel title="生成预览"><pre className="preview">{preview || "点击预览 JSON 查看 sing-box 配置"}</pre></Panel></div></section>;
+  return <section><div className="grid2"><Panel title="节点配置" right={<button onClick={render}>预览 JSON</button>}><div className="form-grid"><label>服务器<select value={form.agentId} onChange={(e) => patch("agentId", e.target.value)}>{agents.map((a) => <option key={a.id} value={a.id}>{a.name} - {a.ip}</option>)}</select></label><label>协议<select value={form.protocol} onChange={(e) => patch("protocol", e.target.value)}><option value="vmess-ws">VMess + WS</option><option value="vless-reality">VLESS + Reality</option><option value="trojan">Trojan + TLS</option><option value="hysteria2">Hysteria2</option><option value="shadowsocks">Shadowsocks</option><option value="mixed">Mixed</option></select></label><Field label="监听端口" value={form.port} onChange={(v) => patch("port", v)} random={() => patch("port", 20000 + Math.floor(Math.random() * 30000))}/><Field label="UUID" value={form.uuid} onChange={(v) => patch("uuid", v)} random={() => patch("uuid", crypto.randomUUID?.() || randHex(16))}/><Field label="WS 路径" value={form.path} onChange={(v) => patch("path", v)} random={() => patch("path", `/${randHex(3)}`)}/><Field label="SNI / Reality 伪装域名" value={form.sni} onChange={(v) => patch("sni", v)} random={() => patch("sni", ["www.cloudflare.com","www.microsoft.com","www.apple.com","www.yahoo.com"][Math.floor(Math.random()*4)])}/><Field label="Reality 私钥" value={form.privateKey} onChange={(v) => patch("privateKey", v)} random={() => patch("privateKey", "请在服务器执行 sing-box generate reality-keypair")}/><Field label="Reality short_id" value={form.shortId} onChange={(v) => patch("shortId", v)} random={() => patch("shortId", randShortId())}/><Field label="密码" value={form.password} onChange={(v) => patch("password", v)} random={() => patch("password", randPassword())}/></div><div className="actions"><button className="primary" onClick={apply}>下发并重启</button></div><pre>{result}</pre></Panel><Panel title="生成预览"><pre className="preview">{preview || "点击预览 JSON 查看 sing-box 配置"}</pre></Panel></div></section>;
+}
+
+function ForwardWizard({ agents }) {
+  const [form, setForm] = useState({ agentId: "", network: "tcp", port: 31080, targetHost: "1.1.1.1", targetPort: 80 });
+  const [preview, setPreview] = useState("");
+  const [result, setResult] = useState("");
+  useEffect(() => { if (!form.agentId && agents[0]) setForm((x) => ({ ...x, agentId: agents[0].id })); }, [agents, form.agentId]);
+  const patch = (key, value) => setForm((x) => ({ ...x, [key]: value }));
+  const render = async () => setPreview(JSON.stringify((await api("/api/forward/render", { method: "POST", body: JSON.stringify(form) })).config, null, 2));
+  const apply = async () => setResult(JSON.stringify(await api(`/api/agents/${form.agentId}/forward/wizard`, { method: "POST", body: JSON.stringify(form) }), null, 2));
+  return <section><div className="grid2"><Panel title="端口转发" right={<button onClick={render}>预览 JSON</button>}><div className="form-grid"><label>服务器<select value={form.agentId} onChange={(e) => patch("agentId", e.target.value)}>{agents.map((a) => <option key={a.id} value={a.id}>{a.name} - {a.ip}</option>)}</select></label><label>转发模式<select value={form.network} onChange={(e) => patch("network", e.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option><option value="tcp_udp">TCP + UDP</option></select></label><Field label="公网监听端口" value={form.port} onChange={(v) => patch("port", v)} random={() => patch("port", 20000 + Math.floor(Math.random() * 30000))}/><Field label="目标地址" value={form.targetHost} onChange={(v) => patch("targetHost", v)} /><Field label="目标端口" value={form.targetPort} onChange={(v) => patch("targetPort", v)} /></div><div className="actions"><button className="primary" onClick={apply}>下发并重启</button></div><pre>{result}</pre></Panel><Panel title="生成预览"><pre className="preview">{preview || "点击预览 JSON 查看转发配置"}</pre></Panel></div></section>;
 }
 
 function ConfigPage({ id, back }) {
@@ -127,15 +177,14 @@ function Audit() {
 }
 
 function Tutorial() {
-  return <section><Panel title="快速教程"><pre>{`1. 进入“服务器”，确认 Agent 在线。
-2. 进入“节点配置”，选择服务器和协议。
-3. VMess+WS: 填端口、UUID、WS 路径，下发后客户端使用 ws path 连接。
-4. VLESS+Reality: 填端口、UUID、SNI、Reality 私钥和 short_id。私钥可用 sing-box generate reality-keypair 生成。
-5. 端口转发: 协议选“端口转发”，监听端口填公网入口，目标地址/端口填内网服务。
-6. SSH: 服务器详情页的“SSH / 远程命令”可以执行一次性命令，结果在审计日志和命令结果里。
-7. API Token: “API 令牌”可生成给自动化使用。生产可设置 CHIKEN_REQUIRE_API_TOKEN=1 强制 API Bearer Token。
-
-Docker 部署已使用 host network 运行 sing-box，因此向导新增的端口会直接在宿主机监听。`}</pre></Panel></section>;
+  const cards = [
+    ["节点配置", "选择服务器和协议，随机生成 UUID、密码、short_id，预览 JSON 后下发。VLESS Reality 的私钥请在服务器执行 sing-box generate reality-keypair。"],
+    ["端口转发", "进入端口转发页，选择 TCP、UDP 或 TCP+UDP，填写公网端口和目标地址。Docker 部署使用 host network，新端口会直接监听宿主机。"],
+    ["SSH 终端", "服务器详情页提供终端窗口。它通过 Agent 长连接执行命令并实时回显，适合排错和轻量维护。"],
+    ["API Token", "API 令牌可交给自动化或 AI。请求头使用 Authorization: Bearer ck_xxx。带错 token 会被拒绝，生产可开启强制鉴权。"],
+    ["卸载 Agent", "服务器详情页可卸载 Agent。卸载后该节点离线，但 sing-box 默认保留，避免误删服务。"]
+  ];
+  return <section><div className="guide-grid">{cards.map(([title, body]) => <div className="guide-card" key={title}><h3>{title}</h3><p>{body}</p></div>)}</div></section>;
 }
 
 function sampleConfig() {
@@ -153,6 +202,7 @@ function App() {
     if (page === "dashboard") return <Dashboard openAgent={openAgent}/>;
     if (page === "servers") return <Servers openAgent={openAgent}/>;
     if (page === "nodes") return <NodeWizard agents={agents}/>;
+    if (page === "forward") return <ForwardWizard agents={agents}/>;
     if (page === "detail") return <AgentDetail id={agentId} back={() => setPage("servers")} openConfig={() => setPage("config")} openLogs={() => setPage("logs")}/>;
     if (page === "config") return <ConfigPage id={agentId} back={() => setPage("detail")}/>;
     if (page === "logs") return <LogsPage id={agentId} back={() => setPage("detail")}/>;

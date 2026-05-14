@@ -92,6 +92,15 @@ async function handle(ws, msg) {
   if (msg.command === "read_config") return { commandId: msg.id, ok: true, output: JSON.stringify(readConfig(), null, 2), config: readConfig() };
   if (msg.command === "apply_config") return { commandId: msg.id, ...(await writeConfig(msg.payload.config, msg.payload.restart)) };
   if (msg.command === "exec") return { commandId: msg.id, ...(await runShell(msg.payload.command)) };
+  if (msg.command === "uninstall_agent") {
+    if (serviceMode === "docker") {
+      const removeSingbox = msg.payload?.removeSingbox ? "docker rm -f chiken-singbox || true;" : "";
+      runShell(`sh -c '(${removeSingbox} sleep 1; docker rm -f chiken-agent) >/tmp/chiken-uninstall.log 2>&1 &'`);
+      return { commandId: msg.id, ok: true, output: "agent uninstall scheduled" };
+    }
+    runShell("sh -c '(sleep 1; systemctl disable --now chiken-agent || true; rm -f /etc/systemd/system/chiken-agent.service) >/tmp/chiken-uninstall.log 2>&1 &'");
+    return { commandId: msg.id, ok: true, output: "agent uninstall scheduled" };
+  }
   if (msg.command === "tail_logs") {
     const result = await tailLogs(msg.payload.lines);
     for (const line of result.output.split("\n")) ws.send(JSON.stringify({ type: "log", line }));

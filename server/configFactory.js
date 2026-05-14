@@ -6,8 +6,13 @@ export const protocolCatalog = [
   { id: "trojan", name: "Trojan + TLS" },
   { id: "hysteria2", name: "Hysteria2" },
   { id: "shadowsocks", name: "Shadowsocks" },
-  { id: "mixed", name: "Mixed HTTP/SOCKS" },
-  { id: "port-forward", name: "TCP/UDP 端口转发" }
+  { id: "mixed", name: "Mixed HTTP/SOCKS" }
+];
+
+export const forwardCatalog = [
+  { id: "tcp", name: "TCP 转发" },
+  { id: "udp", name: "UDP 转发" },
+  { id: "tcp_udp", name: "TCP + UDP 双栈转发" }
 ];
 
 export function makeBaseConfig(inbounds = []) {
@@ -80,16 +85,7 @@ export function buildInbound(input) {
   }
 
   if (input.protocol === "port-forward") {
-    if (!input.targetHost || !input.targetPort) throw new Error("端口转发需要目标地址和目标端口");
-    return {
-      type: "direct",
-      tag,
-      listen,
-      listen_port: port,
-      network: input.network || "tcp",
-      override_address: input.targetHost,
-      override_port: Number(input.targetPort)
-    };
+    return buildForwardInbound(input);
   }
 
   throw new Error(`不支持的协议: ${input.protocol}`);
@@ -97,4 +93,34 @@ export function buildInbound(input) {
 
 export function buildConfig(input) {
   return makeBaseConfig([buildInbound(input)]);
+}
+
+export function buildForwardInbound(input) {
+  const port = Number(input.port || input.listen_port);
+  const targetPort = Number(input.targetPort);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("端口必须是 1-65535");
+  if (!input.targetHost || !Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) throw new Error("端口转发需要目标地址和目标端口");
+  return {
+    type: "direct",
+    tag: input.tag || `forward-${input.network || "tcp"}-${port}`,
+    listen: input.listen || "::",
+    listen_port: port,
+    network: input.network || "tcp",
+    override_address: input.targetHost,
+    override_port: targetPort
+  };
+}
+
+export function buildForwardConfig(input) {
+  const rules = Array.isArray(input.rules) && input.rules.length ? input.rules : [input];
+  const inbounds = [];
+  for (const rule of rules) {
+    if (rule.network === "tcp_udp") {
+      inbounds.push(buildForwardInbound({ ...rule, network: "tcp", tag: rule.tag ? `${rule.tag}-tcp` : undefined }));
+      inbounds.push(buildForwardInbound({ ...rule, network: "udp", tag: rule.tag ? `${rule.tag}-udp` : undefined }));
+    } else {
+      inbounds.push(buildForwardInbound(rule));
+    }
+  }
+  return makeBaseConfig(inbounds);
 }

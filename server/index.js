@@ -5,7 +5,7 @@ import { nanoid } from "nanoid";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { buildConfig, protocolCatalog } from "./configFactory.js";
+import { buildConfig, buildForwardConfig, forwardCatalog, protocolCatalog } from "./configFactory.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -44,6 +44,7 @@ if (process.env.CHIKEN_API_TOKEN && !state.apiTokens.some((item) => item.token =
 const saveState = () => fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 const clients = new Map();
 const logStreams = new Map();
+const commandWaiters = new Map();
 
 function audit(actor, action, target, detail = {}) {
   const row = { id: nanoid(), at: new Date().toISOString(), actor, action, target, detail };
@@ -87,10 +88,14 @@ const app = express();
 app.use(express.json({ limit: "4mb" }));
 app.use((req, res, next) => {
   if (!req.path.startsWith("/api/") || req.path === "/api/health") return next();
-  const tokenEnabled = process.env.CHIKEN_REQUIRE_API_TOKEN === "1";
-  if (!tokenEnabled) return next();
   const auth = req.get("authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : req.get("x-api-token");
+  if (token) {
+    if (state.apiTokens.some((item) => item.token === token && !item.revoked)) return next();
+    return res.status(401).json({ error: "invalid API token" });
+  }
+  const tokenEnabled = process.env.CHIKEN_REQUIRE_API_TOKEN === "1";
+  if (!tokenEnabled) return next();
   if (state.apiTokens.some((item) => item.token === token && !item.revoked)) return next();
   res.status(401).json({ error: "API token required" });
 });
@@ -147,10 +152,35 @@ app.delete("/api/api-tokens/:id", (req, res) => {
 });
 
 app.get("/api/protocols", (_, res) => res.json(protocolCatalog));
+app.get("/api/forwards", (_, res) => res.json(forwardCatalog));
 
 app.post("/api/config/render", (req, res) => {
   try {
     res.json({ config: buildConfig(req.body || {}) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/forward/render", (req, res) => {
+  try {
+    res.json({ config: buildForwardConfig(req.body || {}) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/agents/:id/forward/wizard", (req, res) => {
+  try {
+    const config = buildForwardConfig(req.body || {});
+    const version = { id: nanoid(), at: new Date().toISOString(), status: "pending", config };
+    state.configVersions[req.params.id] ||= [];
+    state.configVersions[req.params.id].unshift(version);
+    state.configVersions[req.params.id] = state.configVersions[req.params.id].slice(0, 30);
+    saveState();
+    const commandId = sendCommand(req.params.id, "apply_config", { config, restart: true, versionId: version.id });
+    audit("admin", "wizard_apply_forward", req.params.id, { commandId, versionId: version.id });
+    res.json({ ok: true, commandId, versionId: version.id, config });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -249,6 +279,16 @@ app.post("/api/agents/:id/ssh", (req, res) => {
   }
 });
 
+app.post("/api/agents/:id/uninstall", (req, res) => {
+  try {
+    const commandId = sendCommand(req.params.id, "uninstall_agent", { removeSingbox: Boolean(req.body?.removeSingbox) });
+    audit("admin", "uninstall_agent", req.params.id, { commandId, removeSingbox: Boolean(req.body?.removeSingbox) });
+    res.json({ ok: true, commandId });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
 app.get("/api/agents/:id/logs/stream", (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -277,6 +317,38 @@ app.get("*", (_, res, next) => {
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/agent" });
+const terminalWss = new WebSocketServer({ server, path: "/terminal" });
+
+terminalWss.on("connection", (ws, req) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const agentId = url.searchParams.get("agentId");
+  if (!agentId || !state.agents[agentId]) {
+    ws.send(JSON.stringify({ type: "output", output: "agent not found\n" }));
+    return ws.close();
+  }
+  ws.send(JSON.stringify({ type: "output", output: `Connected to ${state.agents[agentId].name || agentId}. Type a command and press Enter.\n$ ` }));
+  ws.on("message", (raw) => {
+    const command = raw.toString().trim();
+    if (!command) return ws.send(JSON.stringify({ type: "output", output: "$ " }));
+    let commandId = "";
+    try {
+      commandId = sendCommand(agentId, "exec", { command });
+      audit("admin", "terminal_exec", agentId, { commandId, command: command.slice(0, 120) });
+    } catch (error) {
+      ws.send(JSON.stringify({ type: "output", output: `${error.message}\n$ ` }));
+      return;
+    }
+    commandWaiters.set(commandId, (result) => {
+      ws.send(JSON.stringify({ type: "output", output: `${result.output || ""}\n$ ` }));
+      commandWaiters.delete(commandId);
+    });
+    setTimeout(() => {
+      if (!commandWaiters.has(commandId)) return;
+      commandWaiters.delete(commandId);
+      ws.send(JSON.stringify({ type: "output", output: "command timeout\n$ " }));
+    }, 35000);
+  });
+});
 
 wss.on("connection", (ws, req) => {
   let agentId = "";
@@ -311,6 +383,7 @@ wss.on("connection", (ws, req) => {
     if (msg.type === "log") pushLog(agentId, { at: new Date().toISOString(), line: msg.line });
     if (msg.type === "command_result") {
       audit("agent", "command_result", agentId, { commandId: msg.commandId, ok: msg.ok, output: String(msg.output || "").slice(0, 1000) });
+      if (commandWaiters.has(msg.commandId)) commandWaiters.get(msg.commandId)(msg);
       if (msg.log) pushLog(agentId, { at: new Date().toISOString(), line: msg.log });
     }
     if (msg.type === "config") {

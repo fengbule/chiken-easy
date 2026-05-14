@@ -14,6 +14,7 @@
 - 节点向导：支持 VMess+WS、VLESS+Reality、Trojan、Hysteria2、Shadowsocks、Mixed 和 TCP/UDP 端口转发。
 - SSH / 远程命令：通过 Agent 在目标小鸡执行一次性命令。
 - API Token：支持生成自动化令牌，生产环境可强制 Bearer Token。
+- 卸载 Agent：在服务器详情页可移除目标节点 Agent。
 
 节点配置教程见 [docs/node-config-guide.md](docs/node-config-guide.md)。
 
