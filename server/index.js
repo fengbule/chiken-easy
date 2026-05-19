@@ -52,6 +52,7 @@ const defaultState = {
   sessions: [],
   probeTasks: [],
   probeResults: {},
+  probeProfiles: {},
   nodePool: [],
   subscriptionTokens: []
 };
@@ -84,6 +85,7 @@ function loadState() {
     sessions: raw.sessions || [],
     probeTasks: raw.probeTasks || [],
     probeResults: raw.probeResults || {},
+    probeProfiles: raw.probeProfiles || {},
     nodePool: raw.nodePool || [],
     subscriptionTokens: raw.subscriptionTokens || []
   };
@@ -316,6 +318,48 @@ function publicProbe(probe = {}) {
   };
 }
 
+function normalizeProbeProfile(input = {}, current = {}) {
+  const tags = Array.isArray(input.tags)
+    ? input.tags
+    : String(input.tags ?? current.tags ?? "").split(",");
+  const trafficLimitGb = finiteNumber(input.trafficLimitGb ?? current.trafficLimitGb, null);
+  const displayOrder = finiteNumber(input.displayOrder ?? current.displayOrder, 0) || 0;
+  return {
+    displayName: String(input.displayName ?? current.displayName ?? "").trim().slice(0, 80),
+    region: String(input.region ?? current.region ?? "").trim().slice(0, 40),
+    group: String(input.group ?? current.group ?? "").trim().slice(0, 40),
+    flag: String(input.flag ?? current.flag ?? "").trim().slice(0, 8),
+    osLabel: String(input.osLabel ?? current.osLabel ?? "").trim().slice(0, 40),
+    price: String(input.price ?? current.price ?? "").trim().slice(0, 40),
+    billing: String(input.billing ?? current.billing ?? "").trim().slice(0, 40),
+    expireText: String(input.expireText ?? current.expireText ?? "").trim().slice(0, 40),
+    note: String(input.note ?? current.note ?? "").trim().slice(0, 120),
+    tags: tags.map((item) => String(item).trim()).filter(Boolean).slice(0, 8),
+    trafficLimitGb: trafficLimitGb && trafficLimitGb > 0 ? trafficLimitGb : null,
+    displayOrder,
+    hidden: Boolean(input.hidden ?? current.hidden)
+  };
+}
+
+function publicProbeProfile(agentId, agent = {}) {
+  const profile = state.probeProfiles?.[agentId] || {};
+  return {
+    displayName: profile.displayName || agent.name || agentId,
+    region: profile.region || "",
+    group: profile.group || "默认",
+    flag: profile.flag || "",
+    osLabel: profile.osLabel || "",
+    price: profile.price || "",
+    billing: profile.billing || "",
+    expireText: profile.expireText || "",
+    note: profile.note || "",
+    tags: profile.tags || [],
+    trafficLimitGb: profile.trafficLimitGb || null,
+    displayOrder: Number(profile.displayOrder || 0) || 0,
+    hidden: Boolean(profile.hidden)
+  };
+}
+
 function publicAgent(agent) {
   const ssh = publicSshProfile(agent.id);
   const rdp = publicRdpProfile(agent.id);
@@ -340,6 +384,7 @@ function publicAgent(agent) {
     rdpConfigured: rdp.ready,
     rdpHost: rdp.host,
     rdpPort: rdp.port,
+    probeProfile: publicProbeProfile(agent.id, agent),
     probe: publicProbe(agent.probe)
   };
 }
@@ -356,7 +401,10 @@ function dashboardSummary(agents) {
     avgMemory: average(agents.map((agent) => agent.probe?.memory?.usage)),
     avgDisk: average(agents.map((agent) => agent.probe?.disk?.usage)),
     rxSpeed: agents.reduce((sum, agent) => sum + (Number(agent.probe?.network?.rxSpeed) || 0), 0),
-    txSpeed: agents.reduce((sum, agent) => sum + (Number(agent.probe?.network?.txSpeed) || 0), 0)
+    txSpeed: agents.reduce((sum, agent) => sum + (Number(agent.probe?.network?.txSpeed) || 0), 0),
+    rxBytes: agents.reduce((sum, agent) => sum + (Number(agent.probe?.network?.rxBytes) || 0), 0),
+    txBytes: agents.reduce((sum, agent) => sum + (Number(agent.probe?.network?.txBytes) || 0), 0),
+    regions: new Set(agents.map((agent) => agent.probeProfile?.region || agent.profile?.region).filter(Boolean)).size
   };
 }
 
@@ -371,12 +419,16 @@ function publicProbeAgent(agent) {
     connected: row.connected,
     singboxStatus: row.singboxStatus,
     lastSeen: row.lastSeen,
+    profile: row.probeProfile,
     probe: row.probe
   };
 }
 
 function publicProbePayload() {
-  const agents = Object.values(state.agents).map(publicProbeAgent).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const agents = Object.values(state.agents)
+    .map(publicProbeAgent)
+    .filter((agent) => !agent.profile?.hidden)
+    .sort((a, b) => (Number(a.profile?.displayOrder || 0) - Number(b.profile?.displayOrder || 0)) || String(a.profile?.displayName || a.name).localeCompare(String(b.profile?.displayName || b.name)));
   return {
     total: agents.length,
     online: agents.filter((agent) => agent.connected).length,
@@ -979,6 +1031,27 @@ app.put("/api/agents/:id", (req, res) => {
   emitPublicProbeEvent();
   audit("admin", "rename_agent", req.params.id, { name: agent.name });
   res.json(publicAgent(agent));
+});
+
+app.get("/api/probe-settings", (_, res) => {
+  const rows = Object.values(state.agents).map((agent) => ({
+    agent: publicAgent(agent),
+    profile: publicProbeProfile(agent.id, agent)
+  }));
+  res.json(rows.sort((a, b) => (Number(a.profile.displayOrder || 0) - Number(b.profile.displayOrder || 0)) || String(a.profile.displayName).localeCompare(String(b.profile.displayName))));
+});
+
+app.put("/api/probe-settings/:id", (req, res) => {
+  const agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: "agent not found" });
+  state.probeProfiles ||= {};
+  const profile = normalizeProbeProfile(req.body || {}, state.probeProfiles[req.params.id] || {});
+  state.probeProfiles[req.params.id] = { ...profile, updatedAt: new Date().toISOString() };
+  saveState();
+  emitEvent("probe-profile", { agentId: req.params.id, profile: publicProbeProfile(req.params.id, agent) });
+  emitPublicProbeEvent();
+  audit("admin", "update_probe_profile", req.params.id, { displayName: profile.displayName, region: profile.region, hidden: profile.hidden });
+  res.json({ agent: publicAgent(agent), profile: publicProbeProfile(req.params.id, agent) });
 });
 
 app.get("/api/node-pool", (req, res) => {

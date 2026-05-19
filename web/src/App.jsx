@@ -21,9 +21,11 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Search,
   Send,
   Settings,
   Shuffle,
+  SlidersHorizontal,
   Terminal,
   Trash2,
   Upload,
@@ -40,6 +42,7 @@ const nav = [
   ["nodes", Code2, "节点配置"],
   ["subscriptions", Link2, "订阅分发"],
   ["forward", PlugZap, "端口转发"],
+  ["probeManage", SlidersHorizontal, "探针管理"],
   ["probeTasks", Gauge, "探测任务"],
   ["files", FolderSync, "文件对传"],
   ["credentials", KeyRound, "凭据管理"],
@@ -245,6 +248,22 @@ function formatDuration(seconds) {
   return `${minutes} 分钟`;
 }
 
+function formatDurationLong(seconds) {
+  const total = Number(seconds);
+  if (!Number.isFinite(total) || total <= 0) return "-";
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = Math.floor(total % 60);
+  if (days) return `${days} 天 ${hours} 时 ${minutes} 分 ${rest} 秒`;
+  if (hours) return `${hours} 时 ${minutes} 分 ${rest} 秒`;
+  return `${minutes} 分 ${rest} 秒`;
+}
+
+function formatClock(date = new Date()) {
+  return date.toLocaleTimeString("zh-CN", { hour12: false });
+}
+
 function formatTimeAgo(value) {
   const time = Date.parse(value || "");
   if (!Number.isFinite(time)) return "-";
@@ -256,6 +275,29 @@ function formatTimeAgo(value) {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} 小时前`;
   return `${Math.floor(hours / 24)} 天前`;
+}
+
+function meterTone(value) {
+  const number = Number(value) || 0;
+  if (number >= 85) return "red";
+  if (number >= 70) return "amber";
+  return "green";
+}
+
+function osLabel(agent, profile = {}) {
+  return profile.osLabel || `${agent.os || "-"} / ${agent.arch || "-"}`;
+}
+
+function trafficLimitBytes(profile = {}) {
+  const limit = Number(profile.trafficLimitGb);
+  return Number.isFinite(limit) && limit > 0 ? limit * 1024 ** 3 : 0;
+}
+
+function trafficUsagePercent(agent) {
+  const network = agent.probe?.network || {};
+  const limit = trafficLimitBytes(agent.profile);
+  if (!limit) return null;
+  return ((Number(network.rxBytes || 0) + Number(network.txBytes || 0)) / limit) * 100;
 }
 
 const landscapeImages = [
@@ -539,13 +581,17 @@ function Dashboard({ liveTick, openAgent, openSsh, openDesktop, openFiles }) {
 
 function PublicProbePage() {
   const [data, setData] = useState(null);
-  const [imageIndex, setImageIndex] = useState(0);
+  const [query, setQuery] = useState("");
+  const [group, setGroup] = useState("全部");
+  const [mode, setMode] = useState("grid");
+  const [now, setNow] = useState(new Date());
 
   const load = () => fetch("/api/public/probes").then((response) => response.json()).then(setData).catch(() => {});
 
   useEffect(() => {
     load();
     const timer = window.setInterval(load, 5000);
+    const clock = window.setInterval(() => setNow(new Date()), 1000);
     const source = new EventSource("/api/public/events");
     source.onmessage = (event) => {
       try {
@@ -556,77 +602,119 @@ function PublicProbePage() {
     source.onerror = () => {};
     return () => {
       window.clearInterval(timer);
+      window.clearInterval(clock);
       source.close();
     };
   }, []);
 
-  const rows = data?.agents || [];
+  const sourceRows = data?.agents || [];
+  const groups = ["全部", ...Array.from(new Set(sourceRows.map((agent) => agent.profile?.group || agent.profile?.region).filter(Boolean)))];
+  const rows = sourceRows.filter((agent) => {
+    const profile = agent.profile || {};
+    const text = [profile.displayName, profile.region, profile.group, profile.flag, agent.os, agent.arch, ...(profile.tags || [])].join(" ").toLowerCase();
+    const groupOk = group === "全部" || profile.group === group || profile.region === group;
+    return groupOk && text.includes(query.toLowerCase());
+  });
   const summary = data?.summary || {};
-  const landscape = landscapeImages[imageIndex % landscapeImages.length];
+  const totalTraffic = (Number(summary.rxBytes) || 0) + (Number(summary.txBytes) || 0);
   return (
-    <main className="probe-page">
-      <header className="probe-header">
-        <div>
-          <strong>ChikenEasy Probe</strong>
-          <span>{data ? `${data.online}/${data.total} 在线` : "加载中"}</span>
+    <main className="probe-page komari-page">
+      <header className="komari-header">
+        <div className="komari-brand">
+          <strong>针</strong>
+          <span>Komari Monitor</span>
         </div>
-        <a className="button-link" href="/admin">管理员入口</a>
+        <div className="komari-actions">
+          <a className="square-btn" href="https://github.com/fengbule/chiken-easy" target="_blank" rel="noreferrer" title="GitHub"><Code2 size={17} /></a>
+          <button className="square-btn" title="主题"><Settings size={17} /></button>
+          <a className="square-btn admin" href="/admin" title="管理员入口"><KeyRound size={17} /></a>
+        </div>
       </header>
-      <section className="probe-content">
-        <div className="probe-hero" style={{ backgroundImage: `url("${landscape.url}")` }}>
-          <div>
-            <span>实时公开探针</span>
-            <h1>{data ? `${data.online} 台在线` : "正在连接探针"}</h1>
-            <p>自动刷新 CPU、内存、硬盘、负载、进程、运行时间和网络速度。</p>
+
+      <section className="komari-content">
+        <div className="komari-summary">
+          <div><span>当前时间</span><b>{formatClock(now)}</b></div>
+          <div><span>当前在线</span><b>{data ? `${data.online} / ${data.total}` : "-"}</b></div>
+          <div><span>点亮地区</span><b>{summary.regions || 0}</b></div>
+          <div><span>流量概览</span><b>↑ {formatBytes(summary.txBytes)} / ↓ {formatBytes(summary.rxBytes)}</b></div>
+          <div><span>网络速率</span><b>↑ {formatSpeed(summary.txSpeed)} / ↓ {formatSpeed(summary.rxSpeed)}</b></div>
+        </div>
+
+        <div className="komari-toolbar">
+          <label className="komari-search">
+            <Search size={17} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索节点名称、地区、系统..." />
+          </label>
+          <div className="view-switch">
+            <span>显示模式</span>
+            <button className={mode === "grid" ? "active" : ""} onClick={() => setMode("grid")} title="卡片"><Monitor size={16} /></button>
+            <button className={mode === "compact" ? "active" : ""} onClick={() => setMode("compact")} title="紧凑"><ClipboardList size={16} /></button>
           </div>
-          <button onClick={() => setImageIndex((value) => value + 1)}>换一张</button>
-          <small>{landscape.credit}</small>
         </div>
-        <div className="stats">
-          <Card icon={Monitor} label="节点" value={data ? `${data.online}/${data.total}` : "-"} />
-          <Card icon={Cpu} label="CPU" value={formatPercent(summary.avgCpu)} />
-          <Card icon={MemoryStick} label="内存" value={formatPercent(summary.avgMemory)} />
-          <Card icon={Wifi} label="实时流量" value={`↓ ${formatSpeed(summary.rxSpeed)}`} hint={`↑ ${formatSpeed(summary.txSpeed)}`} />
+
+        <div className="komari-groups">
+          <span>分组</span>
+          {groups.map((item) => <button key={item} className={group === item ? "active" : ""} onClick={() => setGroup(item)}>{item}</button>)}
         </div>
-        <div className="public-grid">
+
+        <p className="komari-count">共 {data?.total || 0} 个服务器，{data?.online || 0} 个在线{totalTraffic ? `，累计流量 ${formatBytes(totalTraffic)}` : ""}</p>
+
+        <div className={mode === "grid" ? "komari-grid" : "komari-grid compact"}>
           {rows.map((agent) => {
             const probe = agent.probe || {};
+            const profile = agent.profile || {};
             const cpu = probe.cpu || {};
             const memory = probe.memory || {};
             const disk = probe.disk || {};
-            const swap = probe.swap || {};
             const network = probe.network || {};
-            const load = Array.isArray(probe.load) ? probe.load.join(" / ") : "-";
+            const trafficPercent = trafficUsagePercent(agent);
+            const trafficTotal = Number(network.rxBytes || 0) + Number(network.txBytes || 0);
             return (
-              <article className="public-card" key={agent.id}>
-                <div className="agent-card-head">
-                  <div>
-                    <h3>{agent.name}</h3>
-                    <p>{agent.os}/{agent.arch}</p>
+              <article className="komari-card" key={agent.id}>
+                <div className="komari-card-head">
+                  <div className="komari-title">
+                    {profile.flag ? <span className="flag">{profile.flag}</span> : <span className="flag blank" />}
+                    <div>
+                      <h3>{profile.displayName || agent.name}</h3>
+                      <div className="probe-badges">
+                        {profile.price ? <span className="badge blue-badge">{profile.price}</span> : null}
+                        {profile.expireText ? <span className={String(profile.expireText).includes("余") ? "badge green-badge" : "badge amber-badge"}>{profile.expireText}</span> : null}
+                      </div>
+                    </div>
                   </div>
-                  <span className={`status-pill ${agent.connected ? "online" : ""}`}><StatusDot on={agent.connected} />{agent.connected ? "online" : "offline"}</span>
+                  <span className={`status-pill ${agent.connected ? "online" : ""}`}><StatusDot on={agent.connected} />{agent.connected ? "在线" : "离线"}</span>
                 </div>
-                <div className="agent-metrics">
-                  <div className="agent-metric"><span>CPU</span><b>{formatPercent(cpu.usage)}</b><MiniMeter value={cpu.usage} /></div>
-                  <div className="agent-metric"><span>内存</span><b>{formatPercent(memory.usage)}</b><MiniMeter value={memory.usage} tone="green" /></div>
-                  <div className="agent-metric"><span>硬盘</span><b>{formatPercent(disk.usage)}</b><MiniMeter value={disk.usage} tone="amber" /></div>
-                  <div className="agent-metric network"><span>网络</span><b>↓ {formatSpeed(network.rxSpeed)}</b><small>↑ {formatSpeed(network.txSpeed)}</small></div>
+
+                <div className="komari-os-row">
+                  <span>OS</span>
+                  <b>{osLabel(agent, profile)}</b>
                 </div>
-                <div className="probe-facts">
-                  <span>运行 {formatDuration(probe.uptime)}</span>
-                  <span>负载 {load}</span>
-                  <span>进程 {probe.process?.count ?? "-"}</span>
-                  <span>Swap {formatPercent(swap.usage)}</span>
-                  <span>累计 ↓ {formatBytes(network.rxBytes)}</span>
-                  <span>累计 ↑ {formatBytes(network.txBytes)}</span>
-                </div>
-                <span className="live-stamp">探针 {formatTimeAgo(probe.updatedAt)}</span>
+
+                <ProbeLine label="CPU" value={formatPercent(cpu.usage)} percent={cpu.usage} tone={meterTone(cpu.usage)} />
+                <ProbeLine label="内存" value={formatPercent(memory.usage)} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} percent={memory.usage} tone={meterTone(memory.usage)} />
+                <ProbeLine label="磁盘" value={formatPercent(disk.usage)} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} percent={disk.usage} tone={meterTone(disk.usage)} />
+                <ProbeLine label="总流量" value={Number.isFinite(trafficPercent) ? formatPercent(trafficPercent) : ""} detail={`↑ ${formatBytes(network.txBytes)} ↓ ${formatBytes(network.rxBytes)}${trafficLimitBytes(profile) ? ` / Sum(${formatBytes(trafficLimitBytes(profile))})` : ""}`} percent={trafficPercent} tone={meterTone(trafficPercent)} />
+
+                <div className="komari-fact-row"><span>网络</span><b>↑ {formatSpeed(network.txSpeed)} ↓ {formatSpeed(network.rxSpeed)}</b></div>
+                <div className="komari-fact-row"><span>运行时间</span><b>{formatDurationLong(probe.uptime)}</b></div>
+                {profile.note ? <div className="komari-note">{profile.note}</div> : null}
+                <span className="live-stamp">更新 {formatTimeAgo(probe.updatedAt)}</span>
               </article>
             );
           })}
         </div>
       </section>
     </main>
+  );
+}
+
+function ProbeLine({ label, value, detail, percent, tone = "green" }) {
+  return (
+    <div className="komari-line">
+      <div><span>{label}</span><b>{value}</b></div>
+      <MiniMeter value={percent} tone={tone} />
+      {detail ? <small>{detail}</small> : null}
+    </div>
   );
 }
 
@@ -1544,6 +1632,130 @@ function SubscriptionPage({ liveTick }) {
   );
 }
 
+function ProbeManagePage({ liveTick }) {
+  const empty = { displayName: "", region: "", group: "默认", flag: "", osLabel: "", price: "", billing: "", expireText: "", trafficLimitGb: "", displayOrder: 0, note: "", tags: "", hidden: false };
+  const [rows, setRows] = useState([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [form, setForm] = useState(empty);
+  const [message, setMessage] = useState("");
+
+  const load = async () => {
+    const data = await api("/api/probe-settings");
+    setRows(data);
+    const next = data.find((row) => row.agent.id === selectedId) || data[0];
+    if (next) {
+      setSelectedId(next.agent.id);
+      setForm({
+        ...empty,
+        ...next.profile,
+        tags: (next.profile.tags || []).join(", "),
+        trafficLimitGb: next.profile.trafficLimitGb || "",
+        displayName: next.profile.displayName || next.agent.name
+      });
+    }
+  };
+
+  useEffect(() => {
+    load().catch(() => {});
+  }, [liveTick]);
+
+  const selectRow = (row) => {
+    setSelectedId(row.agent.id);
+    setForm({
+      ...empty,
+      ...row.profile,
+      tags: (row.profile.tags || []).join(", "),
+      trafficLimitGb: row.profile.trafficLimitGb || "",
+      displayName: row.profile.displayName || row.agent.name
+    });
+  };
+
+  const patch = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+
+  const save = async () => {
+    if (!selectedId) return;
+    try {
+      setMessage("");
+      await api(`/api/probe-settings/${selectedId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          ...form,
+          tags: String(form.tags || "").split(",").map((item) => item.trim()).filter(Boolean),
+          trafficLimitGb: form.trafficLimitGb === "" ? null : Number(form.trafficLimitGb),
+          displayOrder: Number(form.displayOrder || 0),
+          hidden: Boolean(form.hidden)
+        })
+      });
+      setMessage("探针展示信息已保存，公开页会实时刷新。");
+      await load();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const selected = rows.find((row) => row.agent.id === selectedId);
+
+  return (
+    <section>
+      <div className="grid2 probe-manage-layout">
+        <Panel title="探针节点" right={<button onClick={load}><RefreshCw size={15} />刷新</button>}>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>公开名称</th>
+                  <th>分组</th>
+                  <th>地区</th>
+                  <th>账单</th>
+                  <th>公开</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.agent.id} className={selectedId === row.agent.id ? "selected-row" : ""} onClick={() => selectRow(row)}>
+                    <td><b>{row.profile.flag} {row.profile.displayName || row.agent.name}</b><div className="muted">{row.agent.os}/{row.agent.arch}</div></td>
+                    <td>{row.profile.group || "默认"}</td>
+                    <td>{row.profile.region || "-"}</td>
+                    <td>{[row.profile.price, row.profile.expireText].filter(Boolean).join(" · ") || "-"}</td>
+                    <td>{row.profile.hidden ? "隐藏" : "显示"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+
+        <Panel title="编辑公开探针">
+          {selected ? (
+            <>
+              <div className="form-grid">
+                <Field label="公开名称" value={form.displayName} onChange={(value) => patch("displayName", value)} />
+                <Field label="旗标" value={form.flag} onChange={(value) => patch("flag", value)} placeholder="如 🇭🇰 / US / JP" />
+                <Field label="分组" value={form.group} onChange={(value) => patch("group", value)} placeholder="亚洲 / 欧洲 / 美洲" />
+                <Field label="地区" value={form.region} onChange={(value) => patch("region", value)} placeholder="香港 / 日本 / SFO" />
+                <Field label="系统显示" value={form.osLabel} onChange={(value) => patch("osLabel", value)} placeholder="留空使用 Agent 上报系统" />
+                <Field label="排序" type="number" value={form.displayOrder} onChange={(value) => patch("displayOrder", value)} />
+                <Field label="价格标签" value={form.price} onChange={(value) => patch("price", value)} placeholder="$60/三年" />
+                <Field label="到期/余量标签" value={form.expireText} onChange={(value) => patch("expireText", value)} placeholder="余1075天" />
+                <Field label="账单备注" value={form.billing} onChange={(value) => patch("billing", value)} />
+                <Field label="总流量 GB" type="number" value={form.trafficLimitGb} onChange={(value) => patch("trafficLimitGb", value)} placeholder="留空不显示百分比" />
+                <Field label="标签" value={form.tags} onChange={(value) => patch("tags", value)} placeholder="英文逗号分隔" />
+                <Field label="公开显示" type="select" value={form.hidden ? "hidden" : "visible"} onChange={(value) => patch("hidden", value === "hidden")} options={[["visible", "显示"], ["hidden", "隐藏"]]} />
+                <Field label="卡片备注" type="textarea" rows={3} value={form.note} onChange={(value) => patch("note", value)} />
+              </div>
+              <div className="actions">
+                <button className="primary" onClick={save}><Save size={16} />保存探针</button>
+                <a className="button-link" href="/" target="_blank" rel="noreferrer">查看公开页</a>
+              </div>
+              {message ? <p className="panel-message">{message}</p> : null}
+            </>
+          ) : <div className="empty">还没有在线或已注册 Agent。</div>}
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
 function ForwardWizard({ agents }) {
   const [form, setForm] = useState({ agentId: "", engine: "sing-box", network: "tcp", listen: "0.0.0.0", port: 31080, targetHost: "example.com", targetPort: 80, name: "" });
   const [preview, setPreview] = useState("");
@@ -2058,6 +2270,7 @@ function App() {
     if (page === "nodes") return <NodeWizard agents={agents} />;
     if (page === "subscriptions") return <SubscriptionPage liveTick={liveTick} />;
     if (page === "forward") return <ForwardWizard agents={agents} />;
+    if (page === "probeManage") return <ProbeManagePage liveTick={liveTick} />;
     if (page === "probeTasks") return <ProbeTasksPage agents={agents} liveTick={liveTick} />;
     if (page === "files" || page === "files-agent") return <FilesPage agents={agents} initialAgentId={page === "files-agent" ? agentId : ""} />;
     if (page === "credentials") return <CredentialsPage liveTick={liveTick} />;
