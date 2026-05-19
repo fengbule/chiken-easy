@@ -22,6 +22,7 @@ import {
   normalizeSubscriptionSource,
   normalizeSubscriptionToken,
   selectSubscriptionNodes,
+  summarizeSubscriptionNodes,
   upsertNode
 } from "./subscriptions.js";
 
@@ -206,6 +207,15 @@ function ensureDefaultSubscriptionToken() {
   saveState();
 }
 
+function publicSubscriptionWithStats(token, req) {
+  const selected = selectSubscriptionNodes(state.nodePool || [], token, state.subscriptionGroups || []);
+  return {
+    ...publicSubscriptionToken(token, req),
+    nodeCount: selected.length,
+    summary: summarizeSubscriptionNodes(selected)
+  };
+}
+
 async function syncSubscriptionSource(source) {
   let text = String(source.text || "");
   if (source.url) {
@@ -221,11 +231,19 @@ async function syncSubscriptionSource(source) {
   }));
   state.nodePool ||= [];
   const saved = imported.map((node) => upsertNode(state.nodePool, node));
+  let removed = 0;
+  if (source.replaceExisting !== false) {
+    const savedRaw = new Set(saved.map((node) => node.raw));
+    const before = state.nodePool.length;
+    state.nodePool = state.nodePool.filter((node) => node.sourceId !== source.id || savedRaw.has(node.raw));
+    removed = before - state.nodePool.length;
+  }
   source.lastSyncAt = new Date().toISOString();
   source.lastImportCount = saved.length;
+  source.lastRemoveCount = removed;
   source.lastError = "";
   source.updatedAt = new Date().toISOString();
-  return saved;
+  return { saved, removed };
 }
 
 if (process.env.CHIKEN_BOOTSTRAP_TOKEN && !state.tokens.some((item) => item.token === process.env.CHIKEN_BOOTSTRAP_TOKEN)) {
@@ -1250,9 +1268,10 @@ app.get("/api/node-pool", (req, res) => {
   ensureDefaultSubscriptionToken();
   res.json({
     nodes: (state.nodePool || []).map(publicNode),
-    subscriptions: (state.subscriptionTokens || []).map((token) => publicSubscriptionToken(token, req)),
+    subscriptions: (state.subscriptionTokens || []).map((token) => publicSubscriptionWithStats(token, req)),
     sources: state.subscriptionSources || [],
     groups: state.subscriptionGroups || [],
+    summary: summarizeSubscriptionNodes(state.nodePool || []),
     accessLog: (state.subscriptionAccessLog || []).slice(0, 100)
   });
 });
@@ -1261,7 +1280,7 @@ app.post("/api/node-pool/import", async (req, res) => {
   try {
     let text = String(req.body?.text || "");
     const url = String(req.body?.url || "").trim();
-    const sourceName = String(req.body?.sourceName || (url ? new URL(url).hostname : "手动导入")).trim() || "手动导入";
+    const sourceName = String(req.body?.sourceName || (url ? new URL(url).hostname : "manual")).trim() || "manual";
     if (url) {
       const response = await fetch(url, { redirect: "follow" });
       if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
@@ -1312,16 +1331,16 @@ app.delete("/api/node-pool/:id", (req, res) => {
 
 app.get("/api/subscriptions", (req, res) => {
   ensureDefaultSubscriptionToken();
-  res.json((state.subscriptionTokens || []).map((token) => publicSubscriptionToken(token, req)));
+  res.json((state.subscriptionTokens || []).map((token) => publicSubscriptionWithStats(token, req)));
 });
 
 app.post("/api/subscriptions", (req, res) => {
   state.subscriptionTokens ||= [];
-  const token = normalizeSubscriptionToken(req.body || { name: "订阅" });
+  const token = normalizeSubscriptionToken(req.body || { name: "Subscription" });
   state.subscriptionTokens.unshift(token);
   saveState();
   audit("admin", "create_subscription", token.id, { name: token.name });
-  res.json(publicSubscriptionToken(token, req));
+  res.json(publicSubscriptionWithStats(token, req));
 });
 
 app.put("/api/subscriptions/:id", (req, res) => {
@@ -1330,7 +1349,24 @@ app.put("/api/subscriptions/:id", (req, res) => {
   Object.assign(current, normalizeSubscriptionToken(req.body || {}, current));
   saveState();
   audit("admin", "update_subscription", current.id, { name: current.name, format: current.format });
-  res.json(publicSubscriptionToken(current, req));
+  res.json(publicSubscriptionWithStats(current, req));
+});
+
+app.get("/api/subscriptions/:id/preview", (req, res) => {
+  const token = (state.subscriptionTokens || []).find((row) => row.id === req.params.id);
+  if (!token) return res.status(404).json({ error: "subscription not found" });
+  const nodes = selectSubscriptionNodes(state.nodePool || [], token, state.subscriptionGroups || []);
+  const format = String(req.query.format || token.format || "raw");
+  const rendered = renderSubscription(nodes, format);
+  res.json({
+    subscription: publicSubscriptionWithStats(token, req),
+    summary: summarizeSubscriptionNodes(nodes),
+    nodes: nodes.map(publicNode),
+    format,
+    contentType: rendered.contentType,
+    body: rendered.body.slice(0, 12000),
+    truncated: rendered.body.length > 12000
+  });
 });
 
 app.delete("/api/subscriptions/:id", (req, res) => {
@@ -1348,11 +1384,11 @@ app.post("/api/subscription-sources", async (req, res) => {
     const source = normalizeSubscriptionSource(req.body || {});
     state.subscriptionSources ||= [];
     state.subscriptionSources.unshift(source);
-    let saved = [];
-    if (req.body?.syncNow !== false) saved = await syncSubscriptionSource(source);
+    let result = { saved: [], removed: 0 };
+    if (req.body?.syncNow !== false) result = await syncSubscriptionSource(source);
     saveState();
-    audit("admin", "create_subscription_source", source.id, { name: source.name, count: saved.length });
-    res.json({ source, imported: saved.length, nodes: saved.map(publicNode) });
+    audit("admin", "create_subscription_source", source.id, { name: source.name, count: result.saved.length, removed: result.removed });
+    res.json({ source, imported: result.saved.length, removed: result.removed, nodes: result.saved.map(publicNode) });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -1371,10 +1407,10 @@ app.post("/api/subscription-sources/:id/sync", async (req, res) => {
   const source = (state.subscriptionSources || []).find((row) => row.id === req.params.id);
   if (!source) return res.status(404).json({ error: "source not found" });
   try {
-    const saved = await syncSubscriptionSource(source);
+    const result = await syncSubscriptionSource(source);
     saveState();
-    audit("admin", "sync_subscription_source", source.id, { count: saved.length });
-    res.json({ source, imported: saved.length, nodes: saved.map(publicNode) });
+    audit("admin", "sync_subscription_source", source.id, { count: result.saved.length, removed: result.removed });
+    res.json({ source, imported: result.saved.length, removed: result.removed, nodes: result.saved.map(publicNode) });
   } catch (error) {
     source.lastError = error.message;
     source.updatedAt = new Date().toISOString();
@@ -2044,6 +2080,8 @@ app.get("/api/audit", (_, res) => {
 app.get("/sub/:token", (req, res) => {
   const token = (state.subscriptionTokens || []).find((item) => item.token === req.params.token && item.enabled !== false);
   if (!token) return res.status(404).send("subscription not found");
+  if (token.expiresAt && Date.parse(token.expiresAt) < Date.now()) return res.status(403).send("subscription expired");
+  if (Number(token.maxAccess || 0) > 0 && Number(token.accessCount || 0) >= Number(token.maxAccess || 0)) return res.status(403).send("subscription access limit reached");
   const nodes = selectSubscriptionNodes(state.nodePool || [], token, state.subscriptionGroups || []);
   const format = String(req.query.format || token.format || "base64");
   const { contentType, body } = renderSubscription(nodes, format);

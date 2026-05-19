@@ -1551,12 +1551,14 @@ function SubscriptionPage({ liveTick }) {
   const [sources, setSources] = useState([]);
   const [groups, setGroups] = useState([]);
   const [accessLog, setAccessLog] = useState([]);
+  const [summary, setSummary] = useState({});
+  const [preview, setPreview] = useState(null);
   const [importText, setImportText] = useState("");
   const [importUrl, setImportUrl] = useState("");
   const [sourceName, setSourceName] = useState("");
-  const [sourceForm, setSourceForm] = useState({ name: "", url: "", text: "", tags: "", intervalHours: 24 });
-  const [groupForm, setGroupForm] = useState({ name: "", protocols: "", tags: "", sources: "", keyword: "" });
-  const [shareForm, setShareForm] = useState({ name: "默认订阅", format: "base64", protocols: "", tags: "", sources: "", groupIds: "" });
+  const [sourceForm, setSourceForm] = useState({ name: "", url: "", text: "", tags: "", intervalHours: 24, replaceExisting: true });
+  const [groupForm, setGroupForm] = useState({ name: "", protocols: "", tags: "", sources: "", keyword: "", sort: "name" });
+  const [shareForm, setShareForm] = useState({ name: "默认订阅", format: "base64", protocols: "", tags: "", sources: "", groupIds: "", keyword: "", limit: "", sort: "name", expiresAt: "", maxAccess: "" });
   const [message, setMessage] = useState("");
 
   const load = () =>
@@ -1566,6 +1568,7 @@ function SubscriptionPage({ liveTick }) {
       setSources(data.sources || []);
       setGroups(data.groups || []);
       setAccessLog(data.accessLog || []);
+      setSummary(data.summary || {});
     });
 
   useEffect(() => {
@@ -1602,8 +1605,8 @@ function SubscriptionPage({ liveTick }) {
     try {
       setMessage("");
       const response = await api("/api/subscription-sources", { method: "POST", body: JSON.stringify({ ...sourceForm, tags: sourceForm.tags, syncNow: true }) });
-      setMessage(`订阅源已保存并导入 ${response.imported} 个节点。`);
-      setSourceForm({ name: "", url: "", text: "", tags: "", intervalHours: 24 });
+      setMessage(`订阅源已保存，导入 ${response.imported} 个节点，移除 ${response.removed || 0} 个旧节点。`);
+      setSourceForm({ name: "", url: "", text: "", tags: "", intervalHours: 24, replaceExisting: true });
       await load();
     } catch (error) {
       setMessage(error.message);
@@ -1614,7 +1617,7 @@ function SubscriptionPage({ liveTick }) {
     try {
       setMessage("");
       await api("/api/subscription-groups", { method: "POST", body: JSON.stringify(groupForm) });
-      setGroupForm({ name: "", protocols: "", tags: "", sources: "", keyword: "" });
+      setGroupForm({ name: "", protocols: "", tags: "", sources: "", keyword: "", sort: "name" });
       await load();
     } catch (error) {
       setMessage(error.message);
@@ -1629,14 +1632,59 @@ function SubscriptionPage({ liveTick }) {
         body: JSON.stringify({
           name: shareForm.name,
           format: shareForm.format,
-          profile: { protocols: shareForm.protocols, tags: shareForm.tags, sources: shareForm.sources, groupIds: shareForm.groupIds }
+          expiresAt: shareForm.expiresAt,
+          maxAccess: shareForm.maxAccess,
+          profile: { protocols: shareForm.protocols, tags: shareForm.tags, sources: shareForm.sources, groupIds: shareForm.groupIds, keyword: shareForm.keyword, limit: shareForm.limit, sort: shareForm.sort }
         })
       });
+      setMessage("分享链接已创建。");
       await load();
     } catch (error) {
       setMessage(error.message);
     }
   };
+
+  const previewSubscription = async (subscription, format = subscription.format || "raw") => {
+    const data = await api(`/api/subscriptions/${subscription.id}/preview?format=${encodeURIComponent(format)}`);
+    setPreview(data);
+  };
+
+  const updateSubscription = async (subscription, patch) => {
+    await api(`/api/subscriptions/${subscription.id}`, { method: "PUT", body: JSON.stringify(patch) });
+    await load();
+  };
+
+  const deleteSubscription = async (subscription) => {
+    if (!window.confirm(`删除分享链接 ${subscription.name} 吗？`)) return;
+    await api(`/api/subscriptions/${subscription.id}`, { method: "DELETE" });
+    setPreview((current) => current?.subscription?.id === subscription.id ? null : current);
+    await load();
+  };
+
+  const fillShareForm = (subscription) => {
+    const profile = subscription.profile || {};
+    setShareForm({
+      name: `${subscription.name} copy`,
+      format: subscription.format || "base64",
+      protocols: (profile.protocols || []).join(","),
+      tags: (profile.tags || []).join(","),
+      sources: (profile.sources || []).join(","),
+      groupIds: (profile.groupIds || []).join(","),
+      keyword: profile.keyword || "",
+      limit: profile.limit || "",
+      sort: profile.sort || "name",
+      expiresAt: subscription.expiresAt || "",
+      maxAccess: subscription.maxAccess || ""
+    });
+  };
+
+  const deleteGroup = async (group) => {
+    if (!window.confirm(`删除分组 ${group.name} 吗？`)) return;
+    await api(`/api/subscription-groups/${group.id}`, { method: "DELETE" });
+    await load();
+  };
+
+  const protocolSummary = Object.entries(summary.protocols || {}).map(([key, value]) => `${key}:${value}`).join("  ");
 
   return (
     <section>
@@ -1644,7 +1692,7 @@ function SubscriptionPage({ liveTick }) {
         <Card icon={Code2} label="节点池" value={nodes.length} hint={`${nodes.filter((node) => node.enabled).length} 个启用`} />
         <Card icon={Upload} label="订阅源" value={sources.length} />
         <Card icon={FolderClosed} label="分组" value={groups.length} />
-        <Card icon={Link2} label="分享链接" value={subscriptions.length} />
+        <Card icon={Link2} label="分享链接" value={subscriptions.length} hint={protocolSummary || "等待导入节点"} />
       </div>
 
       <div className="grid2">
@@ -1654,7 +1702,7 @@ function SubscriptionPage({ liveTick }) {
               <div className="subscription-card" key={subscription.id}>
                 <div>
                   <h3>{subscription.name}</h3>
-                  <p>{subscription.format || "base64"} · 访问 {subscription.accessCount || 0} 次 · {subscription.lastAccessAt || "尚未访问"}</p>
+                  <p>{subscription.format || "base64"} · {subscription.nodeCount || 0} 个节点 · 访问 {subscription.accessCount || 0} 次 · {subscription.lastAccessAt || "尚未访问"}</p>
                 </div>
                 {Object.entries(subscription.links || {}).map(([format, link]) => (
                   <div className="copy-row" key={format}>
@@ -1663,6 +1711,12 @@ function SubscriptionPage({ liveTick }) {
                     <button onClick={async () => { await copyText(link); setMessage(`${format} 链接已复制。`); }}>复制</button>
                   </div>
                 ))}
+                <div className="subscription-tools">
+                  <button onClick={() => previewSubscription(subscription, subscription.format)}>预览</button>
+                  <button onClick={() => fillShareForm(subscription)}>复制配置</button>
+                  <button onClick={() => updateSubscription(subscription, { enabled: !subscription.enabled })}>{subscription.enabled ? "停用" : "启用"}</button>
+                  <button className="link danger" onClick={() => deleteSubscription(subscription)}>删除</button>
+                </div>
               </div>
             ))}
           </div>
@@ -1676,10 +1730,27 @@ function SubscriptionPage({ liveTick }) {
             <Field label="标签过滤" value={shareForm.tags} onChange={(value) => setShareForm((current) => ({ ...current, tags: value }))} />
             <Field label="来源过滤" value={shareForm.sources} onChange={(value) => setShareForm((current) => ({ ...current, sources: value }))} placeholder="订阅源名称，逗号分隔" />
             <Field label="分组过滤" value={shareForm.groupIds} onChange={(value) => setShareForm((current) => ({ ...current, groupIds: value }))} placeholder={groups.map((group) => group.id).join(", ")} />
+            <Field label="关键词" value={shareForm.keyword} onChange={(value) => setShareForm((current) => ({ ...current, keyword: value }))} placeholder="节点名/来源/标签关键词" />
+            <Field label="节点上限" type="number" value={shareForm.limit} onChange={(value) => setShareForm((current) => ({ ...current, limit: value }))} placeholder="0 表示不限" />
+            <Field label="排序" type="select" value={shareForm.sort} onChange={(value) => setShareForm((current) => ({ ...current, sort: value }))} options={[["name", "名称"], ["protocol", "协议"], ["source", "来源"], ["updated", "最近更新"]]} />
+            <Field label="过期时间" value={shareForm.expiresAt} onChange={(value) => setShareForm((current) => ({ ...current, expiresAt: value }))} placeholder="2026-12-31T23:59:59.000Z" />
+            <Field label="访问上限" type="number" value={shareForm.maxAccess} onChange={(value) => setShareForm((current) => ({ ...current, maxAccess: value }))} placeholder="0 表示不限" />
           </div>
           <div className="actions"><button className="primary" onClick={createShare}>创建分享链接</button></div>
         </Panel>
       </div>
+
+      {preview ? (
+        <Panel title={`输出预览：${preview.subscription?.name || ""}`} right={<button onClick={() => setPreview(null)}>关闭</button>}>
+          <div className="subscription-preview-meta">
+            <span>{preview.format}</span>
+            <span>{preview.summary?.enabled || 0} 个节点</span>
+            <span>{preview.contentType}</span>
+            {preview.truncated ? <span>内容已截断</span> : null}
+          </div>
+          <pre className="preview subscription-preview">{preview.body || "当前筛选没有节点。"}</pre>
+        </Panel>
+      ) : null}
 
       <div className="grid2">
         <Panel title="订阅源导入">
@@ -1689,6 +1760,7 @@ function SubscriptionPage({ liveTick }) {
             <Field label="标签" value={sourceForm.tags} onChange={(value) => setSourceForm((current) => ({ ...current, tags: value }))} placeholder="逗号分隔" />
             <Field label="更新间隔小时" type="number" value={sourceForm.intervalHours} onChange={(value) => setSourceForm((current) => ({ ...current, intervalHours: value }))} />
             <Field label="订阅内容" type="textarea" rows={6} value={sourceForm.text} onChange={(value) => setSourceForm((current) => ({ ...current, text: value }))} placeholder="也可以直接粘贴节点或 base64 订阅" />
+            <label className="check-row"><input type="checkbox" checked={sourceForm.replaceExisting} onChange={(event) => setSourceForm((current) => ({ ...current, replaceExisting: event.target.checked }))} />同步时替换这个来源的旧节点</label>
           </div>
           <div className="actions"><button className="primary" onClick={createSource}>保存并同步</button></div>
         </Panel>
@@ -1715,19 +1787,30 @@ function SubscriptionPage({ liveTick }) {
             <Field label="标签" value={groupForm.tags} onChange={(value) => setGroupForm((current) => ({ ...current, tags: value }))} />
             <Field label="来源" value={groupForm.sources} onChange={(value) => setGroupForm((current) => ({ ...current, sources: value }))} />
             <Field label="关键词" value={groupForm.keyword} onChange={(value) => setGroupForm((current) => ({ ...current, keyword: value }))} />
+            <Field label="排序" type="select" value={groupForm.sort} onChange={(value) => setGroupForm((current) => ({ ...current, sort: value }))} options={[["name", "名称"], ["protocol", "协议"], ["source", "来源"]]} />
           </div>
           <div className="actions"><button className="primary" onClick={createGroup}>创建分组</button></div>
+          <div className="tag-list">
+            {groups.map((group) => (
+              <span key={group.id}>
+                {group.name}
+                <code>{group.id}</code>
+                <button className="link" onClick={() => deleteGroup(group)}>删除</button>
+              </span>
+            ))}
+          </div>
         </Panel>
         <Panel title="订阅源列表">
           <table>
-            <thead><tr><th>名称</th><th>标签</th><th>最近同步</th><th>数量</th><th>操作</th></tr></thead>
+            <thead><tr><th>名称</th><th>标签</th><th>最近同步</th><th>数量</th><th>状态</th><th>操作</th></tr></thead>
             <tbody>
               {sources.map((source) => (
                 <tr key={source.id}>
                   <td>{source.name}<div className="muted">{source.url || "手动内容"}</div></td>
                   <td>{(source.tags || []).join(", ") || "-"}</td>
                   <td>{source.lastSyncAt || "-"}</td>
-                  <td>{source.lastImportCount || 0}</td>
+                  <td>{source.lastImportCount || 0} / -{source.lastRemoveCount || 0}</td>
+                  <td>{source.lastError || "正常"}</td>
                   <td className="actions-cell">
                     <button className="link" onClick={async () => { await api(`/api/subscription-sources/${source.id}/sync`, { method: "POST" }); await load(); }}>同步</button>
                     <button className="link" onClick={async () => { await api(`/api/subscription-sources/${source.id}`, { method: "DELETE" }); await load(); }}>删除</button>
@@ -1749,6 +1832,7 @@ function SubscriptionPage({ liveTick }) {
                 <th>协议</th>
                 <th>服务器</th>
                 <th>标签</th>
+                <th>分组</th>
                 <th>状态</th>
                 <th>更新时间</th>
                 <th>操作</th>
@@ -1763,7 +1847,8 @@ function SubscriptionPage({ liveTick }) {
                   <td>{node.source === "panel" ? "面板" : node.sourceName || "导入"}</td>
                   <td>{node.protocol}</td>
                   <td>{node.server ? `${node.server}:${node.port || ""}` : "-"}</td>
-                  <td>{(node.tags || []).join(", ") || "-"}</td>
+                  <td><input className="table-input" value={(node.tags || []).join(",")} onChange={(event) => setNodes((current) => current.map((item) => item.id === node.id ? { ...item, tags: event.target.value.split(",").map((part) => part.trim()).filter(Boolean) } : item))} onBlur={(event) => updateNode(node, { tags: event.target.value }).catch(() => {})} /></td>
+                  <td><input className="table-input" value={(node.groupIds || []).join(",")} onChange={(event) => setNodes((current) => current.map((item) => item.id === node.id ? { ...item, groupIds: event.target.value.split(",").map((part) => part.trim()).filter(Boolean) } : item))} onBlur={(event) => updateNode(node, { groupIds: event.target.value }).catch(() => {})} placeholder={groups.map((group) => group.id).join(",")} /></td>
                   <td><span className={`status-pill ${node.enabled ? "online" : ""}`}><StatusDot on={node.enabled} />{node.enabled ? "启用" : "停用"}</span></td>
                   <td>{node.updatedAt || "-"}</td>
                   <td className="actions-cell">

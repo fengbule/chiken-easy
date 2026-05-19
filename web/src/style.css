@@ -1301,6 +1301,8 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
 }
 
 .subscription-card h3 {
@@ -1324,6 +1326,64 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.subscription-tools,
+.subscription-preview-meta,
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.subscription-tools {
+  justify-content: flex-end;
+}
+
+.subscription-preview-meta {
+  padding: 0 20px 12px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.subscription-preview-meta span,
+.tag-list span {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px 9px;
+}
+
+.subscription-preview {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.check-row {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: center;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.check-row input {
+  width: auto;
+}
+
+.tag-list {
+  padding: 12px 0 0;
+}
+
+.tag-list code {
+  margin-left: 8px;
+  color: var(--text-soft);
+}
+
+.link.danger {
+  color: #b42318;
 }
 
 .icon-btn {

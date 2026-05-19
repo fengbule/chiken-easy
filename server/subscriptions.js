@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 
-const shareProtocols = ["vmess", "vless", "trojan", "ss", "hysteria2", "hy2"];
-const sharePattern = /^(vmess|vless|trojan|ss|hysteria2|hy2):\/\//i;
+const shareProtocols = ["vmess", "vless", "trojan", "ss", "ssr", "hysteria2", "hy2", "hy", "tuic", "socks", "socks5", "http", "https", "anytls"];
+const sharePattern = /^(vmess|vless|trojan|ss|ssr|hysteria2|hy2|hy|tuic|socks|socks5|http|https|anytls):\/\//i;
 
 function base64Encode(text) {
   return Buffer.from(String(text || ""), "utf8").toString("base64");
@@ -48,6 +48,93 @@ function splitImportLines(text) {
     if (decodedLines.some((line) => sharePattern.test(line))) lines = decodedLines;
   } catch {}
   return lines;
+}
+
+function cleanYamlValue(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^['"]|['"]$/g, "");
+}
+
+function parseSimpleClashProxies(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const blocks = [];
+  let inProxies = false;
+  let current = null;
+
+  for (const line of lines) {
+    if (/^\s*proxies\s*:\s*$/i.test(line)) {
+      inProxies = true;
+      continue;
+    }
+    if (!inProxies) continue;
+    if (/^\s*(proxy-groups|rules|rule-providers|proxy-providers)\s*:/i.test(line)) break;
+
+    const start = line.match(/^\s*-\s+name\s*:\s*(.+)\s*$/i);
+    if (start) {
+      if (current) blocks.push(current);
+      current = { name: cleanYamlValue(start[1]) };
+      continue;
+    }
+    if (!current) continue;
+    const pair = line.match(/^\s+([A-Za-z0-9_-]+)\s*:\s*(.+)\s*$/);
+    if (pair) current[pair[1]] = cleanYamlValue(pair[2]);
+  }
+  if (current) blocks.push(current);
+  return blocks;
+}
+
+function rawFromClashProxy(proxy) {
+  const type = String(proxy.type || "").toLowerCase();
+  const name = encodeURIComponent(proxy.name || type.toUpperCase());
+  const server = proxy.server || "";
+  const port = Number(proxy.port || 0) || 0;
+  if (!type || !server || !port) return "";
+  if (type === "ss") return `ss://${base64Encode(`${proxy.cipher || "auto"}:${proxy.password || ""}`)}@${server}:${port}#${name}`;
+  if (type === "trojan") return `trojan://${encodeURIComponent(proxy.password || "")}@${server}:${port}?sni=${encodeURIComponent(proxy.sni || proxy.servername || server)}#${name}`;
+  if (type === "vless") {
+    const params = new URLSearchParams({
+      encryption: proxy.encryption || "none",
+      type: proxy.network || "tcp",
+      security: proxy.tls === "true" || proxy.tls === true ? "tls" : proxy.security || "none"
+    });
+    if (proxy.servername || proxy.sni) params.set("sni", proxy.servername || proxy.sni);
+    if (proxy.flow) params.set("flow", proxy.flow);
+    return `vless://${proxy.uuid || ""}@${server}:${port}?${params.toString()}#${name}`;
+  }
+  if (type === "vmess") {
+    const payload = {
+      v: "2",
+      ps: proxy.name || "VMess",
+      add: server,
+      port: String(port),
+      id: proxy.uuid || "",
+      aid: String(proxy.alterId || proxy.alterid || 0),
+      scy: proxy.cipher || "auto",
+      net: proxy.network || "tcp",
+      type: "none",
+      host: proxy.servername || proxy.sni || "",
+      path: proxy["ws-path"] || proxy.path || "",
+      tls: proxy.tls === "true" || proxy.tls === true ? "tls" : ""
+    };
+    return `vmess://${base64Encode(JSON.stringify(payload))}`;
+  }
+  if (type === "hysteria2" || type === "hy2" || type === "hy") return `hysteria2://${encodeURIComponent(proxy.password || proxy.auth || "")}@${server}:${port}?sni=${encodeURIComponent(proxy.sni || server)}#${name}`;
+  if (type === "tuic") return `tuic://${proxy.uuid || ""}:${encodeURIComponent(proxy.password || "")}@${server}:${port}?sni=${encodeURIComponent(proxy.sni || server)}#${name}`;
+  if (type === "socks5" || type === "socks" || type === "http" || type === "https") {
+    const auth = proxy.username || proxy.password ? `${encodeURIComponent(proxy.username || "")}:${encodeURIComponent(proxy.password || "")}@` : "";
+    return `${type}://${auth}${server}:${port}#${name}`;
+  }
+  return "";
+}
+
+function parseClashImport(text, sourceName = "import") {
+  return parseSimpleClashProxies(text)
+    .map((proxy) => rawFromClashProxy(proxy))
+    .filter(Boolean)
+    .map(parseNodeLine)
+    .filter(Boolean)
+    .map((node) => ({ ...node, sourceName: String(sourceName || "import").trim() || "import" }));
 }
 
 function parseVmess(raw) {
@@ -133,7 +220,7 @@ export function parseNodeLine(raw) {
     id: nanoid(10),
     name: parsed.name || scheme.toUpperCase(),
     source: "import",
-    protocol: scheme === "hy2" ? "hysteria2" : parsed.protocol || scheme,
+    protocol: ["hy", "hy2"].includes(scheme) ? "hysteria2" : parsed.protocol || scheme,
     server: parsed.server || "",
     port: parsed.port || null,
     raw: line,
@@ -147,9 +234,7 @@ export function parseNodeLine(raw) {
 
 export function parseNodeImport(text, sourceName = "import") {
   const seen = new Set();
-  return splitImportLines(text)
-    .map(parseNodeLine)
-    .filter(Boolean)
+  return [...splitImportLines(text).map(parseNodeLine).filter(Boolean), ...parseClashImport(text, sourceName)]
     .filter((node) => {
       if (seen.has(node.raw)) return false;
       seen.add(node.raw);
@@ -175,6 +260,7 @@ export function publicNode(node) {
     enabled: node.enabled !== false,
     tags: node.tags || [],
     groupIds: node.groupIds || [],
+    sourceId: node.sourceId || "",
     raw: node.raw || "",
     agentId: node.agentId || "",
     createdAt: node.createdAt,
@@ -210,7 +296,7 @@ export function createSubscriptionToken(name = "default") {
     createdAt: new Date().toISOString(),
     enabled: true,
     format: "base64",
-    profile: { protocols: [], tags: [], sources: [], groupIds: [] },
+    profile: { protocols: [], tags: [], sources: [], groupIds: [], keyword: "", limit: 0, sort: "name" },
     accessCount: 0,
     lastAccessAt: null
   };
@@ -224,7 +310,9 @@ export function publicSubscriptionToken(token, req) {
     token: token.token,
     enabled: token.enabled !== false,
     format: token.format || "base64",
-    profile: token.profile || { protocols: [], tags: [], sources: [], groupIds: [] },
+    profile: token.profile || { protocols: [], tags: [], sources: [], groupIds: [], keyword: "", limit: 0, sort: "name" },
+    expiresAt: token.expiresAt || "",
+    maxAccess: Number(token.maxAccess || 0),
     accessCount: Number(token.accessCount || 0),
     lastAccessAt: token.lastAccessAt || null,
     createdAt: token.createdAt,
@@ -242,7 +330,7 @@ export function normalizeSubscriptionToken(input = {}, current = {}) {
   return {
     ...current,
     id: current.id || input.id || nanoid(10),
-    name: String(input.name ?? current.name ?? "订阅").trim() || "订阅",
+    name: String(input.name ?? current.name ?? "Subscription").trim() || "Subscription",
     token: current.token || input.token || `sub_${nanoid(32)}`,
     enabled: input.enabled ?? current.enabled ?? true,
     format: String(input.format ?? current.format ?? "base64").trim() || "base64",
@@ -250,8 +338,13 @@ export function normalizeSubscriptionToken(input = {}, current = {}) {
       protocols: arrayFromValue(profile.protocols),
       tags: arrayFromValue(profile.tags),
       sources: arrayFromValue(profile.sources),
-      groupIds: arrayFromValue(profile.groupIds)
+      groupIds: arrayFromValue(profile.groupIds),
+      keyword: String(profile.keyword ?? "").trim(),
+      limit: Math.max(0, Number(profile.limit || 0) || 0),
+      sort: String(profile.sort || "name").trim() || "name"
     },
+    expiresAt: String(input.expiresAt ?? current.expiresAt ?? "").trim(),
+    maxAccess: Math.max(0, Number(input.maxAccess ?? current.maxAccess ?? 0) || 0),
     createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     accessCount: Number(current.accessCount || 0),
@@ -263,11 +356,12 @@ export function normalizeSubscriptionSource(input = {}, current = {}) {
   return {
     ...current,
     id: current.id || input.id || nanoid(10),
-    name: String(input.name ?? current.name ?? "订阅源").trim() || "订阅源",
+    name: String(input.name ?? current.name ?? "Subscription Source").trim() || "Subscription Source",
     url: String(input.url ?? current.url ?? "").trim(),
     text: String(input.text ?? current.text ?? ""),
     tags: arrayFromValue(input.tags ?? current.tags),
     intervalHours: Math.max(0, Number(input.intervalHours ?? current.intervalHours ?? 24) || 0),
+    replaceExisting: input.replaceExisting ?? current.replaceExisting ?? true,
     enabled: input.enabled ?? current.enabled ?? true,
     createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -281,7 +375,7 @@ export function normalizeSubscriptionGroup(input = {}, current = {}) {
   return {
     ...current,
     id: current.id || input.id || nanoid(10),
-    name: String(input.name ?? current.name ?? "默认分组").trim() || "默认分组",
+    name: String(input.name ?? current.name ?? "Default Group").trim() || "Default Group",
     protocols: arrayFromValue(input.protocols ?? current.protocols),
     tags: arrayFromValue(input.tags ?? current.tags),
     sources: arrayFromValue(input.sources ?? current.sources),
@@ -311,7 +405,7 @@ export function selectSubscriptionNodes(nodes = [], token = {}, groups = []) {
   let selected = nodes.filter((node) => node.enabled !== false && node.raw);
   const tokenProfile = token.profile || {};
   const tokenGroupIds = arrayFromValue(tokenProfile.groupIds);
-  const directTokenFilters = { ...tokenProfile, groupIds: [] };
+  const directTokenFilters = { ...tokenProfile, groupIds: [], limit: 0, sort: "" };
   if (Object.values(directTokenFilters).some((value) => arrayFromValue(value).length)) {
     selected = selected.filter((node) => matchesEveryFilter(node, directTokenFilters));
   }
@@ -319,7 +413,35 @@ export function selectSubscriptionNodes(nodes = [], token = {}, groups = []) {
   if (activeGroups.length) {
     selected = selected.filter((node) => activeGroups.some((group) => matchesEveryFilter(node, group)));
   }
-  return selected.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const sort = String(tokenProfile.sort || "name");
+  selected = selected.sort((a, b) => {
+    if (sort === "protocol") return String(a.protocol).localeCompare(String(b.protocol)) || String(a.name).localeCompare(String(b.name));
+    if (sort === "source") return String(a.sourceName || a.source).localeCompare(String(b.sourceName || b.source)) || String(a.name).localeCompare(String(b.name));
+    if (sort === "updated") return Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || "");
+    return String(a.name).localeCompare(String(b.name));
+  });
+  const limit = Math.max(0, Number(tokenProfile.limit || 0) || 0);
+  return limit ? selected.slice(0, limit) : selected;
+}
+
+function countBy(nodes, getter) {
+  const result = {};
+  for (const node of nodes) {
+    const values = arrayFromValue(getter(node));
+    for (const value of values.length ? values : ["-"]) result[value] = (result[value] || 0) + 1;
+  }
+  return result;
+}
+
+export function summarizeSubscriptionNodes(nodes = []) {
+  const enabled = nodes.filter((node) => node.enabled !== false && node.raw);
+  return {
+    total: nodes.length,
+    enabled: enabled.length,
+    protocols: countBy(enabled, (node) => node.protocol || "-"),
+    sources: countBy(enabled, (node) => node.sourceName || node.source || "-"),
+    tags: countBy(enabled, (node) => node.tags || [])
+  };
 }
 
 export function buildPanelNode(agent, input = {}) {
