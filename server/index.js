@@ -18,6 +18,10 @@ import {
   publicNode,
   publicSubscriptionToken,
   renderSubscription,
+  normalizeSubscriptionGroup,
+  normalizeSubscriptionSource,
+  normalizeSubscriptionToken,
+  selectSubscriptionNodes,
   upsertNode
 } from "./subscriptions.js";
 
@@ -53,6 +57,7 @@ const defaultState = {
   probeTasks: [],
   probeResults: {},
   probeProfiles: {},
+  trafficCounters: {},
   monitorSettings: {
     site: {
       name: "Chiken Monitor",
@@ -88,7 +93,10 @@ const defaultState = {
     }
   },
   nodePool: [],
-  subscriptionTokens: []
+  subscriptionTokens: [],
+  subscriptionSources: [],
+  subscriptionGroups: [],
+  subscriptionAccessLog: []
 };
 
 const clients = new Map();
@@ -159,9 +167,13 @@ function loadState() {
     probeTasks: raw.probeTasks || [],
     probeResults: raw.probeResults || {},
     probeProfiles: raw.probeProfiles || {},
+    trafficCounters: raw.trafficCounters || {},
     monitorSettings: mergeMonitorSettings(raw.monitorSettings || {}),
     nodePool: raw.nodePool || [],
-    subscriptionTokens: raw.subscriptionTokens || []
+    subscriptionTokens: raw.subscriptionTokens || [],
+    subscriptionSources: raw.subscriptionSources || [],
+    subscriptionGroups: raw.subscriptionGroups || [],
+    subscriptionAccessLog: raw.subscriptionAccessLog || []
   };
 }
 
@@ -192,6 +204,28 @@ function ensureDefaultSubscriptionToken() {
   if (state.subscriptionTokens.some((item) => item.enabled !== false)) return;
   state.subscriptionTokens.push(createSubscriptionToken("默认订阅"));
   saveState();
+}
+
+async function syncSubscriptionSource(source) {
+  let text = String(source.text || "");
+  if (source.url) {
+    const response = await fetch(source.url, { redirect: "follow" });
+    if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
+    text += `\n${await response.text()}`;
+  }
+  const imported = parseNodeImport(text, source.name).map((node) => ({
+    ...node,
+    sourceId: source.id,
+    sourceName: source.name,
+    tags: [...new Set([...(node.tags || []), ...(source.tags || [])])]
+  }));
+  state.nodePool ||= [];
+  const saved = imported.map((node) => upsertNode(state.nodePool, node));
+  source.lastSyncAt = new Date().toISOString();
+  source.lastImportCount = saved.length;
+  source.lastError = "";
+  source.updatedAt = new Date().toISOString();
+  return saved;
 }
 
 if (process.env.CHIKEN_BOOTSTRAP_TOKEN && !state.tokens.some((item) => item.token === process.env.CHIKEN_BOOTSTRAP_TOKEN)) {
@@ -381,6 +415,10 @@ function publicProbe(probe = {}) {
       ? {
           rxBytes: finiteNumber(probe.network.rxBytes, 0),
           txBytes: finiteNumber(probe.network.txBytes, 0),
+          rawRxBytes: finiteNumber(probe.network.rawRxBytes, finiteNumber(probe.network.rxBytes, 0)),
+          rawTxBytes: finiteNumber(probe.network.rawTxBytes, finiteNumber(probe.network.txBytes, 0)),
+          totalRxBytes: finiteNumber(probe.network.totalRxBytes, finiteNumber(probe.network.rxBytes, 0)),
+          totalTxBytes: finiteNumber(probe.network.totalTxBytes, finiteNumber(probe.network.txBytes, 0)),
           rxSpeed: finiteNumber(probe.network.rxSpeed),
           txSpeed: finiteNumber(probe.network.txSpeed),
           interfaces: finiteNumber(probe.network.interfaces, 0)
@@ -390,6 +428,46 @@ function publicProbe(probe = {}) {
       count: finiteNumber(probe.process?.count)
     }
   };
+}
+
+function applyTrafficAccounting(agentId, status = {}) {
+  const network = status?.probe?.network;
+  if (!network) return status;
+  const rawRx = finiteNumber(network.rawRxBytes ?? network.rxBytes, 0) || 0;
+  const rawTx = finiteNumber(network.rawTxBytes ?? network.txBytes, 0) || 0;
+  state.trafficCounters ||= {};
+  const previous = state.trafficCounters[agentId] || {};
+  let totalRx = finiteNumber(previous.totalRxBytes, null);
+  let totalTx = finiteNumber(previous.totalTxBytes, null);
+
+  if (totalRx === null || totalTx === null) {
+    const existing = state.agents?.[agentId]?.probe?.network || {};
+    totalRx = finiteNumber(existing.totalRxBytes ?? existing.rxBytes, rawRx) || 0;
+    totalTx = finiteNumber(existing.totalTxBytes ?? existing.txBytes, rawTx) || 0;
+  } else if (Number.isFinite(previous.lastRxBytes) && Number.isFinite(previous.lastTxBytes)) {
+    totalRx += rawRx >= previous.lastRxBytes ? rawRx - previous.lastRxBytes : rawRx;
+    totalTx += rawTx >= previous.lastTxBytes ? rawTx - previous.lastTxBytes : rawTx;
+  }
+  totalRx = Math.max(totalRx, rawRx);
+  totalTx = Math.max(totalTx, rawTx);
+
+  state.trafficCounters[agentId] = {
+    totalRxBytes: totalRx,
+    totalTxBytes: totalTx,
+    lastRxBytes: rawRx,
+    lastTxBytes: rawTx,
+    updatedAt: new Date().toISOString()
+  };
+  status.probe.network = {
+    ...network,
+    rawRxBytes: rawRx,
+    rawTxBytes: rawTx,
+    rxBytes: totalRx,
+    txBytes: totalTx,
+    totalRxBytes: totalRx,
+    totalTxBytes: totalTx
+  };
+  return status;
 }
 
 function normalizeProbeProfile(input = {}, current = {}) {
@@ -1172,7 +1250,10 @@ app.get("/api/node-pool", (req, res) => {
   ensureDefaultSubscriptionToken();
   res.json({
     nodes: (state.nodePool || []).map(publicNode),
-    subscriptions: (state.subscriptionTokens || []).map((token) => publicSubscriptionToken(token, req))
+    subscriptions: (state.subscriptionTokens || []).map((token) => publicSubscriptionToken(token, req)),
+    sources: state.subscriptionSources || [],
+    groups: state.subscriptionGroups || [],
+    accessLog: (state.subscriptionAccessLog || []).slice(0, 100)
   });
 });
 
@@ -1202,10 +1283,16 @@ app.put("/api/node-pool/:id", (req, res) => {
   if (!node) return res.status(404).json({ error: "node not found" });
   if ("name" in (req.body || {})) node.name = String(req.body.name || node.name).trim() || node.name;
   if ("enabled" in (req.body || {})) node.enabled = req.body.enabled !== false;
+  if ("sourceName" in (req.body || {})) node.sourceName = String(req.body.sourceName || node.sourceName || "").trim();
   if ("tags" in (req.body || {})) {
     node.tags = Array.isArray(req.body.tags)
       ? req.body.tags.map((item) => String(item).trim()).filter(Boolean)
       : String(req.body.tags || "").split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  if ("groupIds" in (req.body || {})) {
+    node.groupIds = Array.isArray(req.body.groupIds)
+      ? req.body.groupIds.map((item) => String(item).trim()).filter(Boolean)
+      : String(req.body.groupIds || "").split(",").map((item) => item.trim()).filter(Boolean);
   }
   node.updatedAt = new Date().toISOString();
   saveState();
@@ -1230,11 +1317,108 @@ app.get("/api/subscriptions", (req, res) => {
 
 app.post("/api/subscriptions", (req, res) => {
   state.subscriptionTokens ||= [];
-  const token = createSubscriptionToken(req.body?.name || "订阅");
+  const token = normalizeSubscriptionToken(req.body || { name: "订阅" });
   state.subscriptionTokens.unshift(token);
   saveState();
   audit("admin", "create_subscription", token.id, { name: token.name });
   res.json(publicSubscriptionToken(token, req));
+});
+
+app.put("/api/subscriptions/:id", (req, res) => {
+  const current = (state.subscriptionTokens || []).find((row) => row.id === req.params.id);
+  if (!current) return res.status(404).json({ error: "subscription not found" });
+  Object.assign(current, normalizeSubscriptionToken(req.body || {}, current));
+  saveState();
+  audit("admin", "update_subscription", current.id, { name: current.name, format: current.format });
+  res.json(publicSubscriptionToken(current, req));
+});
+
+app.delete("/api/subscriptions/:id", (req, res) => {
+  const before = state.subscriptionTokens || [];
+  const item = before.find((row) => row.id === req.params.id);
+  if (!item) return res.status(404).json({ error: "subscription not found" });
+  state.subscriptionTokens = before.filter((row) => row.id !== req.params.id);
+  saveState();
+  audit("admin", "delete_subscription", req.params.id, { name: item.name });
+  res.json({ ok: true });
+});
+
+app.post("/api/subscription-sources", async (req, res) => {
+  try {
+    const source = normalizeSubscriptionSource(req.body || {});
+    state.subscriptionSources ||= [];
+    state.subscriptionSources.unshift(source);
+    let saved = [];
+    if (req.body?.syncNow !== false) saved = await syncSubscriptionSource(source);
+    saveState();
+    audit("admin", "create_subscription_source", source.id, { name: source.name, count: saved.length });
+    res.json({ source, imported: saved.length, nodes: saved.map(publicNode) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.put("/api/subscription-sources/:id", (req, res) => {
+  const source = (state.subscriptionSources || []).find((row) => row.id === req.params.id);
+  if (!source) return res.status(404).json({ error: "source not found" });
+  Object.assign(source, normalizeSubscriptionSource(req.body || {}, source));
+  saveState();
+  audit("admin", "update_subscription_source", source.id, { name: source.name });
+  res.json(source);
+});
+
+app.post("/api/subscription-sources/:id/sync", async (req, res) => {
+  const source = (state.subscriptionSources || []).find((row) => row.id === req.params.id);
+  if (!source) return res.status(404).json({ error: "source not found" });
+  try {
+    const saved = await syncSubscriptionSource(source);
+    saveState();
+    audit("admin", "sync_subscription_source", source.id, { count: saved.length });
+    res.json({ source, imported: saved.length, nodes: saved.map(publicNode) });
+  } catch (error) {
+    source.lastError = error.message;
+    source.updatedAt = new Date().toISOString();
+    saveState();
+    res.status(400).json({ error: error.message, source });
+  }
+});
+
+app.delete("/api/subscription-sources/:id", (req, res) => {
+  const before = state.subscriptionSources || [];
+  const source = before.find((row) => row.id === req.params.id);
+  if (!source) return res.status(404).json({ error: "source not found" });
+  state.subscriptionSources = before.filter((row) => row.id !== req.params.id);
+  saveState();
+  audit("admin", "delete_subscription_source", req.params.id, { name: source.name });
+  res.json({ ok: true });
+});
+
+app.post("/api/subscription-groups", (req, res) => {
+  const group = normalizeSubscriptionGroup(req.body || {});
+  state.subscriptionGroups ||= [];
+  state.subscriptionGroups.unshift(group);
+  saveState();
+  audit("admin", "create_subscription_group", group.id, { name: group.name });
+  res.json(group);
+});
+
+app.put("/api/subscription-groups/:id", (req, res) => {
+  const group = (state.subscriptionGroups || []).find((row) => row.id === req.params.id);
+  if (!group) return res.status(404).json({ error: "group not found" });
+  Object.assign(group, normalizeSubscriptionGroup(req.body || {}, group));
+  saveState();
+  audit("admin", "update_subscription_group", group.id, { name: group.name });
+  res.json(group);
+});
+
+app.delete("/api/subscription-groups/:id", (req, res) => {
+  const before = state.subscriptionGroups || [];
+  const group = before.find((row) => row.id === req.params.id);
+  if (!group) return res.status(404).json({ error: "group not found" });
+  state.subscriptionGroups = before.filter((row) => row.id !== req.params.id);
+  saveState();
+  audit("admin", "delete_subscription_group", req.params.id, { name: group.name });
+  res.json({ ok: true });
 });
 
 app.get("/api/probe-tasks", (_, res) => res.json(publicProbeTasks()));
@@ -1860,7 +2044,23 @@ app.get("/api/audit", (_, res) => {
 app.get("/sub/:token", (req, res) => {
   const token = (state.subscriptionTokens || []).find((item) => item.token === req.params.token && item.enabled !== false);
   if (!token) return res.status(404).send("subscription not found");
-  const { contentType, body } = renderSubscription(state.nodePool || [], String(req.query.format || "base64"));
+  const nodes = selectSubscriptionNodes(state.nodePool || [], token, state.subscriptionGroups || []);
+  const format = String(req.query.format || token.format || "base64");
+  const { contentType, body } = renderSubscription(nodes, format);
+  token.accessCount = Number(token.accessCount || 0) + 1;
+  token.lastAccessAt = new Date().toISOString();
+  state.subscriptionAccessLog ||= [];
+  state.subscriptionAccessLog.unshift({
+    id: nanoid(10),
+    tokenId: token.id,
+    tokenName: token.name,
+    format,
+    nodeCount: nodes.length,
+    at: token.lastAccessAt,
+    userAgent: String(req.get("user-agent") || "").slice(0, 160)
+  });
+  state.subscriptionAccessLog = state.subscriptionAccessLog.slice(0, 500);
+  saveState();
   res.setHeader("Content-Type", contentType);
   res.setHeader("Cache-Control", "no-store");
   res.send(body);
@@ -1960,7 +2160,8 @@ wss.on("connection", (ws) => {
     if (!agentId) return;
 
     if (msg.type === "heartbeat") {
-      Object.assign(state.agents[agentId], msg.status, { lastSeen: new Date().toISOString() });
+      const status = applyTrafficAccounting(agentId, msg.status || {});
+      Object.assign(state.agents[agentId], status, { lastSeen: new Date().toISOString() });
       saveState();
       emitEvent("agent", { action: "heartbeat", agent: publicAgent(state.agents[agentId]) });
       emitPublicProbeEvent();

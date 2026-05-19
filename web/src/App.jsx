@@ -1548,15 +1548,24 @@ function NodeWizard({ agents }) {
 function SubscriptionPage({ liveTick }) {
   const [nodes, setNodes] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
+  const [sources, setSources] = useState([]);
+  const [groups, setGroups] = useState([]);
+  const [accessLog, setAccessLog] = useState([]);
   const [importText, setImportText] = useState("");
   const [importUrl, setImportUrl] = useState("");
   const [sourceName, setSourceName] = useState("");
+  const [sourceForm, setSourceForm] = useState({ name: "", url: "", text: "", tags: "", intervalHours: 24 });
+  const [groupForm, setGroupForm] = useState({ name: "", protocols: "", tags: "", sources: "", keyword: "" });
+  const [shareForm, setShareForm] = useState({ name: "默认订阅", format: "base64", protocols: "", tags: "", sources: "", groupIds: "" });
   const [message, setMessage] = useState("");
 
   const load = () =>
     api("/api/node-pool").then((data) => {
       setNodes(data.nodes || []);
       setSubscriptions(data.subscriptions || []);
+      setSources(data.sources || []);
+      setGroups(data.groups || []);
+      setAccessLog(data.accessLog || []);
     });
 
   useEffect(() => {
@@ -1589,16 +1598,63 @@ function SubscriptionPage({ liveTick }) {
     await load();
   };
 
+  const createSource = async () => {
+    try {
+      setMessage("");
+      const response = await api("/api/subscription-sources", { method: "POST", body: JSON.stringify({ ...sourceForm, tags: sourceForm.tags, syncNow: true }) });
+      setMessage(`订阅源已保存并导入 ${response.imported} 个节点。`);
+      setSourceForm({ name: "", url: "", text: "", tags: "", intervalHours: 24 });
+      await load();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const createGroup = async () => {
+    try {
+      setMessage("");
+      await api("/api/subscription-groups", { method: "POST", body: JSON.stringify(groupForm) });
+      setGroupForm({ name: "", protocols: "", tags: "", sources: "", keyword: "" });
+      await load();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const createShare = async () => {
+    try {
+      setMessage("");
+      await api("/api/subscriptions", {
+        method: "POST",
+        body: JSON.stringify({
+          name: shareForm.name,
+          format: shareForm.format,
+          profile: { protocols: shareForm.protocols, tags: shareForm.tags, sources: shareForm.sources, groupIds: shareForm.groupIds }
+        })
+      });
+      await load();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
   return (
     <section>
+      <div className="stats">
+        <Card icon={Code2} label="节点池" value={nodes.length} hint={`${nodes.filter((node) => node.enabled).length} 个启用`} />
+        <Card icon={Upload} label="订阅源" value={sources.length} />
+        <Card icon={FolderClosed} label="分组" value={groups.length} />
+        <Card icon={Link2} label="分享链接" value={subscriptions.length} />
+      </div>
+
       <div className="grid2">
-        <Panel title="订阅输出">
+        <Panel title="分享链接">
           <div className="subscription-links">
-            {(subscriptions[0] ? [subscriptions[0]] : []).map((subscription) => (
+            {subscriptions.map((subscription) => (
               <div className="subscription-card" key={subscription.id}>
                 <div>
                   <h3>{subscription.name}</h3>
-                  <p>{nodes.filter((node) => node.enabled && node.raw).length} 个启用节点会进入输出，包含导入节点和面板新建节点。</p>
+                  <p>{subscription.format || "base64"} · 访问 {subscription.accessCount || 0} 次 · {subscription.lastAccessAt || "尚未访问"}</p>
                 </div>
                 {Object.entries(subscription.links || {}).map(([format, link]) => (
                   <div className="copy-row" key={format}>
@@ -1612,7 +1668,31 @@ function SubscriptionPage({ liveTick }) {
           </div>
           {message ? <p className="panel-message">{message}</p> : null}
         </Panel>
-        <Panel title="导入节点">
+        <Panel title="新建分享">
+          <div className="form-grid single">
+            <Field label="名称" value={shareForm.name} onChange={(value) => setShareForm((current) => ({ ...current, name: value }))} />
+            <Field label="默认格式" type="select" value={shareForm.format} onChange={(value) => setShareForm((current) => ({ ...current, format: value }))} options={[["base64", "Base64"], ["raw", "Raw"], ["clash", "Clash/Mihomo"], ["sing-box", "sing-box"]]} />
+            <Field label="协议过滤" value={shareForm.protocols} onChange={(value) => setShareForm((current) => ({ ...current, protocols: value }))} placeholder="ss,vmess,trojan,vless" />
+            <Field label="标签过滤" value={shareForm.tags} onChange={(value) => setShareForm((current) => ({ ...current, tags: value }))} />
+            <Field label="来源过滤" value={shareForm.sources} onChange={(value) => setShareForm((current) => ({ ...current, sources: value }))} placeholder="订阅源名称，逗号分隔" />
+            <Field label="分组过滤" value={shareForm.groupIds} onChange={(value) => setShareForm((current) => ({ ...current, groupIds: value }))} placeholder={groups.map((group) => group.id).join(", ")} />
+          </div>
+          <div className="actions"><button className="primary" onClick={createShare}>创建分享链接</button></div>
+        </Panel>
+      </div>
+
+      <div className="grid2">
+        <Panel title="订阅源导入">
+          <div className="form-grid single">
+            <Field label="来源名称" value={sourceForm.name} onChange={(value) => setSourceForm((current) => ({ ...current, name: value }))} />
+            <Field label="订阅 URL" value={sourceForm.url} onChange={(value) => setSourceForm((current) => ({ ...current, url: value }))} />
+            <Field label="标签" value={sourceForm.tags} onChange={(value) => setSourceForm((current) => ({ ...current, tags: value }))} placeholder="逗号分隔" />
+            <Field label="更新间隔小时" type="number" value={sourceForm.intervalHours} onChange={(value) => setSourceForm((current) => ({ ...current, intervalHours: value }))} />
+            <Field label="订阅内容" type="textarea" rows={6} value={sourceForm.text} onChange={(value) => setSourceForm((current) => ({ ...current, text: value }))} placeholder="也可以直接粘贴节点或 base64 订阅" />
+          </div>
+          <div className="actions"><button className="primary" onClick={createSource}>保存并同步</button></div>
+        </Panel>
+        <Panel title="手动导入">
           <div className="form-grid single">
             <Field label="来源名称" value={sourceName} onChange={setSourceName} placeholder="例如机场 A / 手动导入" />
             <Field label="订阅 URL" value={importUrl} onChange={setImportUrl} placeholder="支持 base64 订阅或纯文本节点链接" />
@@ -1627,6 +1707,38 @@ function SubscriptionPage({ liveTick }) {
         </Panel>
       </div>
 
+      <div className="grid2">
+        <Panel title="分组编排">
+          <div className="form-grid single">
+            <Field label="分组名称" value={groupForm.name} onChange={(value) => setGroupForm((current) => ({ ...current, name: value }))} />
+            <Field label="协议" value={groupForm.protocols} onChange={(value) => setGroupForm((current) => ({ ...current, protocols: value }))} placeholder="ss,vmess,trojan" />
+            <Field label="标签" value={groupForm.tags} onChange={(value) => setGroupForm((current) => ({ ...current, tags: value }))} />
+            <Field label="来源" value={groupForm.sources} onChange={(value) => setGroupForm((current) => ({ ...current, sources: value }))} />
+            <Field label="关键词" value={groupForm.keyword} onChange={(value) => setGroupForm((current) => ({ ...current, keyword: value }))} />
+          </div>
+          <div className="actions"><button className="primary" onClick={createGroup}>创建分组</button></div>
+        </Panel>
+        <Panel title="订阅源列表">
+          <table>
+            <thead><tr><th>名称</th><th>标签</th><th>最近同步</th><th>数量</th><th>操作</th></tr></thead>
+            <tbody>
+              {sources.map((source) => (
+                <tr key={source.id}>
+                  <td>{source.name}<div className="muted">{source.url || "手动内容"}</div></td>
+                  <td>{(source.tags || []).join(", ") || "-"}</td>
+                  <td>{source.lastSyncAt || "-"}</td>
+                  <td>{source.lastImportCount || 0}</td>
+                  <td className="actions-cell">
+                    <button className="link" onClick={async () => { await api(`/api/subscription-sources/${source.id}/sync`, { method: "POST" }); await load(); }}>同步</button>
+                    <button className="link" onClick={async () => { await api(`/api/subscription-sources/${source.id}`, { method: "DELETE" }); await load(); }}>删除</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      </div>
+
       <Panel title="统一节点池" right={<button onClick={load}><RefreshCw size={15} />刷新</button>}>
         <div className="table-scroll">
           <table>
@@ -1636,6 +1748,7 @@ function SubscriptionPage({ liveTick }) {
                 <th>来源</th>
                 <th>协议</th>
                 <th>服务器</th>
+                <th>标签</th>
                 <th>状态</th>
                 <th>更新时间</th>
                 <th>操作</th>
@@ -1650,6 +1763,7 @@ function SubscriptionPage({ liveTick }) {
                   <td>{node.source === "panel" ? "面板" : node.sourceName || "导入"}</td>
                   <td>{node.protocol}</td>
                   <td>{node.server ? `${node.server}:${node.port || ""}` : "-"}</td>
+                  <td>{(node.tags || []).join(", ") || "-"}</td>
                   <td><span className={`status-pill ${node.enabled ? "online" : ""}`}><StatusDot on={node.enabled} />{node.enabled ? "启用" : "停用"}</span></td>
                   <td>{node.updatedAt || "-"}</td>
                   <td className="actions-cell">
@@ -1663,6 +1777,23 @@ function SubscriptionPage({ liveTick }) {
           </table>
         </div>
         {!nodes.length ? <div className="empty">还没有节点。用节点配置下发一次，或从订阅链接导入。</div> : null}
+      </Panel>
+
+      <Panel title="访问统计">
+        <table>
+          <thead><tr><th>订阅</th><th>格式</th><th>节点数</th><th>时间</th><th>User-Agent</th></tr></thead>
+          <tbody>
+            {accessLog.map((row) => (
+              <tr key={row.id}>
+                <td>{row.tokenName}</td>
+                <td>{row.format}</td>
+                <td>{row.nodeCount}</td>
+                <td>{row.at}</td>
+                <td>{row.userAgent || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </Panel>
     </section>
   );

@@ -158,6 +158,11 @@ export function parseNodeImport(text, sourceName = "import") {
     });
 }
 
+function arrayFromValue(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
 export function publicNode(node) {
   return {
     id: node.id,
@@ -169,6 +174,7 @@ export function publicNode(node) {
     port: node.port || null,
     enabled: node.enabled !== false,
     tags: node.tags || [],
+    groupIds: node.groupIds || [],
     raw: node.raw || "",
     agentId: node.agentId || "",
     createdAt: node.createdAt,
@@ -187,6 +193,7 @@ export function upsertNode(nodes, patch) {
     id: current?.id || patch.id || nanoid(10),
     enabled: patch.enabled !== false,
     tags: Array.isArray(patch.tags) ? patch.tags : current?.tags || [],
+    groupIds: Array.isArray(patch.groupIds) ? patch.groupIds : current?.groupIds || [],
     createdAt: current?.createdAt || patch.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -201,7 +208,11 @@ export function createSubscriptionToken(name = "default") {
     name: String(name || "default").trim() || "default",
     token: `sub_${nanoid(32)}`,
     createdAt: new Date().toISOString(),
-    enabled: true
+    enabled: true,
+    format: "base64",
+    profile: { protocols: [], tags: [], sources: [], groupIds: [] },
+    accessCount: 0,
+    lastAccessAt: null
   };
 }
 
@@ -212,6 +223,10 @@ export function publicSubscriptionToken(token, req) {
     name: token.name,
     token: token.token,
     enabled: token.enabled !== false,
+    format: token.format || "base64",
+    profile: token.profile || { protocols: [], tags: [], sources: [], groupIds: [] },
+    accessCount: Number(token.accessCount || 0),
+    lastAccessAt: token.lastAccessAt || null,
     createdAt: token.createdAt,
     links: {
       base64: `${origin}/sub/${token.token}`,
@@ -220,6 +235,91 @@ export function publicSubscriptionToken(token, req) {
       singbox: `${origin}/sub/${token.token}?format=sing-box`
     }
   };
+}
+
+export function normalizeSubscriptionToken(input = {}, current = {}) {
+  const profile = input.profile || current.profile || {};
+  return {
+    ...current,
+    id: current.id || input.id || nanoid(10),
+    name: String(input.name ?? current.name ?? "订阅").trim() || "订阅",
+    token: current.token || input.token || `sub_${nanoid(32)}`,
+    enabled: input.enabled ?? current.enabled ?? true,
+    format: String(input.format ?? current.format ?? "base64").trim() || "base64",
+    profile: {
+      protocols: arrayFromValue(profile.protocols),
+      tags: arrayFromValue(profile.tags),
+      sources: arrayFromValue(profile.sources),
+      groupIds: arrayFromValue(profile.groupIds)
+    },
+    createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    accessCount: Number(current.accessCount || 0),
+    lastAccessAt: current.lastAccessAt || null
+  };
+}
+
+export function normalizeSubscriptionSource(input = {}, current = {}) {
+  return {
+    ...current,
+    id: current.id || input.id || nanoid(10),
+    name: String(input.name ?? current.name ?? "订阅源").trim() || "订阅源",
+    url: String(input.url ?? current.url ?? "").trim(),
+    text: String(input.text ?? current.text ?? ""),
+    tags: arrayFromValue(input.tags ?? current.tags),
+    intervalHours: Math.max(0, Number(input.intervalHours ?? current.intervalHours ?? 24) || 0),
+    enabled: input.enabled ?? current.enabled ?? true,
+    createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastSyncAt: current.lastSyncAt || null,
+    lastImportCount: Number(current.lastImportCount || 0),
+    lastError: current.lastError || ""
+  };
+}
+
+export function normalizeSubscriptionGroup(input = {}, current = {}) {
+  return {
+    ...current,
+    id: current.id || input.id || nanoid(10),
+    name: String(input.name ?? current.name ?? "默认分组").trim() || "默认分组",
+    protocols: arrayFromValue(input.protocols ?? current.protocols),
+    tags: arrayFromValue(input.tags ?? current.tags),
+    sources: arrayFromValue(input.sources ?? current.sources),
+    keyword: String(input.keyword ?? current.keyword ?? "").trim(),
+    sort: String(input.sort ?? current.sort ?? "name").trim() || "name",
+    enabled: input.enabled ?? current.enabled ?? true,
+    createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function matchesEveryFilter(node, filters = {}) {
+  const protocols = arrayFromValue(filters.protocols);
+  const tags = arrayFromValue(filters.tags);
+  const sources = arrayFromValue(filters.sources);
+  const groupIds = arrayFromValue(filters.groupIds);
+  const keyword = String(filters.keyword || "").trim().toLowerCase();
+  if (protocols.length && !protocols.includes(node.protocol)) return false;
+  if (tags.length && !tags.some((tag) => (node.tags || []).includes(tag))) return false;
+  if (sources.length && !sources.includes(node.sourceName || node.source || "")) return false;
+  if (groupIds.length && !groupIds.some((id) => (node.groupIds || []).includes(id))) return false;
+  if (keyword && ![node.name, node.protocol, node.server, node.sourceName, ...(node.tags || [])].join(" ").toLowerCase().includes(keyword)) return false;
+  return true;
+}
+
+export function selectSubscriptionNodes(nodes = [], token = {}, groups = []) {
+  let selected = nodes.filter((node) => node.enabled !== false && node.raw);
+  const tokenProfile = token.profile || {};
+  const tokenGroupIds = arrayFromValue(tokenProfile.groupIds);
+  const directTokenFilters = { ...tokenProfile, groupIds: [] };
+  if (Object.values(directTokenFilters).some((value) => arrayFromValue(value).length)) {
+    selected = selected.filter((node) => matchesEveryFilter(node, directTokenFilters));
+  }
+  const activeGroups = groups.filter((group) => group.enabled !== false && (!tokenGroupIds.length || tokenGroupIds.includes(group.id)));
+  if (activeGroups.length) {
+    selected = selected.filter((node) => activeGroups.some((group) => matchesEveryFilter(node, group)));
+  }
+  return selected.sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
 export function buildPanelNode(agent, input = {}) {
