@@ -59,6 +59,7 @@ const navGroups = [
       ["probeManage", SlidersHorizontal, "探针管理"],
       ["nodes", Code2, "节点配置"],
       ["subscriptions", Link2, "订阅分发"],
+      ["memos", BookOpen, "Memos 笔记"],
       ["forward", PlugZap, "端口转发"],
       ["files", FolderSync, "文件对传"],
       ["credentials", KeyRound, "凭据管理"],
@@ -1884,6 +1885,204 @@ function SubscriptionPage({ liveTick }) {
   );
 }
 
+function MemoText({ content = "" }) {
+  const lines = String(content || "").split(/\r?\n/);
+  return (
+    <div className="memo-text">
+      {lines.map((line, index) => {
+        const trimmed = line.trim();
+        if (!trimmed) return <br key={index} />;
+        if (/^#{1,3}\s+/.test(trimmed)) return <h3 key={index}>{trimmed.replace(/^#{1,3}\s+/, "")}</h3>;
+        if (/^[-*]\s+/.test(trimmed)) return <p key={index} className="memo-bullet">{trimmed.replace(/^[-*]\s+/, "")}</p>;
+        return (
+          <p key={index}>
+            {line.split(/(#[\p{L}\p{N}_-]{1,48}|https?:\/\/[^\s]+)/gu).map((part, partIndex) => {
+              if (/^https?:\/\//.test(part)) return <a key={partIndex} href={part} target="_blank" rel="noreferrer">{part}</a>;
+              if (/^#/.test(part)) return <span className="memo-tag-inline" key={partIndex}>{part}</span>;
+              return <React.Fragment key={partIndex}>{part}</React.Fragment>;
+            })}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+function MemoAttachment({ file }) {
+  const url = fileDownloadUrl(`/api/memos/files/${file.id}/download`);
+  const type = String(file.type || "");
+  if (type.startsWith("image/")) return <a className="memo-attachment image" href={url} target="_blank" rel="noreferrer"><img src={url} alt={file.name} /><span>{file.name}</span></a>;
+  if (type.startsWith("audio/")) return <div className="memo-attachment"><span>{file.name}</span><audio controls src={url} /></div>;
+  if (type.startsWith("video/")) return <div className="memo-attachment"><video controls src={url} /><span>{file.name}</span></div>;
+  if (type === "application/pdf") return <a className="memo-attachment" href={url} target="_blank" rel="noreferrer"><BookOpen size={16} />{file.name}</a>;
+  return <a className="memo-attachment" href={url} target="_blank" rel="noreferrer"><Download size={16} />{file.name}<small>{formatBytes(file.size)}</small></a>;
+}
+
+function MemosPage({ liveTick }) {
+  const [memos, setMemos] = useState([]);
+  const [files, setFiles] = useState([]);
+  const [stats, setStats] = useState({});
+  const [draft, setDraft] = useState("");
+  const [visibility, setVisibility] = useState("private");
+  const [attached, setAttached] = useState([]);
+  const [query, setQuery] = useState("");
+  const [tag, setTag] = useState("");
+  const [archived, setArchived] = useState(false);
+  const [message, setMessage] = useState("");
+  const fileInput = useRef(null);
+
+  const load = () => {
+    const params = new URLSearchParams();
+    if (query) params.set("q", query);
+    if (tag) params.set("tag", tag);
+    if (archived) params.set("archived", "1");
+    return api(`/api/memos${params.toString() ? `?${params}` : ""}`).then((data) => {
+      setMemos(data.memos || []);
+      setFiles(data.files || []);
+      setStats(data.stats || {});
+    });
+  };
+
+  useEffect(() => {
+    load().catch(() => {});
+  }, [liveTick, query, tag, archived]);
+
+  const uploadFiles = async (selected) => {
+    const uploaded = [];
+    for (const file of Array.from(selected || [])) {
+      const result = await api(`/api/memos/files?name=${encodeURIComponent(file.name)}&type=${encodeURIComponent(file.type || "application/octet-stream")}`, {
+        method: "POST",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: await file.arrayBuffer()
+      });
+      uploaded.push(result);
+    }
+    setAttached((current) => [...current, ...uploaded]);
+    setMessage(`已上传 ${uploaded.length} 个文件。`);
+    await load();
+  };
+
+  const createMemo = async () => {
+    try {
+      setMessage("");
+      const memo = await api("/api/memos", {
+        method: "POST",
+        body: JSON.stringify({ content: draft, visibility, fileIds: attached.map((file) => file.id) })
+      });
+      setDraft("");
+      setAttached([]);
+      setVisibility("private");
+      setMessage(`已保存笔记：${memo.tags.length ? memo.tags.map((item) => `#${item}`).join(" ") : "无标签"}`);
+      await load();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const patchMemo = async (memo, patch) => {
+    await api(`/api/memos/${memo.id}`, { method: "PUT", body: JSON.stringify(patch) });
+    await load();
+  };
+
+  const deleteMemo = async (memo) => {
+    if (!window.confirm(`删除这条笔记吗？`)) return;
+    await api(`/api/memos/${memo.id}`, { method: "DELETE" });
+    await load();
+  };
+
+  const deleteFile = async (file) => {
+    if (!window.confirm(`删除附件 ${file.name} 吗？`)) return;
+    await api(`/api/memos/files/${file.id}?force=1`, { method: "DELETE" });
+    setAttached((current) => current.filter((item) => item.id !== file.id));
+    await load();
+  };
+
+  const tags = Object.entries(stats.tags || {}).sort((a, b) => b[1] - a[1]);
+
+  return (
+    <section>
+      <div className="stats">
+        <Card icon={BookOpen} label="笔记" value={stats.active || 0} hint={`${stats.total || 0} 条总记录`} />
+        <Card icon={Upload} label="附件" value={stats.files || 0} hint={formatBytes(stats.bytes || 0)} />
+        <Card icon={Shield} label="私有优先" value="Memos" hint="登录后台可见" />
+        <Card icon={Search} label="标签" value={tags.length} hint={tags.slice(0, 3).map(([name]) => `#${name}`).join(" ") || "输入 #tag 自动生成"} />
+      </div>
+
+      <div className="memo-shell">
+        <Panel title="快速记录" right={<button onClick={() => fileInput.current?.click()}><Upload size={16} />上传附件</button>}>
+          <div className="memo-composer">
+            <textarea rows={8} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="写点什么，支持 #标签、链接、列表和标题。附件可以一起保存。" />
+            <input ref={fileInput} type="file" multiple onChange={(event) => uploadFiles(event.target.files).catch((error) => setMessage(error.message))} hidden />
+            {attached.length ? (
+              <div className="memo-attachments">
+                {attached.map((file) => (
+                  <span key={file.id}>{file.name}<button className="link" onClick={() => setAttached((current) => current.filter((item) => item.id !== file.id))}>移除</button></span>
+                ))}
+              </div>
+            ) : null}
+            <div className="actions">
+              <Field label="可见性" type="select" value={visibility} onChange={setVisibility} options={[["private", "私有"], ["workspace", "工作区"], ["public", "公开"]]} />
+              <button className="primary" onClick={createMemo}><Save size={16} />保存笔记</button>
+              {message ? <span className="panel-message inline">{message}</span> : null}
+            </div>
+          </div>
+        </Panel>
+
+        <div className="memo-side">
+          <Panel title="筛选">
+            <div className="memo-filter">
+              <Field label="搜索" value={query} onChange={setQuery} placeholder="内容 / 标签" />
+              <label className="check-row"><input type="checkbox" checked={archived} onChange={(event) => setArchived(event.target.checked)} />包含归档</label>
+              <div className="tag-list">
+                <button className={!tag ? "primary" : ""} onClick={() => setTag("")}>全部</button>
+                {tags.map(([name, count]) => (
+                  <button key={name} onClick={() => setTag(name)} className={tag === name ? "primary" : ""}>#{name}<small>{count}</small></button>
+                ))}
+              </div>
+            </div>
+          </Panel>
+        </div>
+      </div>
+
+      <div className="memo-layout">
+        <div className="memo-list">
+          {memos.map((memo) => (
+            <article className={`memo-card ${memo.pinned ? "pinned" : ""}`} key={memo.id}>
+              <div className="memo-card-head">
+                <span>{memo.visibility}</span>
+                <time>{formatTimeAgo(memo.updatedAt || memo.createdAt)}</time>
+              </div>
+              <MemoText content={memo.content} />
+              {memo.files?.length ? <div className="memo-attachments grid">{memo.files.map((file) => <MemoAttachment key={file.id} file={file} />)}</div> : null}
+              <div className="memo-card-foot">
+                <div>{(memo.tags || []).map((item) => <button key={item} className="memo-tag" onClick={() => setTag(item)}>#{item}</button>)}</div>
+                <div className="actions-cell">
+                  <button className="link" onClick={() => patchMemo(memo, { pinned: !memo.pinned })}>{memo.pinned ? "取消置顶" : "置顶"}</button>
+                  <button className="link" onClick={() => patchMemo(memo, { archived: !memo.archived })}>{memo.archived ? "恢复" : "归档"}</button>
+                  <button className="link danger" onClick={() => deleteMemo(memo)}>删除</button>
+                </div>
+              </div>
+            </article>
+          ))}
+          {!memos.length ? <div className="empty">还没有笔记。写下第一条，或者先上传附件。</div> : null}
+        </div>
+
+        <Panel title="附件库">
+          <div className="memo-file-list">
+            {files.map((file) => (
+              <div key={file.id} className="memo-file-row">
+                <MemoAttachment file={file} />
+                <button className="link danger" onClick={() => deleteFile(file)}><Trash2 size={15} />删除</button>
+              </div>
+            ))}
+            {!files.length ? <div className="empty">暂无附件。</div> : null}
+          </div>
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
 function ProbeManagePage({ liveTick, agents }) {
   const empty = { displayName: "", region: "", group: "默认", flag: "", osLabel: "", price: "", billing: "", expireText: "", trafficLimitGb: "", displayOrder: 0, note: "", tags: "", hidden: false };
   const [rows, setRows] = useState([]);
@@ -2725,6 +2924,7 @@ function App() {
     if (page === "servers") return <Servers agents={agents} openAgent={openAgent} openSsh={openSsh} openDesktop={openDesktop} openFiles={openFiles} />;
     if (page === "nodes") return <NodeWizard agents={agents} />;
     if (page === "subscriptions") return <SubscriptionPage liveTick={liveTick} />;
+    if (page === "memos") return <MemosPage liveTick={liveTick} />;
     if (page === "forward") return <ForwardWizard agents={agents} />;
     if (page === "probeManage") return <ProbeManagePage liveTick={liveTick} agents={agents} />;
     if (page === "probeTasks") return <ProbeTasksPage agents={agents} liveTick={liveTick} />;

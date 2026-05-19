@@ -1,17 +1,20 @@
 :root {
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  color: #172033;
-  background: #f7f8fa;
-  --panel: #ffffff;
-  --line: #e5e7eb;
-  --text-soft: #64748b;
-  --text-muted: #94a3b8;
+  color: #17191f;
+  background: #f3f6f8;
+  --panel: rgba(255, 255, 255, 0.92);
+  --line: #dfe6ea;
+  --text-soft: #60707f;
+  --text-muted: #91a0ac;
   --blue: #2563eb;
-  --green: #159a5b;
-  --amber: #c47a13;
-  --violet: #6d5bd0;
-  --red: #d64550;
-  --shadow: none;
+  --green: #10a37f;
+  --amber: #d98519;
+  --violet: #775cff;
+  --red: #e5484d;
+  --ink: #101419;
+  --accent: #10a37f;
+  --accent-2: #ff4d8d;
+  --shadow: 0 18px 45px rgba(17, 24, 39, 0.08);
 }
 
 * {
@@ -38,8 +41,11 @@ textarea {
 
 .sidebar {
   width: 216px;
-  background: #111827;
-  color: #cbd5e1;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(16, 163, 127, 0.28), transparent 34%),
+    radial-gradient(circle at 100% 18%, rgba(255, 77, 141, 0.18), transparent 32%),
+    #101419;
+  color: #c7d1d8;
   position: fixed;
   inset: 0 auto 0 0;
   border-right: 1px solid #0f172a;
@@ -55,7 +61,7 @@ textarea {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .nav-section {
@@ -88,8 +94,9 @@ textarea {
 
 .sidebar button.active,
 .sidebar button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.1);
   color: #ffffff;
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .main {
@@ -100,7 +107,8 @@ textarea {
 
 .topbar {
   height: 64px;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(18px);
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
@@ -132,7 +140,11 @@ textarea {
 }
 
 section {
-  padding: 20px 24px;
+  padding: 22px 26px;
+  background:
+    radial-gradient(circle at 88% 4%, rgba(16, 163, 127, 0.1), transparent 24%),
+    radial-gradient(circle at 18% 22%, rgba(119, 92, 255, 0.08), transparent 22%),
+    #f3f6f8;
 }
 
 .login-page,
@@ -667,7 +679,7 @@ section {
 .guide-card {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 12px;
   box-shadow: var(--shadow);
 }
 
@@ -746,9 +758,9 @@ input,
 select,
 textarea {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   color: #1f2a37;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.94);
   padding: 0 12px;
 }
 
@@ -764,10 +776,10 @@ textarea {
 button,
 .button-link {
   height: 36px;
-  border-radius: 8px;
+  border-radius: 10px;
   border: 1px solid var(--line);
-  background: #ffffff;
-  color: #30455a;
+  background: rgba(255, 255, 255, 0.92);
+  color: #243444;
   padding: 0 12px;
   cursor: pointer;
   display: inline-flex;
@@ -778,8 +790,9 @@ button,
 
 button:hover,
 .button-link:hover {
-  border-color: #94a3b8;
-  color: #172033;
+  border-color: #9acfc1;
+  color: #101419;
+  transform: translateY(-1px);
 }
 
 button:disabled {
@@ -788,9 +801,10 @@ button:disabled {
 }
 
 .primary {
-  background: #172033;
+  background: linear-gradient(135deg, #101419, #184d43);
   color: #fff;
-  border-color: #172033;
+  border-color: #101419;
+  box-shadow: 0 10px 26px rgba(16, 163, 127, 0.18);
 }
 
 .green-bg {
@@ -1386,6 +1400,176 @@ textarea {
   color: #b42318;
 }
 
+.memo-shell,
+.memo-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.55fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.memo-composer {
+  padding: 18px;
+}
+
+.memo-composer textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 180px;
+  line-height: 1.6;
+  font-size: 15px;
+}
+
+.memo-side {
+  min-width: 0;
+}
+
+.memo-filter {
+  padding: 16px;
+}
+
+.memo-list {
+  min-width: 0;
+}
+
+.memo-card {
+  margin-bottom: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: var(--shadow);
+}
+
+.memo-card.pinned {
+  border-color: rgba(16, 163, 127, 0.45);
+  box-shadow: 0 18px 44px rgba(16, 163, 127, 0.12);
+}
+
+.memo-card-head,
+.memo-card-foot,
+.memo-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memo-card-head {
+  margin-bottom: 10px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.memo-card-head span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #edf7f4;
+  color: #08735d;
+  font-weight: 700;
+}
+
+.memo-text {
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.memo-text p,
+.memo-text h3 {
+  margin: 8px 0;
+}
+
+.memo-text h3 {
+  font-size: 18px;
+}
+
+.memo-bullet::before {
+  content: "-";
+  margin-right: 8px;
+  color: var(--accent);
+}
+
+.memo-tag,
+.memo-tag-inline {
+  color: #08735d;
+  font-weight: 700;
+}
+
+.memo-tag {
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+}
+
+.memo-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.memo-attachments.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.memo-attachments > span,
+.memo-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: #243444;
+  text-decoration: none;
+}
+
+.memo-attachment {
+  width: 100%;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
+.memo-attachment.image {
+  display: grid;
+  gap: 8px;
+}
+
+.memo-attachment img,
+.memo-attachment video {
+  width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.memo-attachment audio {
+  width: min(260px, 100%);
+}
+
+.memo-attachment small {
+  margin-left: auto;
+  color: var(--text-soft);
+}
+
+.memo-file-list {
+  padding: 12px;
+}
+
+.memo-file-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel-message.inline {
+  margin: 0;
+  padding: 0;
+}
+
 .icon-btn {
   width: 38px;
   min-width: 38px;
@@ -1558,6 +1742,17 @@ code {
 
   .copy-row {
     grid-template-columns: 1fr;
+  }
+
+  .memo-shell,
+  .memo-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .memo-card-foot,
+  .memo-file-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   table {

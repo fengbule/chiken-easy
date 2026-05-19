@@ -32,8 +32,10 @@ const dataDir = path.join(root, "data");
 const webDist = path.join(root, "dist");
 const stateFile = path.join(dataDir, "state.json");
 const auditFile = path.join(dataDir, "audit.jsonl");
+const memoFileDir = path.join(dataDir, "memos", "files");
 
 fs.mkdirSync(dataDir, { recursive: true });
+fs.mkdirSync(memoFileDir, { recursive: true });
 
 const builtinCommands = [
   { id: "status", label: "查询 sing-box 状态", type: "service", action: "status", builtin: true },
@@ -97,7 +99,9 @@ const defaultState = {
   subscriptionTokens: [],
   subscriptionSources: [],
   subscriptionGroups: [],
-  subscriptionAccessLog: []
+  subscriptionAccessLog: [],
+  memos: [],
+  memoFiles: []
 };
 
 const clients = new Map();
@@ -174,7 +178,9 @@ function loadState() {
     subscriptionTokens: raw.subscriptionTokens || [],
     subscriptionSources: raw.subscriptionSources || [],
     subscriptionGroups: raw.subscriptionGroups || [],
-    subscriptionAccessLog: raw.subscriptionAccessLog || []
+    subscriptionAccessLog: raw.subscriptionAccessLog || [],
+    memos: raw.memos || [],
+    memoFiles: raw.memoFiles || []
   };
 }
 
@@ -277,6 +283,70 @@ function audit(actor, action, target, detail = {}) {
   fs.appendFileSync(auditFile, JSON.stringify(row) + "\n");
   emitEvent("audit", row);
   return row;
+}
+
+function arrayFromInput(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function memoTags(content = "", tags = []) {
+  const fromContent = [...String(content || "").matchAll(/(^|\s)#([\p{L}\p{N}_-]{1,48})/gu)].map((match) => match[2]);
+  return [...new Set([...arrayFromInput(tags), ...fromContent])];
+}
+
+function safeFileName(value = "file") {
+  const fallback = "file";
+  const parsed = path.basename(String(value || fallback)).replace(/[<>:"/\\|?*\x00-\x1F]+/g, "_").trim();
+  return (parsed || fallback).slice(0, 180);
+}
+
+function memoFilePath(file) {
+  const target = path.resolve(memoFileDir, file.storedName || "");
+  if (!target.startsWith(path.resolve(memoFileDir))) throw new Error("invalid file path");
+  return target;
+}
+
+function publicMemoFile(file, req) {
+  return {
+    id: file.id,
+    name: file.name,
+    type: file.type || "application/octet-stream",
+    size: Number(file.size || 0),
+    createdAt: file.createdAt,
+    url: `${req.protocol}://${req.get("host")}/api/memos/files/${file.id}/download`
+  };
+}
+
+function publicMemo(memo, req) {
+  const files = (state.memoFiles || []).filter((file) => (memo.fileIds || []).includes(file.id));
+  return {
+    id: memo.id,
+    content: memo.content || "",
+    tags: memo.tags || [],
+    visibility: memo.visibility || "private",
+    pinned: Boolean(memo.pinned),
+    archived: Boolean(memo.archived),
+    fileIds: memo.fileIds || [],
+    files: files.map((file) => publicMemoFile(file, req)),
+    createdAt: memo.createdAt,
+    updatedAt: memo.updatedAt
+  };
+}
+
+function memoStats() {
+  const active = (state.memos || []).filter((memo) => !memo.archived);
+  const files = state.memoFiles || [];
+  const tags = {};
+  for (const memo of active) for (const tag of memo.tags || []) tags[tag] = (tags[tag] || 0) + 1;
+  return {
+    total: state.memos?.length || 0,
+    active: active.length,
+    pinned: active.filter((memo) => memo.pinned).length,
+    files: files.length,
+    bytes: files.reduce((sum, file) => sum + Number(file.size || 0), 0),
+    tags
+  };
 }
 
 function getAgent(agentId) {
@@ -1132,6 +1202,117 @@ app.post("/api/auth/logout", (req, res) => {
       saveState();
     }
   }
+  res.json({ ok: true });
+});
+
+app.get("/api/memos", (req, res) => {
+  const query = String(req.query.q || "").trim().toLowerCase();
+  const tag = String(req.query.tag || "").trim();
+  const visibility = String(req.query.visibility || "").trim();
+  const includeArchived = req.query.archived === "1";
+  let rows = [...(state.memos || [])];
+  if (!includeArchived) rows = rows.filter((memo) => !memo.archived);
+  if (query) rows = rows.filter((memo) => [memo.content, ...(memo.tags || [])].join(" ").toLowerCase().includes(query));
+  if (tag) rows = rows.filter((memo) => (memo.tags || []).includes(tag));
+  if (visibility) rows = rows.filter((memo) => memo.visibility === visibility);
+  rows.sort((a, b) => Number(b.pinned) - Number(a.pinned) || Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""));
+  res.json({ memos: rows.map((memo) => publicMemo(memo, req)), files: (state.memoFiles || []).map((file) => publicMemoFile(file, req)), stats: memoStats() });
+});
+
+app.post("/api/memos", (req, res) => {
+  const content = cleanText(req.body?.content, "", 20000);
+  if (!content && !arrayFromInput(req.body?.fileIds).length) return res.status(400).json({ error: "content or files required" });
+  const validFiles = new Set((state.memoFiles || []).map((file) => file.id));
+  const memo = {
+    id: nanoid(12),
+    content,
+    tags: memoTags(content, req.body?.tags),
+    visibility: ["private", "workspace", "public"].includes(req.body?.visibility) ? req.body.visibility : "private",
+    pinned: Boolean(req.body?.pinned),
+    archived: false,
+    fileIds: arrayFromInput(req.body?.fileIds).filter((id) => validFiles.has(id)),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  state.memos ||= [];
+  state.memos.unshift(memo);
+  saveState();
+  audit("admin", "create_memo", memo.id, { files: memo.fileIds.length, tags: memo.tags });
+  res.json(publicMemo(memo, req));
+});
+
+app.put("/api/memos/:id", (req, res) => {
+  const memo = (state.memos || []).find((row) => row.id === req.params.id);
+  if (!memo) return res.status(404).json({ error: "memo not found" });
+  const validFiles = new Set((state.memoFiles || []).map((file) => file.id));
+  if ("content" in (req.body || {})) memo.content = cleanText(req.body.content, "", 20000);
+  if ("visibility" in (req.body || {}) && ["private", "workspace", "public"].includes(req.body.visibility)) memo.visibility = req.body.visibility;
+  if ("pinned" in (req.body || {})) memo.pinned = Boolean(req.body.pinned);
+  if ("archived" in (req.body || {})) memo.archived = Boolean(req.body.archived);
+  if ("fileIds" in (req.body || {})) memo.fileIds = arrayFromInput(req.body.fileIds).filter((id) => validFiles.has(id));
+  memo.tags = memoTags(memo.content, req.body?.tags ?? memo.tags);
+  memo.updatedAt = new Date().toISOString();
+  saveState();
+  audit("admin", "update_memo", memo.id, { pinned: memo.pinned, archived: memo.archived });
+  res.json(publicMemo(memo, req));
+});
+
+app.delete("/api/memos/:id", (req, res) => {
+  const memo = (state.memos || []).find((row) => row.id === req.params.id);
+  if (!memo) return res.status(404).json({ error: "memo not found" });
+  state.memos = (state.memos || []).filter((row) => row.id !== req.params.id);
+  saveState();
+  audit("admin", "delete_memo", memo.id, { files: memo.fileIds?.length || 0 });
+  res.json({ ok: true });
+});
+
+app.post("/api/memos/files", express.raw({ type: "*/*", limit: "200mb" }), (req, res) => {
+  const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from([]);
+  if (!buffer.length) return res.status(400).json({ error: "empty file" });
+  const name = safeFileName(req.query.name || req.get("x-file-name") || "file");
+  const type = cleanText(req.query.type || req.get("content-type") || "application/octet-stream", "application/octet-stream", 160);
+  const id = nanoid(16);
+  const ext = path.extname(name).slice(0, 16);
+  const file = {
+    id,
+    name,
+    type,
+    size: buffer.length,
+    storedName: `${id}${ext}`,
+    createdAt: new Date().toISOString()
+  };
+  fs.writeFileSync(memoFilePath(file), buffer);
+  state.memoFiles ||= [];
+  state.memoFiles.unshift(file);
+  saveState();
+  audit("admin", "upload_memo_file", id, { name, size: file.size, type });
+  res.json(publicMemoFile(file, req));
+});
+
+app.get("/api/memos/files/:id/download", (req, res) => {
+  const file = (state.memoFiles || []).find((row) => row.id === req.params.id);
+  if (!file) return res.status(404).send("file not found");
+  const target = memoFilePath(file);
+  if (!fs.existsSync(target)) return res.status(404).send("file missing");
+  res.setHeader("Content-Type", file.type || "application/octet-stream");
+  res.setHeader("Content-Length", String(file.size || fs.statSync(target).size));
+  res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(file.name || "file")}`);
+  fs.createReadStream(target).pipe(res);
+});
+
+app.delete("/api/memos/files/:id", (req, res) => {
+  const file = (state.memoFiles || []).find((row) => row.id === req.params.id);
+  if (!file) return res.status(404).json({ error: "file not found" });
+  const inUse = (state.memos || []).some((memo) => (memo.fileIds || []).includes(file.id));
+  if (inUse && req.query.force !== "1") return res.status(409).json({ error: "file is attached to a memo" });
+  try {
+    const target = memoFilePath(file);
+    if (fs.existsSync(target)) fs.unlinkSync(target);
+  } catch {}
+  state.memoFiles = (state.memoFiles || []).filter((row) => row.id !== file.id);
+  for (const memo of state.memos || []) memo.fileIds = (memo.fileIds || []).filter((id) => id !== file.id);
+  saveState();
+  audit("admin", "delete_memo_file", file.id, { name: file.name });
   res.json({ ok: true });
 });
 
