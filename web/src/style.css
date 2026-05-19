@@ -1248,6 +1248,51 @@ textarea {
   grid-template-columns: minmax(620px, 1.05fr) minmax(420px, 0.95fr);
 }
 
+.monitor-module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+  padding: 18px;
+}
+
+.monitor-module-card {
+  height: 104px;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  grid-template-rows: auto 1fr;
+  align-items: start;
+  gap: 6px 10px;
+  padding: 14px;
+  text-align: left;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.monitor-module-card span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #172033;
+  font-weight: 700;
+}
+
+.monitor-module-card small {
+  grid-column: 1 / -1;
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+
+.monitor-module-card.active {
+  border-color: #9aa1aa;
+  background: #f6f7f8;
+}
+
+.monitor-module-body > section.embedded-section {
+  padding: 0;
+}
+
 .subscription-links {
   padding: 20px;
 }

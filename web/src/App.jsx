@@ -54,48 +54,17 @@ const URL_TOKEN_PARAM = "token";
 const navGroups = [
   {
     items: [
-      ["servers", Monitor, "服务器"],
       ["dashboard", Activity, "概览"],
-      ["probeManage", SlidersHorizontal, "探针管理"]
-    ]
-  },
-  {
-    title: "设置",
-    icon: Settings,
-    items: [
-      ["siteSettings", House, "站点"],
-      ["themeManage", Palette, "主题管理"],
-      ["loginSettings", LogIn, "登录"],
-      ["notifySettings", Bell, "通知"],
-      ["generalSettings", MoreHorizontal, "通用"]
-    ]
-  },
-  {
-    title: "通知",
-    icon: Bell,
-    items: [
-      ["offlineNotify", Unplug, "离线通知"],
-      ["loadNotify", TrendingUp, "负载通知"],
-      ["notifyGeneral", MoreHorizontal, "通用"]
-    ]
-  },
-  {
-    items: [
-      ["commands", Code2, "远程执行"],
-      ["probeTasks", RadioTower, "延迟监测"],
-      ["sessions", Users, "会话管理"],
-      ["account", UserCircle, "账户"],
-      ["audit", ClipboardList, "日志"],
-      ["about", AtSign, "关于"],
-      ["docs", BookOpen, "文档"],
-      ["home", Home, "主页"],
-      ["defaultTheme", Palette, "默认主题设置"],
+      ["servers", Monitor, "服务器"],
+      ["probeManage", SlidersHorizontal, "探针管理"],
       ["nodes", Code2, "节点配置"],
       ["subscriptions", Link2, "订阅分发"],
       ["forward", PlugZap, "端口转发"],
       ["files", FolderSync, "文件对传"],
       ["credentials", KeyRound, "凭据管理"],
-      ["tokens", HardDriveDownload, "API Token"]
+      ["tokens", HardDriveDownload, "API Token"],
+      ["audit", ClipboardList, "审计日志"],
+      ["settings", Settings, "使用说明"]
     ]
   }
 ];
@@ -1699,12 +1668,13 @@ function SubscriptionPage({ liveTick }) {
   );
 }
 
-function ProbeManagePage({ liveTick }) {
+function ProbeManagePage({ liveTick, agents }) {
   const empty = { displayName: "", region: "", group: "默认", flag: "", osLabel: "", price: "", billing: "", expireText: "", trafficLimitGb: "", displayOrder: 0, note: "", tags: "", hidden: false };
   const [rows, setRows] = useState([]);
   const [selectedId, setSelectedId] = useState("");
   const [form, setForm] = useState(empty);
   const [message, setMessage] = useState("");
+  const [module, setModule] = useState("profiles");
 
   const load = async () => {
     const data = await api("/api/probe-settings");
@@ -1761,69 +1731,121 @@ function ProbeManagePage({ liveTick }) {
   };
 
   const selected = rows.find((row) => row.agent.id === selectedId);
+  const moduleCards = [
+    ["profiles", Monitor, "服务器", "编辑公开探针卡片、分组、账单与展示排序"],
+    ["site", House, "站点", "设置 Chiken Monitor 名称、公开标题与页脚"],
+    ["theme", Palette, "主题管理", "主题模式、卡片密度、强调色和顶部按钮"],
+    ["login", LogIn, "登录", "登录标题、会话有效期与密码登录开关"],
+    ["notifications", Bell, "通知", "配置通知通道、Webhook 和基础规则"],
+    ["general", MoreHorizontal, "通用", "刷新频率、默认分组和公开隐私策略"],
+    ["offlineNotify", Unplug, "离线通知", "服务器离线告警规则"],
+    ["loadNotify", TrendingUp, "负载通知", "CPU、内存、磁盘阈值告警"],
+    ["remoteExec", Code2, "远程执行", "复用命令库向在线 Agent 分发命令"],
+    ["latency", RadioTower, "延迟监测", "ICMP/TCP/HTTP 探测任务"],
+    ["sessions", Users, "会话管理", "查看和撤销后台登录会话"],
+    ["account", UserCircle, "账户", "修改管理员密码"],
+    ["logs", ClipboardList, "日志", "审计日志与操作记录"],
+    ["about", AtSign, "关于", "Chiken Monitor 与 chiken-easy 信息"],
+    ["docs", BookOpen, "文档", "常用入口和项目文档"],
+    ["home", Home, "主页", "打开公开监控主页"],
+    ["defaultTheme", Palette, "默认主题设置", "设置默认公开主题"]
+  ];
+
+  const renderModule = () => {
+    if (module === "profiles") {
+      return (
+        <div className="grid2 probe-manage-layout">
+          <Panel title="探针节点" right={<button onClick={load}><RefreshCw size={15} />刷新</button>}>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>公开名称</th>
+                    <th>分组</th>
+                    <th>地区</th>
+                    <th>账单</th>
+                    <th>公开</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.agent.id} className={selectedId === row.agent.id ? "selected-row" : ""} onClick={() => selectRow(row)}>
+                      <td><b>{row.profile.flag} {row.profile.displayName || row.agent.name}</b><div className="muted">{row.agent.os}/{row.agent.arch}</div></td>
+                      <td>{row.profile.group || "默认"}</td>
+                      <td>{row.profile.region || "-"}</td>
+                      <td>{[row.profile.price, row.profile.expireText].filter(Boolean).join(" · ") || "-"}</td>
+                      <td>{row.profile.hidden ? "隐藏" : "显示"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Panel>
+
+          <Panel title="编辑公开探针">
+            {selected ? (
+              <>
+                <div className="form-grid">
+                  <Field label="公开名称" value={form.displayName} onChange={(value) => patch("displayName", value)} />
+                  <Field label="旗标" value={form.flag} onChange={(value) => patch("flag", value)} placeholder="如 🇭🇰 / US / JP" />
+                  <Field label="分组" value={form.group} onChange={(value) => patch("group", value)} placeholder="亚洲 / 欧洲 / 美洲" />
+                  <Field label="地区" value={form.region} onChange={(value) => patch("region", value)} placeholder="香港 / 日本 / SFO" />
+                  <Field label="系统显示" value={form.osLabel} onChange={(value) => patch("osLabel", value)} placeholder="留空使用 Agent 上报系统" />
+                  <Field label="排序" type="number" value={form.displayOrder} onChange={(value) => patch("displayOrder", value)} />
+                  <Field label="价格标签" value={form.price} onChange={(value) => patch("price", value)} placeholder="$60/三年" />
+                  <Field label="到期/余量标签" value={form.expireText} onChange={(value) => patch("expireText", value)} placeholder="余1075天" />
+                  <Field label="账单备注" value={form.billing} onChange={(value) => patch("billing", value)} />
+                  <Field label="总流量 GB" type="number" value={form.trafficLimitGb} onChange={(value) => patch("trafficLimitGb", value)} placeholder="留空不显示百分比" />
+                  <Field label="标签" value={form.tags} onChange={(value) => patch("tags", value)} placeholder="英文逗号分隔" />
+                  <Field label="公开显示" type="select" value={form.hidden ? "hidden" : "visible"} onChange={(value) => patch("hidden", value === "hidden")} options={[["visible", "显示"], ["hidden", "隐藏"]]} />
+                  <Field label="卡片备注" type="textarea" rows={3} value={form.note} onChange={(value) => patch("note", value)} />
+                </div>
+                <div className="actions">
+                  <button className="primary" onClick={save}><Save size={16} />保存探针</button>
+                  <a className="button-link" href="/" target="_blank" rel="noreferrer">查看公开页</a>
+                </div>
+                {message ? <p className="panel-message">{message}</p> : null}
+              </>
+            ) : <div className="empty">还没有在线或已注册 Agent。</div>}
+          </Panel>
+        </div>
+      );
+    }
+    if (module === "site") return <MonitorSettingsPage section="site" title="站点设置" embedded />;
+    if (module === "theme" || module === "defaultTheme") return <MonitorSettingsPage section="theme" title={module === "defaultTheme" ? "默认主题设置" : "主题管理"} embedded />;
+    if (module === "login") return <MonitorSettingsPage section="login" title="登录设置" embedded />;
+    if (module === "notifications" || module === "offlineNotify" || module === "loadNotify") return <MonitorSettingsPage section="notifications" title={moduleCards.find(([id]) => id === module)?.[2] || "通知设置"} embedded />;
+    if (module === "general") return <MonitorSettingsPage section="general" title="通用设置" embedded />;
+    if (module === "remoteExec") return <CommandsPage agents={agents} liveTick={liveTick} embedded />;
+    if (module === "latency") return <ProbeTasksPage agents={agents} liveTick={liveTick} embedded />;
+    if (module === "sessions") return <SessionsPage liveTick={liveTick} embedded />;
+    if (module === "account") return <AccountPage embedded />;
+    if (module === "logs") return <Audit liveTick={liveTick} embedded />;
+    if (module === "about") return <StaticAdminPage title="关于" body="Chiken Monitor 是 chiken-easy 的监控、探测、节点控制与订阅分发后台。" embedded />;
+    if (module === "docs") return <StaticAdminPage title="文档" body="这里集中放置 Chiken Monitor 功能：服务器展示、站点设置、主题、通知、远程执行、延迟监测、会话、账户和日志。" actions={<a className="button-link" href="https://github.com/fengbule/chiken-easy" target="_blank" rel="noreferrer">打开 GitHub</a>} embedded />;
+    if (module === "home") return <StaticAdminPage title="主页" body="公开主页是 Chiken Monitor 探针面板，默认无需登录可查看服务器状态。" actions={<a className="button-link" href="/" target="_blank" rel="noreferrer">打开公开主页</a>} embedded />;
+    return null;
+  };
 
   return (
     <section>
-      <div className="grid2 probe-manage-layout">
-        <Panel title="探针节点" right={<button onClick={load}><RefreshCw size={15} />刷新</button>}>
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>公开名称</th>
-                  <th>分组</th>
-                  <th>地区</th>
-                  <th>账单</th>
-                  <th>公开</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.agent.id} className={selectedId === row.agent.id ? "selected-row" : ""} onClick={() => selectRow(row)}>
-                    <td><b>{row.profile.flag} {row.profile.displayName || row.agent.name}</b><div className="muted">{row.agent.os}/{row.agent.arch}</div></td>
-                    <td>{row.profile.group || "默认"}</td>
-                    <td>{row.profile.region || "-"}</td>
-                    <td>{[row.profile.price, row.profile.expireText].filter(Boolean).join(" · ") || "-"}</td>
-                    <td>{row.profile.hidden ? "隐藏" : "显示"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-
-        <Panel title="编辑公开探针">
-          {selected ? (
-            <>
-              <div className="form-grid">
-                <Field label="公开名称" value={form.displayName} onChange={(value) => patch("displayName", value)} />
-                <Field label="旗标" value={form.flag} onChange={(value) => patch("flag", value)} placeholder="如 🇭🇰 / US / JP" />
-                <Field label="分组" value={form.group} onChange={(value) => patch("group", value)} placeholder="亚洲 / 欧洲 / 美洲" />
-                <Field label="地区" value={form.region} onChange={(value) => patch("region", value)} placeholder="香港 / 日本 / SFO" />
-                <Field label="系统显示" value={form.osLabel} onChange={(value) => patch("osLabel", value)} placeholder="留空使用 Agent 上报系统" />
-                <Field label="排序" type="number" value={form.displayOrder} onChange={(value) => patch("displayOrder", value)} />
-                <Field label="价格标签" value={form.price} onChange={(value) => patch("price", value)} placeholder="$60/三年" />
-                <Field label="到期/余量标签" value={form.expireText} onChange={(value) => patch("expireText", value)} placeholder="余1075天" />
-                <Field label="账单备注" value={form.billing} onChange={(value) => patch("billing", value)} />
-                <Field label="总流量 GB" type="number" value={form.trafficLimitGb} onChange={(value) => patch("trafficLimitGb", value)} placeholder="留空不显示百分比" />
-                <Field label="标签" value={form.tags} onChange={(value) => patch("tags", value)} placeholder="英文逗号分隔" />
-                <Field label="公开显示" type="select" value={form.hidden ? "hidden" : "visible"} onChange={(value) => patch("hidden", value === "hidden")} options={[["visible", "显示"], ["hidden", "隐藏"]]} />
-                <Field label="卡片备注" type="textarea" rows={3} value={form.note} onChange={(value) => patch("note", value)} />
-              </div>
-              <div className="actions">
-                <button className="primary" onClick={save}><Save size={16} />保存探针</button>
-                <a className="button-link" href="/" target="_blank" rel="noreferrer">查看公开页</a>
-              </div>
-              {message ? <p className="panel-message">{message}</p> : null}
-            </>
-          ) : <div className="empty">还没有在线或已注册 Agent。</div>}
-        </Panel>
-      </div>
+      <Panel title="Chiken Monitor 功能卡片">
+        <div className="monitor-module-grid">
+          {moduleCards.map(([id, Icon, title, body]) => (
+            <button key={id} className={module === id ? "monitor-module-card active" : "monitor-module-card"} onClick={() => setModule(id)}>
+              <Icon size={19} />
+              <span>{title}</span>
+              <small>{body}</small>
+            </button>
+          ))}
+        </div>
+      </Panel>
+      <div className="monitor-module-body">{renderModule()}</div>
     </section>
   );
 }
 
-function MonitorSettingsPage({ section, title }) {
+function MonitorSettingsPage({ section, title, embedded = false }) {
   const [settings, setSettings] = useState(null);
   const [message, setMessage] = useState("");
   const load = () => api("/api/admin/settings").then(setSettings);
@@ -1879,7 +1901,7 @@ function MonitorSettingsPage({ section, title }) {
   }[section] || [];
 
   return (
-    <section>
+    <section className={embedded ? "embedded-section" : ""}>
       <Panel title={title}>
         <div className="form-grid">
           {fields.map(([key, label, type, placeholder, options]) => (
@@ -1904,14 +1926,14 @@ function MonitorSettingsPage({ section, title }) {
   );
 }
 
-function SessionsPage({ liveTick }) {
+function SessionsPage({ liveTick, embedded = false }) {
   const [rows, setRows] = useState([]);
   const load = () => api("/api/admin/sessions").then(setRows);
   useEffect(() => {
     load().catch(() => {});
   }, [liveTick]);
   return (
-    <section>
+    <section className={embedded ? "embedded-section" : ""}>
       <Panel title="会话管理" right={<button onClick={load}><RefreshCw size={15} />刷新</button>}>
         <table>
           <thead><tr><th>用户</th><th>创建时间</th><th>过期时间</th><th>状态</th><th>操作</th></tr></thead>
@@ -1932,12 +1954,12 @@ function SessionsPage({ liveTick }) {
   );
 }
 
-function AccountPage() {
+function AccountPage({ embedded = false }) {
   const [form, setForm] = useState({ oldPassword: "", newPassword: "" });
   const [message, setMessage] = useState("");
   const patch = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   return (
-    <section>
+    <section className={embedded ? "embedded-section" : ""}>
       <Panel title="账户">
         <div className="form-grid">
           <Field label="旧密码" type="password" value={form.oldPassword} onChange={(value) => patch("oldPassword", value)} />
@@ -1960,9 +1982,9 @@ function AccountPage() {
   );
 }
 
-function StaticAdminPage({ title, body, actions = null }) {
+function StaticAdminPage({ title, body, actions = null, embedded = false }) {
   return (
-    <section>
+    <section className={embedded ? "embedded-section" : ""}>
       <Panel title={title}>
         <div className="guide-card flat">
           <h3>{title}</h3>
@@ -2488,7 +2510,7 @@ function App() {
     if (page === "nodes") return <NodeWizard agents={agents} />;
     if (page === "subscriptions") return <SubscriptionPage liveTick={liveTick} />;
     if (page === "forward") return <ForwardWizard agents={agents} />;
-    if (page === "probeManage") return <ProbeManagePage liveTick={liveTick} />;
+    if (page === "probeManage") return <ProbeManagePage liveTick={liveTick} agents={agents} />;
     if (page === "probeTasks") return <ProbeTasksPage agents={agents} liveTick={liveTick} />;
     if (page === "siteSettings") return <MonitorSettingsPage section="site" title="站点设置" />;
     if (page === "themeManage") return <MonitorSettingsPage section="theme" title="主题管理" />;
