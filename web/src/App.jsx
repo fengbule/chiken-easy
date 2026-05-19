@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
+  AtSign,
+  Bell,
+  BookOpen,
   ClipboardList,
   Code2,
   Clock3,
@@ -12,11 +15,18 @@ import {
   Gauge,
   HardDriveDownload,
   HardDrive,
+  Home,
+  House,
   KeyRound,
   Link2,
   Laptop,
+  LogIn,
+  Menu,
   MemoryStick,
   Monitor,
+  MoreHorizontal,
+  Palette,
+  RadioTower,
   PlugZap,
   RefreshCw,
   RotateCcw,
@@ -24,11 +34,16 @@ import {
   Search,
   Send,
   Settings,
+  Shield,
   Shuffle,
   SlidersHorizontal,
   Terminal,
+  TrendingUp,
   Trash2,
+  Unplug,
   Upload,
+  UserCircle,
+  Users,
   Wifi
 } from "lucide-react";
 import "./style.css";
@@ -36,21 +51,56 @@ import "./style.css";
 const TOKEN_KEY = "chiken_api_token";
 const URL_TOKEN_PARAM = "token";
 
-const nav = [
-  ["dashboard", Activity, "概览"],
-  ["servers", Monitor, "服务器"],
-  ["nodes", Code2, "节点配置"],
-  ["subscriptions", Link2, "订阅分发"],
-  ["forward", PlugZap, "端口转发"],
-  ["probeManage", SlidersHorizontal, "探针管理"],
-  ["probeTasks", Gauge, "探测任务"],
-  ["files", FolderSync, "文件对传"],
-  ["credentials", KeyRound, "凭据管理"],
-  ["commands", Terminal, "命令库"],
-  ["tokens", HardDriveDownload, "API Token"],
-  ["audit", ClipboardList, "审计日志"],
-  ["settings", Settings, "使用说明"]
+const navGroups = [
+  {
+    items: [
+      ["servers", Monitor, "服务器"],
+      ["dashboard", Activity, "概览"],
+      ["probeManage", SlidersHorizontal, "探针管理"]
+    ]
+  },
+  {
+    title: "设置",
+    icon: Settings,
+    items: [
+      ["siteSettings", House, "站点"],
+      ["themeManage", Palette, "主题管理"],
+      ["loginSettings", LogIn, "登录"],
+      ["notifySettings", Bell, "通知"],
+      ["generalSettings", MoreHorizontal, "通用"]
+    ]
+  },
+  {
+    title: "通知",
+    icon: Bell,
+    items: [
+      ["offlineNotify", Unplug, "离线通知"],
+      ["loadNotify", TrendingUp, "负载通知"],
+      ["notifyGeneral", MoreHorizontal, "通用"]
+    ]
+  },
+  {
+    items: [
+      ["commands", Code2, "远程执行"],
+      ["probeTasks", RadioTower, "延迟监测"],
+      ["sessions", Users, "会话管理"],
+      ["account", UserCircle, "账户"],
+      ["audit", ClipboardList, "日志"],
+      ["about", AtSign, "关于"],
+      ["docs", BookOpen, "文档"],
+      ["home", Home, "主页"],
+      ["defaultTheme", Palette, "默认主题设置"],
+      ["nodes", Code2, "节点配置"],
+      ["subscriptions", Link2, "订阅分发"],
+      ["forward", PlugZap, "端口转发"],
+      ["files", FolderSync, "文件对传"],
+      ["credentials", KeyRound, "凭据管理"],
+      ["tokens", HardDriveDownload, "API Token"]
+    ]
+  }
 ];
+
+const nav = navGroups.flatMap((group) => group.items);
 
 const protocolDefinitions = {
   "vmess-ws": {
@@ -444,7 +494,7 @@ function LoginPage({ onLogin }) {
   return (
     <main className="login-page">
       <div className="login-panel">
-        <div className="login-brand">ChikenEasy</div>
+        <div className="login-brand">Chiken Monitor</div>
         <label>
           账号
           <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
@@ -473,20 +523,34 @@ function HeaderAccount({ user, logout }) {
 
 function Layout({ page, setPage, headerExtra, children }) {
   const navPage = ["detail", "ssh", "config", "logs", "desktop", "files-agent"].includes(page) ? "servers" : page;
+  const activeNav = nav.find(([id]) => id === navPage);
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand">ChikenEasy</div>
-        {nav.map(([id, Icon, label]) => (
-          <button key={id} className={navPage === id ? "active" : ""} onClick={() => setPage(id)}>
-            <Icon size={18} />
-            <span>{label}</span>
-          </button>
-        ))}
+        <div className="brand"><Menu size={18} />Chiken Monitor</div>
+        {navGroups.map((group, groupIndex) => {
+          const HeaderIcon = group.icon;
+          return (
+            <div className="nav-section" key={group.title || groupIndex}>
+              {group.title ? (
+                <div className="nav-heading">
+                  {HeaderIcon ? <HeaderIcon size={16} /> : null}
+                  <span>{group.title}</span>
+                </div>
+              ) : null}
+              {group.items.map(([id, Icon, label]) => (
+                <button key={id} className={navPage === id ? "active" : ""} onClick={() => setPage(id)}>
+                  <Icon size={18} />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          );
+        })}
       </aside>
       <main className="main">
         <header className="topbar">
-          <strong>{nav.find(([id]) => id === navPage)?.[2] || "控制台"}</strong>
+          <strong>{activeNav?.[2] || "控制台"}</strong>
           <div className="header-tools">{headerExtra}</div>
         </header>
         {children}
@@ -616,19 +680,22 @@ function PublicProbePage() {
     return groupOk && text.includes(query.toLowerCase());
   });
   const summary = data?.summary || {};
+  const monitorSettings = data?.settings || {};
+  const site = monitorSettings.site || {};
+  const theme = monitorSettings.theme || {};
   const totalTraffic = (Number(summary.rxBytes) || 0) + (Number(summary.txBytes) || 0);
   return (
     <main className="probe-page komari-page">
       <header className="komari-header">
         <div className="komari-brand">
           <strong>针</strong>
-          <span>Komari Monitor</span>
+          <span>{site.subtitle || site.name || "Chiken Monitor"}</span>
         </div>
-        <div className="komari-actions">
+        {theme.showHeaderActions !== false ? <div className="komari-actions">
           <a className="square-btn" href="https://github.com/fengbule/chiken-easy" target="_blank" rel="noreferrer" title="GitHub"><Code2 size={17} /></a>
           <button className="square-btn" title="主题"><Settings size={17} /></button>
           <a className="square-btn admin" href="/admin" title="管理员入口"><KeyRound size={17} /></a>
-        </div>
+        </div> : null}
       </header>
 
       <section className="komari-content">
@@ -790,7 +857,7 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh, openDesktop, ope
             ))}
           </dl>
         </Panel>
-        <Panel title="Komari 风格探针">
+        <Panel title="Chiken Monitor 探针">
           <ProbePanel probe={agent.probe} />
         </Panel>
         <Panel title="服务控制">
@@ -1756,6 +1823,157 @@ function ProbeManagePage({ liveTick }) {
   );
 }
 
+function MonitorSettingsPage({ section, title }) {
+  const [settings, setSettings] = useState(null);
+  const [message, setMessage] = useState("");
+  const load = () => api("/api/admin/settings").then(setSettings);
+  useEffect(() => {
+    load().catch(() => {});
+  }, [section]);
+  const current = settings?.[section] || {};
+  const patch = (key, value) => setSettings((data) => ({ ...data, [section]: { ...(data?.[section] || {}), [key]: value } }));
+  const save = async () => {
+    try {
+      const response = await api("/api/admin/settings", { method: "PUT", body: JSON.stringify({ [section]: current }) });
+      setSettings(response);
+      setMessage("设置已保存。");
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+  if (!settings) return null;
+
+  const fields = {
+    site: [
+      ["name", "站点名称", "text", "Chiken Monitor"],
+      ["subtitle", "公开页标题", "text", "Chiken Monitor"],
+      ["description", "站点描述", "text", ""],
+      ["footer", "页脚文字", "text", ""]
+    ],
+    theme: [
+      ["mode", "主题模式", "select", "", [["light", "浅色"], ["dark", "深色"], ["system", "跟随系统"]]],
+      ["cardDensity", "卡片密度", "select", "", [["compact", "紧凑"], ["standard", "标准"], ["relaxed", "宽松"]]],
+      ["accent", "强调色", "text", "green"],
+      ["showHeaderActions", "顶部按钮", "select", "", [[true, "显示"], [false, "隐藏"]]]
+    ],
+    login: [
+      ["title", "登录标题", "text", "Chiken Monitor"],
+      ["sessionDays", "会话有效天数", "number", "7"],
+      ["allowPasswordLogin", "密码登录", "select", "", [[true, "允许"], [false, "禁用"]]]
+    ],
+    notifications: [
+      ["offlineEnabled", "离线通知", "select", "", [[true, "启用"], [false, "关闭"]]],
+      ["loadEnabled", "负载通知", "select", "", [[true, "启用"], [false, "关闭"]]],
+      ["cpuThreshold", "CPU 阈值", "number", "90"],
+      ["memoryThreshold", "内存阈值", "number", "90"],
+      ["diskThreshold", "磁盘阈值", "number", "90"],
+      ["channel", "通知通道", "text", "webhook"],
+      ["webhookUrl", "Webhook URL", "text", ""]
+    ],
+    general: [
+      ["publicRefreshSeconds", "公开页刷新秒数", "number", "5"],
+      ["adminRefreshSeconds", "后台刷新秒数", "number", "5"],
+      ["publicHideIp", "公开隐藏 IP", "select", "", [[true, "隐藏"], [false, "显示"]]],
+      ["publicDefaultGroup", "默认分组", "text", "全部"]
+    ]
+  }[section] || [];
+
+  return (
+    <section>
+      <Panel title={title}>
+        <div className="form-grid">
+          {fields.map(([key, label, type, placeholder, options]) => (
+            <Field
+              key={key}
+              label={label}
+              type={type}
+              value={current[key] ?? ""}
+              onChange={(value) => patch(key, value === "true" ? true : value === "false" ? false : value)}
+              placeholder={placeholder}
+              options={(options || []).map(([value, text]) => [String(value), text])}
+            />
+          ))}
+        </div>
+        <div className="actions">
+          <button className="primary" onClick={save}><Save size={16} />保存</button>
+          <button onClick={load}><RefreshCw size={16} />重载</button>
+        </div>
+        {message ? <p className="panel-message">{message}</p> : null}
+      </Panel>
+    </section>
+  );
+}
+
+function SessionsPage({ liveTick }) {
+  const [rows, setRows] = useState([]);
+  const load = () => api("/api/admin/sessions").then(setRows);
+  useEffect(() => {
+    load().catch(() => {});
+  }, [liveTick]);
+  return (
+    <section>
+      <Panel title="会话管理" right={<button onClick={load}><RefreshCw size={15} />刷新</button>}>
+        <table>
+          <thead><tr><th>用户</th><th>创建时间</th><th>过期时间</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td>{row.username}</td>
+                <td>{row.createdAt}</td>
+                <td>{row.expiresAt}</td>
+                <td>{row.revoked ? "已撤销" : "有效"}</td>
+                <td>{row.revoked ? null : <button className="link" onClick={async () => { await api(`/api/admin/sessions/${row.id}`, { method: "DELETE" }); await load(); }}>撤销</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Panel>
+    </section>
+  );
+}
+
+function AccountPage() {
+  const [form, setForm] = useState({ oldPassword: "", newPassword: "" });
+  const [message, setMessage] = useState("");
+  const patch = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  return (
+    <section>
+      <Panel title="账户">
+        <div className="form-grid">
+          <Field label="旧密码" type="password" value={form.oldPassword} onChange={(value) => patch("oldPassword", value)} />
+          <Field label="新密码" type="password" value={form.newPassword} onChange={(value) => patch("newPassword", value)} />
+        </div>
+        <div className="actions">
+          <button className="primary" onClick={async () => {
+            try {
+              await api("/api/auth/password", { method: "PUT", body: JSON.stringify(form) });
+              setMessage("密码已更新。");
+              setForm({ oldPassword: "", newPassword: "" });
+            } catch (error) {
+              setMessage(error.message);
+            }
+          }}>修改密码</button>
+        </div>
+        {message ? <p className="panel-message">{message}</p> : null}
+      </Panel>
+    </section>
+  );
+}
+
+function StaticAdminPage({ title, body, actions = null }) {
+  return (
+    <section>
+      <Panel title={title}>
+        <div className="guide-card flat">
+          <h3>{title}</h3>
+          <p>{body}</p>
+        </div>
+        {actions ? <div className="actions">{actions}</div> : null}
+      </Panel>
+    </section>
+  );
+}
+
 function ForwardWizard({ agents }) {
   const [form, setForm] = useState({ agentId: "", engine: "sing-box", network: "tcp", listen: "0.0.0.0", port: 31080, targetHost: "example.com", targetPort: 80, name: "" });
   const [preview, setPreview] = useState("");
@@ -2124,7 +2342,7 @@ function Audit({ liveTick }) {
 
 function Tutorial() {
   const cards = [
-    ["Komari 风格探针", "Agent 会持续上报 CPU、内存、Swap、硬盘、负载、运行时间、网络速率和进程数。"],
+    ["Chiken Monitor 探针", "Agent 会持续上报 CPU、内存、Swap、硬盘、负载、运行时间、网络速率和进程数。"],
     ["直接输入终端", "SSH 终端区域支持直接键盘输入，不再只能依赖底部输入框。"],
     ["远程桌面", "新增 RDP 凭据保存、端口测试和 .rdp 文件生成。"],
     ["文件对传", "支持双栏浏览、浏览器上传、远端下载和服务器之间直传。"],
@@ -2272,6 +2490,17 @@ function App() {
     if (page === "forward") return <ForwardWizard agents={agents} />;
     if (page === "probeManage") return <ProbeManagePage liveTick={liveTick} />;
     if (page === "probeTasks") return <ProbeTasksPage agents={agents} liveTick={liveTick} />;
+    if (page === "siteSettings") return <MonitorSettingsPage section="site" title="站点设置" />;
+    if (page === "themeManage") return <MonitorSettingsPage section="theme" title="主题管理" />;
+    if (page === "loginSettings") return <MonitorSettingsPage section="login" title="登录设置" />;
+    if (page === "notifySettings" || page === "offlineNotify" || page === "loadNotify" || page === "notifyGeneral") return <MonitorSettingsPage section="notifications" title={nav.find(([id]) => id === page)?.[2] || "通知设置"} />;
+    if (page === "generalSettings") return <MonitorSettingsPage section="general" title="通用设置" />;
+    if (page === "sessions") return <SessionsPage liveTick={liveTick} />;
+    if (page === "account") return <AccountPage />;
+    if (page === "about") return <StaticAdminPage title="关于" body="Chiken Monitor 是 chiken-easy 的监控、探测、节点控制与订阅分发后台。" />;
+    if (page === "docs") return <StaticAdminPage title="文档" body="常用入口已经集中在侧边栏：服务器、探针管理、延迟监测、远程执行、订阅分发、文件对传和凭据管理。" actions={<a className="button-link" href="https://github.com/fengbule/chiken-easy" target="_blank" rel="noreferrer">打开 GitHub</a>} />;
+    if (page === "home") return <StaticAdminPage title="主页" body="公开主页是 Chiken Monitor 探针面板，默认无需登录可查看服务器状态。" actions={<a className="button-link" href="/" target="_blank" rel="noreferrer">打开公开主页</a>} />;
+    if (page === "defaultTheme") return <MonitorSettingsPage section="theme" title="默认主题设置" />;
     if (page === "files" || page === "files-agent") return <FilesPage agents={agents} initialAgentId={page === "files-agent" ? agentId : ""} />;
     if (page === "credentials") return <CredentialsPage liveTick={liveTick} />;
     if (page === "commands") return <CommandsPage agents={agents} liveTick={liveTick} />;

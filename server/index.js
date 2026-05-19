@@ -53,6 +53,40 @@ const defaultState = {
   probeTasks: [],
   probeResults: {},
   probeProfiles: {},
+  monitorSettings: {
+    site: {
+      name: "Chiken Monitor",
+      subtitle: "Chiken Monitor",
+      description: "轻量服务器监控与节点管理面板",
+      footer: "Powered by chiken-easy"
+    },
+    theme: {
+      mode: "light",
+      cardDensity: "standard",
+      accent: "green",
+      showHeaderActions: true
+    },
+    login: {
+      title: "Chiken Monitor",
+      sessionDays: 7,
+      allowPasswordLogin: true
+    },
+    notifications: {
+      offlineEnabled: false,
+      loadEnabled: false,
+      cpuThreshold: 90,
+      memoryThreshold: 90,
+      diskThreshold: 90,
+      webhookUrl: "",
+      channel: "webhook"
+    },
+    general: {
+      publicRefreshSeconds: 5,
+      adminRefreshSeconds: 5,
+      publicHideIp: true,
+      publicDefaultGroup: "全部"
+    }
+  },
   nodePool: [],
   subscriptionTokens: []
 };
@@ -68,6 +102,45 @@ const forwardCommandRefs = new Map();
 function normalizeCommands(commands = []) {
   const custom = Array.isArray(commands) ? commands.filter((item) => item && !builtinCommands.some((builtin) => builtin.id === item.id)) : [];
   return [...builtinCommands, ...custom];
+}
+
+function cleanText(value, fallback = "", max = 200) {
+  const text = String(value ?? fallback ?? "").trim();
+  return text.slice(0, max);
+}
+
+function mergeMonitorSettings(input = {}) {
+  const base = structuredClone(defaultState.monitorSettings);
+  const next = {
+    site: { ...base.site, ...(input.site || {}) },
+    theme: { ...base.theme, ...(input.theme || {}) },
+    login: { ...base.login, ...(input.login || {}) },
+    notifications: { ...base.notifications, ...(input.notifications || {}) },
+    general: { ...base.general, ...(input.general || {}) }
+  };
+  next.site.name = cleanText(next.site.name, "Chiken Monitor", 80) || "Chiken Monitor";
+  next.site.subtitle = cleanText(next.site.subtitle, "Chiken Monitor", 80) || "Chiken Monitor";
+  next.site.description = cleanText(next.site.description, "", 200);
+  next.site.footer = cleanText(next.site.footer, "", 120);
+  next.theme.mode = ["light", "dark", "system"].includes(next.theme.mode) ? next.theme.mode : "light";
+  next.theme.cardDensity = ["compact", "standard", "relaxed"].includes(next.theme.cardDensity) ? next.theme.cardDensity : "standard";
+  next.theme.accent = cleanText(next.theme.accent, "green", 30) || "green";
+  next.theme.showHeaderActions = next.theme.showHeaderActions !== false;
+  next.login.title = cleanText(next.login.title, "Chiken Monitor", 80) || "Chiken Monitor";
+  next.login.sessionDays = Math.max(1, Math.min(30, Number(next.login.sessionDays || 7) || 7));
+  next.login.allowPasswordLogin = next.login.allowPasswordLogin !== false;
+  next.notifications.offlineEnabled = Boolean(next.notifications.offlineEnabled);
+  next.notifications.loadEnabled = Boolean(next.notifications.loadEnabled);
+  next.notifications.cpuThreshold = Math.max(1, Math.min(100, Number(next.notifications.cpuThreshold || 90) || 90));
+  next.notifications.memoryThreshold = Math.max(1, Math.min(100, Number(next.notifications.memoryThreshold || 90) || 90));
+  next.notifications.diskThreshold = Math.max(1, Math.min(100, Number(next.notifications.diskThreshold || 90) || 90));
+  next.notifications.webhookUrl = cleanText(next.notifications.webhookUrl, "", 400);
+  next.notifications.channel = cleanText(next.notifications.channel, "webhook", 40) || "webhook";
+  next.general.publicRefreshSeconds = Math.max(3, Math.min(120, Number(next.general.publicRefreshSeconds || 5) || 5));
+  next.general.adminRefreshSeconds = Math.max(3, Math.min(120, Number(next.general.adminRefreshSeconds || 5) || 5));
+  next.general.publicHideIp = next.general.publicHideIp !== false;
+  next.general.publicDefaultGroup = cleanText(next.general.publicDefaultGroup, "全部", 40) || "全部";
+  return next;
 }
 
 function loadState() {
@@ -86,6 +159,7 @@ function loadState() {
     probeTasks: raw.probeTasks || [],
     probeResults: raw.probeResults || {},
     probeProfiles: raw.probeProfiles || {},
+    monitorSettings: mergeMonitorSettings(raw.monitorSettings || {}),
     nodePool: raw.nodePool || [],
     subscriptionTokens: raw.subscriptionTokens || []
   };
@@ -434,6 +508,11 @@ function publicProbePayload() {
     online: agents.filter((agent) => agent.connected).length,
     offline: agents.filter((agent) => !agent.connected).length,
     summary: dashboardSummary(agents),
+    settings: {
+      site: state.monitorSettings?.site || defaultState.monitorSettings.site,
+      theme: state.monitorSettings?.theme || defaultState.monitorSettings.theme,
+      general: state.monitorSettings?.general || defaultState.monitorSettings.general
+    },
     agents
   };
 }
@@ -927,13 +1006,14 @@ app.post("/api/auth/login", (req, res) => {
   const user = (state.adminUsers || []).find((row) => row.username === username && !row.revoked);
   if (!user || !verifyPassword(password, user)) return res.status(401).json({ error: "用户名或密码错误" });
   const token = `sess_${nanoid(36)}`;
+  const sessionDays = Math.max(1, Math.min(30, Number(state.monitorSettings?.login?.sessionDays || 7) || 7));
   const session = {
     id: nanoid(),
     token,
     userId: user.id,
     username: user.username,
     createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 7 * 86400 * 1000).toISOString()
+    expiresAt: new Date(Date.now() + sessionDays * 86400 * 1000).toISOString()
   };
   state.sessions ||= [];
   state.sessions.unshift(session);
@@ -972,6 +1052,40 @@ app.put("/api/auth/password", (req, res) => {
   }
   saveState();
   audit("admin", "change_password", "-", { username: user.username });
+  res.json({ ok: true });
+});
+
+app.get("/api/admin/settings", (_, res) => {
+  state.monitorSettings = mergeMonitorSettings(state.monitorSettings || {});
+  res.json(state.monitorSettings);
+});
+
+app.put("/api/admin/settings", (req, res) => {
+  state.monitorSettings = mergeMonitorSettings({ ...(state.monitorSettings || {}), ...(req.body || {}) });
+  saveState();
+  emitPublicProbeEvent();
+  audit("admin", "update_monitor_settings", "-", { sections: Object.keys(req.body || {}) });
+  res.json(state.monitorSettings);
+});
+
+app.get("/api/admin/sessions", (_, res) => {
+  const rows = (state.sessions || []).map((session) => ({
+    id: session.id,
+    username: session.username,
+    createdAt: session.createdAt,
+    expiresAt: session.expiresAt,
+    revoked: Boolean(session.revoked)
+  }));
+  res.json(rows.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 100));
+});
+
+app.delete("/api/admin/sessions/:id", (req, res) => {
+  const session = (state.sessions || []).find((row) => row.id === req.params.id);
+  if (!session) return res.status(404).json({ error: "session not found" });
+  session.revoked = true;
+  session.updatedAt = new Date().toISOString();
+  saveState();
+  audit("admin", "revoke_session", req.params.id, { username: session.username });
   res.json({ ok: true });
 });
 
