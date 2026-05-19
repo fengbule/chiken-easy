@@ -4,12 +4,18 @@ import {
   Activity,
   ClipboardList,
   Code2,
+  Clock3,
+  Cpu,
   Download,
   FolderClosed,
   FolderSync,
+  Gauge,
   HardDriveDownload,
+  HardDrive,
   KeyRound,
+  Link2,
   Laptop,
+  MemoryStick,
   Monitor,
   PlugZap,
   RefreshCw,
@@ -20,7 +26,8 @@ import {
   Shuffle,
   Terminal,
   Trash2,
-  Upload
+  Upload,
+  Wifi
 } from "lucide-react";
 import "./style.css";
 
@@ -31,7 +38,9 @@ const nav = [
   ["dashboard", Activity, "概览"],
   ["servers", Monitor, "服务器"],
   ["nodes", Code2, "节点配置"],
+  ["subscriptions", Link2, "订阅分发"],
   ["forward", PlugZap, "端口转发"],
+  ["probeTasks", Gauge, "探测任务"],
   ["files", FolderSync, "文件对传"],
   ["credentials", KeyRound, "凭据管理"],
   ["commands", Terminal, "命令库"],
@@ -63,7 +72,9 @@ const protocolDefinitions = {
       serverName: "www.cloudflare.com",
       serverPort: 443,
       privateKey: "CHANGE_ME_REALITY_PRIVATE_KEY",
+      publicKey: "",
       shortId: randShortId(),
+      fingerprint: "chrome",
       flow: "xtls-rprx-vision"
     }),
     fields: [
@@ -72,7 +83,9 @@ const protocolDefinitions = {
       { key: "serverName", label: "SNI / 握手域名" },
       { key: "serverPort", label: "握手端口", type: "number" },
       { key: "privateKey", label: "Reality 私钥" },
+      { key: "publicKey", label: "Reality 公钥 / 订阅用" },
       { key: "shortId", label: "short_id", random: () => randShortId() },
+      { key: "fingerprint", label: "浏览器指纹", placeholder: "chrome" },
       { key: "flow", label: "Flow" },
       { key: "listen", label: "监听地址", placeholder: "::" }
     ]
@@ -179,7 +192,9 @@ async function api(url, options = {}) {
       const body = await response.json();
       message = body.error || message;
     } catch {}
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
   return response.headers.get("content-type")?.includes("application/json") ? response.json() : response.text();
 }
@@ -188,8 +203,113 @@ function fileDownloadUrl(pathname, params = {}) {
   return buildAuthUrl(pathname, params);
 }
 
+async function copyText(text) {
+  await navigator.clipboard?.writeText(String(text || ""));
+}
+
 function StatusDot({ on }) {
   return <span className={`dot ${on ? "ok" : ""}`} />;
+}
+
+const clampPercent = (value) => Math.max(0, Math.min(100, Number(value) || 0));
+
+function formatPercent(value) {
+  return Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)}%` : "-";
+}
+
+function formatBytes(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let size = number;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  return `${size >= 10 || index === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[index]}`;
+}
+
+function formatSpeed(value) {
+  return Number.isFinite(Number(value)) ? `${formatBytes(Number(value))}/s` : "0 B/s";
+}
+
+function formatDuration(seconds) {
+  const total = Number(seconds);
+  if (!Number.isFinite(total) || total <= 0) return "-";
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (days) return `${days} 天 ${hours} 小时`;
+  if (hours) return `${hours} 小时 ${minutes} 分`;
+  return `${minutes} 分钟`;
+}
+
+function formatTimeAgo(value) {
+  const time = Date.parse(value || "");
+  if (!Number.isFinite(time)) return "-";
+  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
+  if (seconds < 8) return "刚刚";
+  if (seconds < 60) return `${seconds} 秒前`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}
+
+const landscapeImages = [
+  {
+    url: "https://commons.wikimedia.org/wiki/Special:FilePath/Rocky%20Mountain%20Landscape%20by%20Albert%20Bierstadt%2C%201870.jpg?width=1600",
+    credit: "Albert Bierstadt / Wikimedia Commons"
+  },
+  {
+    url: "https://commons.wikimedia.org/wiki/Special:FilePath/Grand%20Canyon%2C%20South%20Rim%20IMG%204531.jpg?width=1600",
+    credit: "Macdon / Wikimedia Commons CC0"
+  }
+];
+
+function MiniMeter({ value, tone = "blue" }) {
+  const width = clampPercent(value);
+  return (
+    <div className={`mini-meter ${tone}`}>
+      <span style={{ width: `${width}%` }} />
+    </div>
+  );
+}
+
+function ProbeMetric({ icon: Icon, label, value, detail, percent, tone = "blue" }) {
+  return (
+    <div className="probe-metric">
+      <div className="probe-metric-head">
+        {Icon ? <Icon size={17} /> : null}
+        <span>{label}</span>
+        <b>{value}</b>
+      </div>
+      {Number.isFinite(Number(percent)) ? <MiniMeter value={percent} tone={tone} /> : null}
+      {detail ? <small>{detail}</small> : null}
+    </div>
+  );
+}
+
+function ProbePanel({ probe = {} }) {
+  probe ||= {};
+  const cpu = probe.cpu || {};
+  const memory = probe.memory || {};
+  const swap = probe.swap || {};
+  const disk = probe.disk || {};
+  const network = probe.network || {};
+  const load = Array.isArray(probe.load) ? probe.load.join(" / ") : "-";
+  return (
+    <div className="probe-grid">
+      <ProbeMetric icon={Cpu} label="CPU" value={formatPercent(cpu.usage)} detail={`${cpu.cores || "-"} 核 ${load}`} percent={cpu.usage} tone="blue" />
+      <ProbeMetric icon={MemoryStick} label="内存" value={formatPercent(memory.usage)} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} percent={memory.usage} tone="green" />
+      <ProbeMetric icon={HardDrive} label="硬盘" value={formatPercent(disk.usage)} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)} ${disk.mount || ""}`} percent={disk.usage} tone="amber" />
+      <ProbeMetric icon={Gauge} label="Swap" value={formatPercent(swap.usage)} detail={`${formatBytes(swap.used)} / ${formatBytes(swap.total)}`} percent={swap.usage} tone="violet" />
+      <ProbeMetric icon={Wifi} label="网络" value={`↓ ${formatSpeed(network.rxSpeed)}`} detail={`↑ ${formatSpeed(network.txSpeed)} · ${network.interfaces || 0} 网卡`} tone="blue" />
+      <ProbeMetric icon={Clock3} label="运行时间" value={formatDuration(probe.uptime)} detail={probe.updatedAt ? `更新于 ${probe.updatedAt}` : ""} tone="green" />
+    </div>
+  );
 }
 
 function Panel({ title, right, children }) {
@@ -204,11 +324,12 @@ function Panel({ title, right, children }) {
   );
 }
 
-function Card({ label, value, accent = "" }) {
+function Card({ label, value, accent = "", icon: Icon = null, hint = "" }) {
   return (
     <div className="stat">
-      <span>{label}</span>
+      <span>{Icon ? <Icon size={17} /> : null}{label}</span>
       <b className={accent}>{value}</b>
+      {hint ? <small>{hint}</small> : null}
     </div>
   );
 }
@@ -263,6 +384,51 @@ function AccessTokenBar({ tokenDraft, setTokenDraft, saveToken, clearToken, hasT
   );
 }
 
+function LoginPage({ onLogin }) {
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+
+  const submit = async () => {
+    try {
+      setMessage("");
+      const response = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+      onLogin(response);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  return (
+    <main className="login-page">
+      <div className="login-panel">
+        <div className="login-brand">ChikenEasy</div>
+        <label>
+          账号
+          <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
+        </label>
+        <label>
+          密码
+          <input value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submit()} type="password" autoComplete="current-password" />
+        </label>
+        <button className="primary" onClick={submit}>登录</button>
+        {message ? <p className="panel-message">{message}</p> : null}
+        <a className="probe-link" href="/">返回公开探针</a>
+      </div>
+    </main>
+  );
+}
+
+function HeaderAccount({ user, logout }) {
+  return (
+    <div className="header-account">
+      <a className="button-link" href="/" target="_blank" rel="noreferrer">公开探针</a>
+      <span className="muted">{user || "admin"}</span>
+      <button onClick={logout}>退出</button>
+    </div>
+  );
+}
+
 function Layout({ page, setPage, headerExtra, children }) {
   const navPage = ["detail", "ssh", "config", "logs", "desktop", "files-agent"].includes(page) ? "servers" : page;
   return (
@@ -279,7 +445,7 @@ function Layout({ page, setPage, headerExtra, children }) {
       <main className="main">
         <header className="topbar">
           <strong>{nav.find(([id]) => id === navPage)?.[2] || "控制台"}</strong>
-          <div className="header-tools">{headerExtra}<span className="muted">admin</span></div>
+          <div className="header-tools">{headerExtra}</div>
         </header>
         {children}
       </main>
@@ -289,43 +455,63 @@ function Layout({ page, setPage, headerExtra, children }) {
 
 function AgentTable({ agents, openAgent, openSsh, openDesktop, openFiles }) {
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>名称</th>
-          <th>主机</th>
-          <th>IP</th>
-          <th>系统</th>
-          <th>在线</th>
-          <th>sing-box</th>
-          <th>SSH</th>
-          <th>RDP</th>
-          <th>最近心跳</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        {agents.map((agent) => (
-          <tr key={agent.id}>
-            <td>{agent.name}</td>
-            <td>{agent.host}</td>
-            <td>{agent.ip}</td>
-            <td>{agent.os}/{agent.arch}</td>
-            <td><StatusDot on={agent.connected} />{agent.connected ? "online" : "offline"}</td>
-            <td><StatusDot on={agent.singboxStatus === "active"} />{agent.singboxStatus}</td>
-            <td>{agent.sshConfigured ? `${agent.sshMode}@${agent.sshPort}` : "未配置"}</td>
-            <td>{agent.rdpConfigured ? `${agent.rdpHost}:${agent.rdpPort}` : "未配置"}</td>
-            <td>{agent.lastSeen || "-"}</td>
-            <td className="actions-cell">
-              <button className="link" onClick={() => openAgent(agent.id)}>详情</button>
-              <button className="link" onClick={() => openSsh(agent.id)}>SSH</button>
-              <button className="link" onClick={() => openDesktop(agent.id)}>桌面</button>
-              <button className="link" onClick={() => openFiles(agent.id)}>文件</button>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="agent-grid">
+      {agents.map((agent) => {
+        const probe = agent.probe || {};
+        const cpu = probe.cpu || {};
+        const memory = probe.memory || {};
+        const disk = probe.disk || {};
+        const network = probe.network || {};
+        const hasProbe = Boolean(probe.updatedAt);
+        return (
+          <article className="agent-card" key={agent.id}>
+            <div className="agent-card-head">
+              <div>
+                <h3>{agent.name}</h3>
+                <p>{agent.ip || agent.host} · {agent.os}/{agent.arch}</p>
+              </div>
+              <div className="agent-status-stack">
+                <span className={`status-pill ${agent.connected ? "online" : ""}`}><StatusDot on={agent.connected} />{agent.connected ? "online" : "offline"}</span>
+                <span className="status-pill"><StatusDot on={agent.singboxStatus === "active"} />{agent.singboxStatus}</span>
+              </div>
+            </div>
+
+            <div className="agent-metrics">
+              <div className="agent-metric">
+                <span>CPU</span>
+                <b>{formatPercent(cpu.usage)}</b>
+                <MiniMeter value={cpu.usage} />
+              </div>
+              <div className="agent-metric">
+                <span>内存</span>
+                <b>{formatPercent(memory.usage)}</b>
+                <MiniMeter value={memory.usage} tone="green" />
+              </div>
+              <div className="agent-metric">
+                <span>硬盘</span>
+                <b>{formatPercent(disk.usage)}</b>
+                <MiniMeter value={disk.usage} tone="amber" />
+              </div>
+              <div className="agent-metric network">
+                <span>网络</span>
+                <b>↓ {formatSpeed(network.rxSpeed)}</b>
+                <small>↑ {formatSpeed(network.txSpeed)}</small>
+              </div>
+            </div>
+
+            <div className="agent-card-foot">
+              <span className={hasProbe ? "live-stamp" : "live-stamp stale"}>{hasProbe ? `探针 ${formatTimeAgo(probe.updatedAt)}` : "等待新版探针"}</span>
+              <div className="agent-actions">
+                <button className="link" onClick={() => openAgent(agent.id)}>详情</button>
+                <button className="link" onClick={() => openSsh(agent.id)}>SSH</button>
+                <button className="link" onClick={() => openDesktop(agent.id)}>桌面</button>
+                <button className="link" onClick={() => openFiles(agent.id)}>文件</button>
+              </div>
+            </div>
+          </article>
+        );
+      })}
+    </div>
   );
 }
 
@@ -335,18 +521,112 @@ function Dashboard({ liveTick, openAgent, openSsh, openDesktop, openFiles }) {
     api("/api/dashboard").then(setData).catch(() => {});
   }, [liveTick]);
   if (!data) return null;
+  const summary = data.summary || {};
   return (
     <section>
       <div className="stats">
-        <Card label="服务器总数" value={data.total} />
-        <Card label="在线" value={data.online} accent="green" />
-        <Card label="离线" value={data.offline} />
-        <Card label="sing-box 活跃" value={data.activeSingbox} accent="blue" />
+        <Card icon={Monitor} label="节点" value={`${data.online}/${data.total}`} hint={`${data.offline} 台离线`} accent="green" />
+        <Card icon={Cpu} label="CPU" value={formatPercent(summary.avgCpu)} />
+        <Card icon={MemoryStick} label="内存" value={formatPercent(summary.avgMemory)} />
+        <Card icon={Wifi} label="实时流量" value={`↓ ${formatSpeed(summary.rxSpeed)}`} hint={`↑ ${formatSpeed(summary.txSpeed)}`} accent="blue" />
       </div>
       <Panel title="最近活跃">
         <AgentTable agents={data.recent} openAgent={openAgent} openSsh={openSsh} openDesktop={openDesktop} openFiles={openFiles} />
       </Panel>
     </section>
+  );
+}
+
+function PublicProbePage() {
+  const [data, setData] = useState(null);
+  const [imageIndex, setImageIndex] = useState(0);
+
+  const load = () => fetch("/api/public/probes").then((response) => response.json()).then(setData).catch(() => {});
+
+  useEffect(() => {
+    load();
+    const timer = window.setInterval(load, 5000);
+    const source = new EventSource("/api/public/events");
+    source.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.payload) setData(message.payload);
+      } catch {}
+    };
+    source.onerror = () => {};
+    return () => {
+      window.clearInterval(timer);
+      source.close();
+    };
+  }, []);
+
+  const rows = data?.agents || [];
+  const summary = data?.summary || {};
+  const landscape = landscapeImages[imageIndex % landscapeImages.length];
+  return (
+    <main className="probe-page">
+      <header className="probe-header">
+        <div>
+          <strong>ChikenEasy Probe</strong>
+          <span>{data ? `${data.online}/${data.total} 在线` : "加载中"}</span>
+        </div>
+        <a className="button-link" href="/admin">管理员入口</a>
+      </header>
+      <section className="probe-content">
+        <div className="probe-hero" style={{ backgroundImage: `url("${landscape.url}")` }}>
+          <div>
+            <span>实时公开探针</span>
+            <h1>{data ? `${data.online} 台在线` : "正在连接探针"}</h1>
+            <p>自动刷新 CPU、内存、硬盘、负载、进程、运行时间和网络速度。</p>
+          </div>
+          <button onClick={() => setImageIndex((value) => value + 1)}>换一张</button>
+          <small>{landscape.credit}</small>
+        </div>
+        <div className="stats">
+          <Card icon={Monitor} label="节点" value={data ? `${data.online}/${data.total}` : "-"} />
+          <Card icon={Cpu} label="CPU" value={formatPercent(summary.avgCpu)} />
+          <Card icon={MemoryStick} label="内存" value={formatPercent(summary.avgMemory)} />
+          <Card icon={Wifi} label="实时流量" value={`↓ ${formatSpeed(summary.rxSpeed)}`} hint={`↑ ${formatSpeed(summary.txSpeed)}`} />
+        </div>
+        <div className="public-grid">
+          {rows.map((agent) => {
+            const probe = agent.probe || {};
+            const cpu = probe.cpu || {};
+            const memory = probe.memory || {};
+            const disk = probe.disk || {};
+            const swap = probe.swap || {};
+            const network = probe.network || {};
+            const load = Array.isArray(probe.load) ? probe.load.join(" / ") : "-";
+            return (
+              <article className="public-card" key={agent.id}>
+                <div className="agent-card-head">
+                  <div>
+                    <h3>{agent.name}</h3>
+                    <p>{agent.os}/{agent.arch}</p>
+                  </div>
+                  <span className={`status-pill ${agent.connected ? "online" : ""}`}><StatusDot on={agent.connected} />{agent.connected ? "online" : "offline"}</span>
+                </div>
+                <div className="agent-metrics">
+                  <div className="agent-metric"><span>CPU</span><b>{formatPercent(cpu.usage)}</b><MiniMeter value={cpu.usage} /></div>
+                  <div className="agent-metric"><span>内存</span><b>{formatPercent(memory.usage)}</b><MiniMeter value={memory.usage} tone="green" /></div>
+                  <div className="agent-metric"><span>硬盘</span><b>{formatPercent(disk.usage)}</b><MiniMeter value={disk.usage} tone="amber" /></div>
+                  <div className="agent-metric network"><span>网络</span><b>↓ {formatSpeed(network.rxSpeed)}</b><small>↑ {formatSpeed(network.txSpeed)}</small></div>
+                </div>
+                <div className="probe-facts">
+                  <span>运行 {formatDuration(probe.uptime)}</span>
+                  <span>负载 {load}</span>
+                  <span>进程 {probe.process?.count ?? "-"}</span>
+                  <span>Swap {formatPercent(swap.usage)}</span>
+                  <span>累计 ↓ {formatBytes(network.rxBytes)}</span>
+                  <span>累计 ↑ {formatBytes(network.txBytes)}</span>
+                </div>
+                <span className="live-stamp">探针 {formatTimeAgo(probe.updatedAt)}</span>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -367,10 +647,14 @@ function Servers({ agents, openAgent, openSsh, openDesktop, openFiles }) {
 
 function AgentDetail({ id, back, openConfig, openLogs, openSsh, openDesktop, openFiles, liveTick }) {
   const [agent, setAgent] = useState(null);
+  const [nameDraft, setNameDraft] = useState("");
   const [result, setResult] = useState("");
 
   useEffect(() => {
-    api(`/api/agents/${id}`).then(setAgent).catch(() => {});
+    api(`/api/agents/${id}`).then((row) => {
+      setAgent(row);
+      setNameDraft(row.name || "");
+    }).catch(() => {});
   }, [id, liveTick]);
 
   const service = async (action) => {
@@ -384,13 +668,21 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh, openDesktop, ope
     setResult(JSON.stringify(response, null, 2));
   };
 
+  const rename = async () => {
+    const response = await api(`/api/agents/${id}`, { method: "PUT", body: JSON.stringify({ name: nameDraft }) });
+    setAgent(response);
+    setResult("服务器名称已更新。");
+  };
+
   if (!agent) return null;
+  const detailRows = Object.entries(agent).filter(([key, value]) => key !== "probe" && (value === null || typeof value !== "object" || Array.isArray(value)));
 
   return (
     <section>
       <div className="toolbar">
         <button onClick={back}>返回</button>
-        <h1>{agent.name}</h1>
+        <input className="title-input" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} />
+        <button onClick={rename}>保存名称</button>
         <button onClick={() => service("status")}>刷新状态</button>
         <button onClick={openSsh}>SSH</button>
         <button onClick={openDesktop}>远程桌面</button>
@@ -402,13 +694,16 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh, openDesktop, ope
       <div className="grid2">
         <Panel title="基本信息">
           <dl>
-            {Object.entries(agent).map(([key, value]) => (
+            {detailRows.map(([key, value]) => (
               <React.Fragment key={key}>
                 <dt>{key}</dt>
                 <dd>{Array.isArray(value) ? value.join(", ") : String(value)}</dd>
               </React.Fragment>
             ))}
           </dl>
+        </Panel>
+        <Panel title="Komari 风格探针">
+          <ProbePanel probe={agent.probe} />
         </Panel>
         <Panel title="服务控制">
           <div className="actions">
@@ -476,28 +771,44 @@ function TerminalPanel({ agentId, agentName, mode, connectNonce }) {
     setLineInput("");
   };
 
+  const copyTerminal = async () => {
+    const selection = window.getSelection()?.toString();
+    await navigator.clipboard?.writeText(selection || output || "");
+  };
+
   return (
     <Panel
       title={`${mode === "ssh" ? "SSH 终端" : "Agent 执行"} - ${agentName}`}
-      right={<span><StatusDot on={connected} />{connected ? "connected" : "closed"}</span>}
+      right={<div className="terminal-tools"><span><StatusDot on={connected} />{connected ? "connected" : "closed"}</span><button onClick={copyTerminal}>复制</button><button onClick={() => setOutput("")}>清屏</button></div>}
     >
       <div
         ref={boxRef}
         tabIndex={0}
         className={`terminal ${mode === "ssh" ? "interactive" : ""}`}
+        role="textbox"
+        aria-label="SSH terminal"
         onClick={() => boxRef.current?.focus()}
+        onPaste={(event) => {
+          if (mode !== "ssh") return;
+          const text = event.clipboardData.getData("text");
+          if (!text) return;
+          event.preventDefault();
+          sendRaw(text);
+        }}
         onKeyDown={(event) => {
           if (mode !== "ssh") return;
           if (event.altKey || event.metaKey) return;
+          if (event.ctrlKey && event.key.toLowerCase() === "c" && window.getSelection()?.toString()) return;
+          if (event.ctrlKey && event.key.toLowerCase() === "v") return;
           const data = sendKey(event.key, event.ctrlKey);
           if (!data) return;
           event.preventDefault();
           sendRaw(data);
         }}
       >
-        {output || "连接建立后，点击这里即可直接输入。"}
+        <pre>{output || "连接建立后，点击这里即可直接输入。"}</pre>
       </div>
-      <div className="terminal-tip">{mode === "ssh" ? "终端区域已支持直接键盘输入、方向键、Tab、Ctrl+C。" : "Agent 模式按整行执行命令，适合作为 SSH 的兜底通道。"}</div>
+      <div className="terminal-tip">{mode === "ssh" ? "点击黑色区域后可直接输入；选中文本后 Ctrl+C 复制，粘贴会直接发送到 SSH。" : "Agent 模式按整行执行命令，适合作为 SSH 的兜底通道。"}</div>
       <div className="terminal-input">
         <input value={lineInput} onChange={(event) => setLineInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendLine()} placeholder="输入命令后回车发送" />
         {mode === "ssh" ? <button onClick={() => sendRaw("\u0003")}>Ctrl+C</button> : null}
@@ -1063,7 +1374,13 @@ function NodeWizard({ agents }) {
   }, [agents, form.agentId]);
 
   const patch = (key, value) => setForm((current) => ({ ...current, [key]: value }));
-  const switchProtocol = (nextProtocol) => setForm((current) => ({ agentId: current.agentId, ...protocolDefinitions[nextProtocol].defaults() }));
+  const switchProtocol = (nextProtocol) =>
+    setForm((current) => ({
+      agentId: current.agentId,
+      nodeName: current.nodeName || "",
+      publicHost: current.publicHost || "",
+      ...protocolDefinitions[nextProtocol].defaults()
+    }));
 
   return (
     <section>
@@ -1078,6 +1395,8 @@ function NodeWizard({ agents }) {
         }}>预览 JSON</button>}>
           <div className="form-grid">
             <Field label="服务器" type="select" value={form.agentId} onChange={(value) => patch("agentId", value)} options={agents.map((agent) => [agent.id, `${agent.name} - ${agent.ip}`])} />
+            <Field label="节点名称" value={form.nodeName || ""} onChange={(value) => patch("nodeName", value)} placeholder="留空使用服务器名" />
+            <Field label="订阅外部地址" value={form.publicHost || ""} onChange={(value) => patch("publicHost", value)} placeholder="域名或公网 IP，留空用服务器地址" />
             <Field label="协议" type="select" value={form.protocol} onChange={switchProtocol} options={Object.entries(protocolDefinitions).map(([key, value]) => [key, value.name])} />
             {definition.fields.map((field) => (
               <Field key={field.key} label={field.label} type={field.type || "text"} value={form[field.key] ?? ""} onChange={(value) => patch(field.key, value)} random={field.random ? () => patch(field.key, field.random()) : null} placeholder={field.placeholder || ""} options={field.options || []} rows={field.rows || 4} />
@@ -1098,6 +1417,129 @@ function NodeWizard({ agents }) {
         </Panel>
         <Panel title="配置预览"><pre className="preview">{preview || "点击预览 JSON 查看结果。"}</pre></Panel>
       </div>
+    </section>
+  );
+}
+
+function SubscriptionPage({ liveTick }) {
+  const [nodes, setNodes] = useState([]);
+  const [subscriptions, setSubscriptions] = useState([]);
+  const [importText, setImportText] = useState("");
+  const [importUrl, setImportUrl] = useState("");
+  const [sourceName, setSourceName] = useState("");
+  const [message, setMessage] = useState("");
+
+  const load = () =>
+    api("/api/node-pool").then((data) => {
+      setNodes(data.nodes || []);
+      setSubscriptions(data.subscriptions || []);
+    });
+
+  useEffect(() => {
+    load().catch(() => {});
+  }, [liveTick]);
+
+  const importNodes = async () => {
+    try {
+      setMessage("");
+      const response = await api("/api/node-pool/import", {
+        method: "POST",
+        body: JSON.stringify({ text: importText, url: importUrl, sourceName })
+      });
+      setImportText("");
+      setMessage(`已导入 ${response.imported} 个节点。`);
+      await load();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const updateNode = async (node, patch) => {
+    await api(`/api/node-pool/${node.id}`, { method: "PUT", body: JSON.stringify(patch) });
+    await load();
+  };
+
+  const deleteNode = async (node) => {
+    if (!window.confirm(`删除节点 ${node.name} 吗？`)) return;
+    await api(`/api/node-pool/${node.id}`, { method: "DELETE" });
+    await load();
+  };
+
+  return (
+    <section>
+      <div className="grid2">
+        <Panel title="订阅输出">
+          <div className="subscription-links">
+            {(subscriptions[0] ? [subscriptions[0]] : []).map((subscription) => (
+              <div className="subscription-card" key={subscription.id}>
+                <div>
+                  <h3>{subscription.name}</h3>
+                  <p>{nodes.filter((node) => node.enabled && node.raw).length} 个启用节点会进入输出，包含导入节点和面板新建节点。</p>
+                </div>
+                {Object.entries(subscription.links || {}).map(([format, link]) => (
+                  <div className="copy-row" key={format}>
+                    <span>{format}</span>
+                    <code>{link}</code>
+                    <button onClick={async () => { await copyText(link); setMessage(`${format} 链接已复制。`); }}>复制</button>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+          {message ? <p className="panel-message">{message}</p> : null}
+        </Panel>
+        <Panel title="导入节点">
+          <div className="form-grid single">
+            <Field label="来源名称" value={sourceName} onChange={setSourceName} placeholder="例如机场 A / 手动导入" />
+            <Field label="订阅 URL" value={importUrl} onChange={setImportUrl} placeholder="支持 base64 订阅或纯文本节点链接" />
+            <Field label="节点内容" type="textarea" rows={8} value={importText} onChange={setImportText} placeholder="粘贴 vmess://、vless://、trojan://、ss://、hysteria2://，也可以粘贴整段 base64 订阅" />
+          </div>
+          <div className="actions">
+            <button className="primary" onClick={importNodes}>
+              <Upload size={16} />
+              导入到节点池
+            </button>
+          </div>
+        </Panel>
+      </div>
+
+      <Panel title="统一节点池" right={<button onClick={load}><RefreshCw size={15} />刷新</button>}>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>来源</th>
+                <th>协议</th>
+                <th>服务器</th>
+                <th>状态</th>
+                <th>更新时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nodes.map((node) => (
+                <tr key={node.id}>
+                  <td>
+                    <input className="table-input" value={node.name} onChange={(event) => setNodes((current) => current.map((item) => item.id === node.id ? { ...item, name: event.target.value } : item))} onBlur={(event) => updateNode(node, { name: event.target.value }).catch(() => {})} />
+                  </td>
+                  <td>{node.source === "panel" ? "面板" : node.sourceName || "导入"}</td>
+                  <td>{node.protocol}</td>
+                  <td>{node.server ? `${node.server}:${node.port || ""}` : "-"}</td>
+                  <td><span className={`status-pill ${node.enabled ? "online" : ""}`}><StatusDot on={node.enabled} />{node.enabled ? "启用" : "停用"}</span></td>
+                  <td>{node.updatedAt || "-"}</td>
+                  <td className="actions-cell">
+                    <button className="link" onClick={() => updateNode(node, { enabled: !node.enabled })}>{node.enabled ? "停用" : "启用"}</button>
+                    <button className="link" onClick={async () => { await copyText(node.raw); setMessage("节点链接已复制。"); }}>复制</button>
+                    <button className="link" onClick={() => deleteNode(node)}>删除</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {!nodes.length ? <div className="empty">还没有节点。用节点配置下发一次，或从订阅链接导入。</div> : null}
+      </Panel>
     </section>
   );
 }
@@ -1183,6 +1625,91 @@ function ForwardWizard({ agents }) {
                   await api(`/api/agents/${form.agentId}/forwards/${rule.id}`, { method: "DELETE" });
                   await loadRules(form.agentId);
                 }}>删除</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Panel>
+    </section>
+  );
+}
+
+function ProbeTasksPage({ agents, liveTick }) {
+  const [tasks, setTasks] = useState([]);
+  const [form, setForm] = useState({ name: "", type: "tcp", target: "1.1.1.1", port: 443, interval: 60, timeout: 5000, agentId: "" });
+  const [message, setMessage] = useState("");
+
+  const load = () => api("/api/probe-tasks").then(setTasks);
+  useEffect(() => {
+    load().catch(() => {});
+  }, [liveTick]);
+
+  const patch = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+
+  const create = async () => {
+    try {
+      setMessage("");
+      await api("/api/probe-tasks", { method: "POST", body: JSON.stringify(form) });
+      setForm((current) => ({ ...current, name: "" }));
+      await load();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  return (
+    <section>
+      <div className="grid2">
+        <Panel title="新建探测任务">
+          <div className="form-grid">
+            <Field label="名称" value={form.name} onChange={(value) => patch("name", value)} placeholder="可留空自动生成" />
+            <Field label="类型" type="select" value={form.type} onChange={(value) => patch("type", value)} options={[["tcp", "TCP Ping"], ["http", "HTTP Ping"], ["icmp", "ICMP Ping"]]} />
+            <Field label={form.type === "http" ? "URL" : "目标"} value={form.target} onChange={(value) => patch("target", value)} placeholder={form.type === "http" ? "https://example.com" : "example.com / 1.1.1.1"} />
+            {form.type === "tcp" ? <Field label="端口" type="number" value={form.port} onChange={(value) => patch("port", value)} /> : null}
+            <Field label="执行节点" type="select" value={form.agentId} onChange={(value) => patch("agentId", value)} options={[["", "全部在线节点"], ...agents.map((agent) => [agent.id, agent.name])]} />
+            <Field label="间隔秒" type="number" value={form.interval} onChange={(value) => patch("interval", value)} />
+            <Field label="超时 ms" type="number" value={form.timeout} onChange={(value) => patch("timeout", value)} />
+          </div>
+          <div className="actions">
+            <button className="primary" onClick={create}>创建并运行</button>
+          </div>
+          {message ? <p className="panel-message">{message}</p> : null}
+        </Panel>
+        <Panel title="机制说明">
+          <div className="guide-card flat">
+            <h3>Phase 1 探测总线</h3>
+            <p>任务保存在 server，按间隔下发给在线 agent；agent 执行 ICMP、TCP 或 HTTP 探测后回传延迟、状态和输出。Proxy 探测会复用这条通道继续扩展。</p>
+          </div>
+        </Panel>
+      </div>
+      <Panel title="任务列表">
+        <table>
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>类型</th>
+              <th>目标</th>
+              <th>执行节点</th>
+              <th>最近结果</th>
+              <th>延迟</th>
+              <th>更新时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.map((task) => (
+              <tr key={task.id}>
+                <td>{task.name}</td>
+                <td>{task.type}</td>
+                <td>{task.type === "tcp" ? `${task.target}:${task.port}` : task.target}</td>
+                <td>{task.agentId ? agents.find((agent) => agent.id === task.agentId)?.name || task.agentId : "全部在线"}</td>
+                <td><span className={`status-pill ${task.lastResult?.ok ? "online" : ""}`}><StatusDot on={task.lastResult?.ok} />{task.lastResult ? (task.lastResult.ok ? "ok" : "fail") : "pending"}</span></td>
+                <td>{task.lastResult?.latency ? `${task.lastResult.latency} ms` : "-"}{task.lastResult?.agentName ? <div className="muted">{task.lastResult.agentName}</div> : null}</td>
+                <td>{task.lastResult?.at || "-"}</td>
+                <td className="actions-cell">
+                  <button className="link" onClick={async () => { await api(`/api/probe-tasks/${task.id}/run`, { method: "POST" }); await load(); }}>运行</button>
+                  <button className="link" onClick={async () => { await api(`/api/probe-tasks/${task.id}`, { method: "DELETE" }); await load(); }}>删除</button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1385,7 +1912,7 @@ function Audit({ liveTick }) {
 
 function Tutorial() {
   const cards = [
-    ["实时探针", "前端会订阅服务器事件流，服务器在线状态、配置结果和审计都会更快刷新。"],
+    ["Komari 风格探针", "Agent 会持续上报 CPU、内存、Swap、硬盘、负载、运行时间、网络速率和进程数。"],
     ["直接输入终端", "SSH 终端区域支持直接键盘输入，不再只能依赖底部输入框。"],
     ["远程桌面", "新增 RDP 凭据保存、端口测试和 .rdp 文件生成。"],
     ["文件对传", "支持双栏浏览、浏览器上传、远端下载和服务器之间直传。"],
@@ -1416,14 +1943,17 @@ function sampleConfig() {
 }
 
 function App() {
+  const isAdminPath = window.location.pathname.startsWith("/admin");
   const [page, setPage] = useState("dashboard");
   const [agentId, setAgentId] = useState("");
   const [agents, setAgents] = useState([]);
   const [tokenDraft, setTokenDraft] = useState("");
   const [tokenReady, setTokenReady] = useState(false);
+  const [currentUser, setCurrentUser] = useState("");
   const [liveTick, setLiveTick] = useState(0);
 
   useEffect(() => {
+    if (!isAdminPath) return;
     const url = new URL(window.location.href);
     const urlToken = String(url.searchParams.get(URL_TOKEN_PARAM) || "").trim();
     const storedToken = String(window.localStorage.getItem(TOKEN_KEY) || "").trim();
@@ -1436,16 +1966,31 @@ function App() {
     setActiveApiToken(nextToken);
     setTokenDraft(nextToken);
     setTokenReady(true);
-  }, []);
+    if (nextToken) api("/api/auth/me").then((row) => setCurrentUser(row.username)).catch(() => {});
+  }, [isAdminPath]);
+
+  if (!isAdminPath) return <PublicProbePage />;
 
   const loadAgents = () => api("/api/agents").then((rows) => {
     setAgents(rows);
     if (!agentId && rows[0]) setAgentId(rows[0].id);
+  }).catch((error) => {
+    if (error.status === 401) clearToken();
+    throw error;
   });
 
   useEffect(() => {
     if (!tokenReady) return;
     loadAgents().catch(() => {});
+  }, [tokenReady]);
+
+  useEffect(() => {
+    if (!tokenReady) return;
+    const timer = window.setInterval(() => {
+      setLiveTick((value) => value + 1);
+      loadAgents().catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(timer);
   }, [tokenReady]);
 
   useEffect(() => {
@@ -1470,7 +2015,24 @@ function App() {
   const clearToken = () => {
     setTokenDraft("");
     setActiveApiToken("");
+    setCurrentUser("");
     window.localStorage.removeItem(TOKEN_KEY);
+  };
+
+  const login = (response) => {
+    setActiveApiToken(response.token);
+    setTokenDraft(response.token);
+    setCurrentUser(response.username);
+    window.localStorage.setItem(TOKEN_KEY, response.token);
+    setTokenReady(true);
+    loadAgents().catch(() => {});
+  };
+
+  const logout = async () => {
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+    } catch {}
+    clearToken();
   };
 
   const openAgent = (id) => {
@@ -1494,7 +2056,9 @@ function App() {
     if (page === "dashboard") return <Dashboard liveTick={liveTick} openAgent={openAgent} openSsh={openSsh} openDesktop={openDesktop} openFiles={openFiles} />;
     if (page === "servers") return <Servers agents={agents} openAgent={openAgent} openSsh={openSsh} openDesktop={openDesktop} openFiles={openFiles} />;
     if (page === "nodes") return <NodeWizard agents={agents} />;
+    if (page === "subscriptions") return <SubscriptionPage liveTick={liveTick} />;
     if (page === "forward") return <ForwardWizard agents={agents} />;
+    if (page === "probeTasks") return <ProbeTasksPage agents={agents} liveTick={liveTick} />;
     if (page === "files" || page === "files-agent") return <FilesPage agents={agents} initialAgentId={page === "files-agent" ? agentId : ""} />;
     if (page === "credentials") return <CredentialsPage liveTick={liveTick} />;
     if (page === "commands") return <CommandsPage agents={agents} liveTick={liveTick} />;
@@ -1508,8 +2072,11 @@ function App() {
     return <Tutorial />;
   }, [page, liveTick, agents, agentId, tokenDraft]);
 
+  if (!tokenReady) return null;
+  if (!getActiveApiToken()) return <LoginPage onLogin={login} />;
+
   return (
-    <Layout page={page} setPage={setPage} headerExtra={<AccessTokenBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} saveToken={saveToken} clearToken={clearToken} hasToken={Boolean(getActiveApiToken())} />}>
+    <Layout page={page} setPage={setPage} headerExtra={<HeaderAccount user={currentUser} logout={logout} />}>
       {content}
     </Layout>
   );

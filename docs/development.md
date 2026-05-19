@@ -13,6 +13,7 @@
   - 控制 `sing-box` 服务
   - 读取日志
   - 创建与删除独立转发容器
+  - 上报 Komari 风格系统探针指标
   - 通过主控保存的 SSH 凭据建立真实 SSH 会话
 
 ## 2. 技术栈
@@ -118,6 +119,15 @@ docker compose -f docker-compose.agent.yml up -d --build
 - `GET /api/agents/:id/config/versions`
 - `POST /api/agents/:id/config/rollback/:versionId`
 - `GET /api/agents/:id/logs/stream`
+
+`GET /api/agents` 与 `GET /api/agents/:id` 会返回 `probe` 字段，包含：
+
+- `cpu.usage / cpu.cores`
+- `memory.total / memory.used / memory.usage`
+- `swap.total / swap.used / swap.usage`
+- `disk.total / disk.used / disk.usage`
+- `network.rxSpeed / network.txSpeed / network.rxBytes / network.txBytes`
+- `load / uptime / process.count / updatedAt`
 
 ### SSH
 

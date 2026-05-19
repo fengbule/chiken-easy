@@ -3,6 +3,7 @@ import os from "os";
 import fs from "fs";
 import path from "path";
 import { exec, execFile } from "child_process";
+import net from "net";
 import { nanoid } from "nanoid";
 import { buildForwardPlan } from "../server/configFactory.js";
 
@@ -18,9 +19,14 @@ const singboxImage = process.env.SINGBOX_IMAGE || "ghcr.io/sagernet/sing-box:lat
 const singboxConfigVolume = process.env.SINGBOX_CONFIG_VOLUME || "chiken-singbox-config";
 const realmImage = process.env.CHIKEN_REALM_IMAGE || "4points/realm:latest";
 const gostImage = process.env.CHIKEN_GOST_IMAGE || "gogost/gost:latest";
+const heartbeatInterval = Math.max(2000, Number(process.env.CHIKEN_HEARTBEAT_INTERVAL || 5000) || 5000);
+const hostProcDir = process.env.CHIKEN_HOST_PROC || "/proc";
 
 fs.mkdirSync(stateDir, { recursive: true });
 fs.mkdirSync(forwardDir, { recursive: true });
+
+let previousCpuSnapshot = null;
+let previousNetworkSnapshot = null;
 
 function readState() {
   if (fs.existsSync(stateFile)) return JSON.parse(fs.readFileSync(stateFile, "utf8"));
@@ -70,6 +76,229 @@ async function singboxVersion() {
   }
   const result = await run(process.env.SINGBOX_BIN || "sing-box", ["version"]);
   return result.output.split(/\s+/).find((item) => /^\d+\.\d+/.test(item)) || "-";
+}
+
+function round(value, digits = 2) {
+  if (!Number.isFinite(value)) return null;
+  const base = 10 ** digits;
+  return Math.round(value * base) / base;
+}
+
+function cpuSnapshot() {
+  const rows = os.cpus();
+  const total = rows.reduce(
+    (sum, cpu) => sum + Object.values(cpu.times).reduce((itemSum, value) => itemSum + value, 0),
+    0
+  );
+  const idle = rows.reduce((sum, cpu) => sum + cpu.times.idle, 0);
+  return { total, idle, at: Date.now() };
+}
+
+function cpuUsage() {
+  const next = cpuSnapshot();
+  const previous = previousCpuSnapshot;
+  previousCpuSnapshot = next;
+  if (!previous) return null;
+
+  const totalDelta = next.total - previous.total;
+  const idleDelta = next.idle - previous.idle;
+  if (totalDelta <= 0) return null;
+  return round(Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100)), 1);
+}
+
+function memoryProbe() {
+  const total = os.totalmem();
+  const free = os.freemem();
+  const used = Math.max(0, total - free);
+  return {
+    total,
+    free,
+    used,
+    usage: total ? round((used / total) * 100, 1) : null
+  };
+}
+
+async function swapProbe() {
+  if (process.platform !== "linux") return null;
+  const result = await runShell("awk '/SwapTotal|SwapFree/ {print $1,$2}' /proc/meminfo");
+  if (!result.ok) return null;
+  const values = Object.fromEntries(
+    result.output
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/))
+      .filter((row) => row.length >= 2)
+      .map(([key, value]) => [key.replace(":", ""), Number(value) * 1024])
+  );
+  const total = values.SwapTotal || 0;
+  const free = values.SwapFree || 0;
+  const used = Math.max(0, total - free);
+  return {
+    total,
+    free,
+    used,
+    usage: total ? round((used / total) * 100, 1) : 0
+  };
+}
+
+async function diskProbe() {
+  const result = await runShell("df -kP / 2>/dev/null | tail -1");
+  if (!result.ok || !result.output) return null;
+  const parts = result.output.trim().split(/\s+/);
+  if (parts.length < 6) return null;
+  const total = Number(parts[1]) * 1024;
+  const used = Number(parts[2]) * 1024;
+  const free = Number(parts[3]) * 1024;
+  return {
+    mount: parts[5],
+    total,
+    used,
+    free,
+    usage: total ? round((used / total) * 100, 1) : null
+  };
+}
+
+function networkTotals() {
+  const netDevPath = path.join(hostProcDir, "net/dev");
+  if (!fs.existsSync(netDevPath)) return null;
+  const rows = fs.readFileSync(netDevPath, "utf8").split("\n").slice(2);
+  const totals = rows.reduce(
+    (sum, row) => {
+      const [ifaceRaw, valuesRaw] = row.trim().split(":");
+      if (!ifaceRaw || !valuesRaw) return sum;
+      const iface = ifaceRaw.trim();
+      if (iface === "lo") return sum;
+      const values = valuesRaw.trim().split(/\s+/).map(Number);
+      sum.rxBytes += values[0] || 0;
+      sum.txBytes += values[8] || 0;
+      sum.interfaces += 1;
+      return sum;
+    },
+    { rxBytes: 0, txBytes: 0, interfaces: 0 }
+  );
+  return { ...totals, at: Date.now() };
+}
+
+function networkProbe() {
+  const next = networkTotals();
+  if (!next) return null;
+  const previous = previousNetworkSnapshot;
+  previousNetworkSnapshot = next;
+  if (!previous) return { ...next, rxSpeed: null, txSpeed: null };
+
+  const seconds = Math.max(1, (next.at - previous.at) / 1000);
+  return {
+    ...next,
+    rxSpeed: round(Math.max(0, next.rxBytes - previous.rxBytes) / seconds, 1),
+    txSpeed: round(Math.max(0, next.txBytes - previous.txBytes) / seconds, 1)
+  };
+}
+
+async function processCount() {
+  if (process.platform === "win32") return null;
+  const result = await runShell("ps -e --no-headers 2>/dev/null | wc -l");
+  const value = Number(result.output);
+  return Number.isFinite(value) ? value : null;
+}
+
+function nowMs() {
+  return Number(process.hrtime.bigint() / 1000000n);
+}
+
+async function icmpProbe(task) {
+  const target = String(task.target || "").trim();
+  const timeoutSeconds = Math.max(1, Math.ceil(Number(task.timeout || 5000) / 1000));
+  const command = process.platform === "win32" ? `ping -n 1 -w ${timeoutSeconds * 1000} ${target}` : `ping -c 1 -W ${timeoutSeconds} ${target}`;
+  const started = nowMs();
+  const result = await runShell(command, { timeout: Number(task.timeout || 5000) + 1000 });
+  const latencyMatch = result.output.match(/time[=<]([\d.]+)\s*ms/i);
+  return {
+    ok: result.ok,
+    latency: latencyMatch ? Number(latencyMatch[1]) : nowMs() - started,
+    output: result.output.slice(0, 500)
+  };
+}
+
+function tcpProbe(task) {
+  const target = String(task.target || "").trim();
+  const port = Number(task.port || 80) || 80;
+  const timeout = Number(task.timeout || 5000) || 5000;
+  const started = nowMs();
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: target, port }, () => {
+      socket.end();
+      resolve({ ok: true, latency: nowMs() - started, output: `tcp ok ${target}:${port}` });
+    });
+    socket.setTimeout(timeout);
+    socket.on("timeout", () => {
+      socket.destroy();
+      resolve({ ok: false, latency: nowMs() - started, output: `tcp timeout ${target}:${port}` });
+    });
+    socket.on("error", (error) => resolve({ ok: false, latency: nowMs() - started, output: error.message }));
+  });
+}
+
+async function httpProbe(task) {
+  const target = String(task.target || "").trim();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number(task.timeout || 5000) || 5000);
+  const started = nowMs();
+  try {
+    const response = await fetch(target, { method: task.method || "GET", signal: controller.signal });
+    return {
+      ok: response.ok,
+      latency: nowMs() - started,
+      status: response.status,
+      output: `${response.status} ${response.statusText}`
+    };
+  } catch (error) {
+    return { ok: false, latency: nowMs() - started, output: error.message };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function runProbeTask(task = {}) {
+  const type = String(task.type || "tcp").toLowerCase();
+  let result;
+  if (type === "icmp") result = await icmpProbe(task);
+  else if (type === "http") result = await httpProbe(task);
+  else result = await tcpProbe(task);
+  return {
+    taskId: task.id,
+    type,
+    target: task.target,
+    port: task.port,
+    ok: Boolean(result.ok),
+    latency: Number.isFinite(Number(result.latency)) ? Math.round(Number(result.latency) * 10) / 10 : null,
+    status: result.status || null,
+    output: String(result.output || "").slice(0, 500)
+  };
+}
+
+async function collectProbe() {
+  const [disk, swap, processes] = await Promise.all([diskProbe(), swapProbe(), processCount()]);
+  return {
+    updatedAt: new Date().toISOString(),
+    uptime: Math.floor(os.uptime()),
+    load: os.loadavg().map((value) => round(value, 2)),
+    cpu: {
+      usage: cpuUsage(),
+      cores: os.cpus().length,
+      model: os.cpus()[0]?.model || ""
+    },
+    memory: memoryProbe(),
+    swap,
+    disk,
+    network: networkProbe(),
+    process: { count: processes }
+  };
+}
+
+async function collectStatus() {
+  return {
+    singboxStatus: (await service("status")).output || "unknown",
+    probe: await collectProbe()
+  };
 }
 
 function readConfig() {
@@ -226,6 +455,10 @@ async function handle(ws, msg) {
   if (msg.command === "apply_forward_rule") return { commandId: msg.id, ...(await applyForwardRule(msg.payload.rule || msg.payload)) };
   if (msg.command === "remove_forward_rule") return { commandId: msg.id, ...(await removeForwardRule(msg.payload.rule || msg.payload)) };
   if (msg.command === "exec") return { commandId: msg.id, ...(await runShell(msg.payload.command)) };
+  if (msg.command === "probe_task") {
+    const probeResult = await runProbeTask(msg.payload.task || msg.payload);
+    return { commandId: msg.id, ok: probeResult.ok, output: probeResult.output, probeResult };
+  }
   if (msg.command === "uninstall_agent") {
     if (serviceMode === "docker") {
       const removeSingbox = msg.payload?.removeSingbox ? "docker rm -f chiken-singbox || true;" : "";
@@ -259,6 +492,7 @@ async function connect() {
   });
 
   ws.on("open", async () => {
+    const status = await collectStatus();
     ws.send(
       JSON.stringify({
         type: "hello",
@@ -271,14 +505,14 @@ async function connect() {
           os: process.platform,
           arch: process.arch,
           singboxVersion: await singboxVersion(),
-          singboxStatus: (await service("status")).output || "unknown"
+          ...status
         }
       })
     );
 
     setInterval(async () => {
-      ws.send(JSON.stringify({ type: "heartbeat", status: { singboxStatus: (await service("status")).output || "unknown" } }));
-    }, 15000);
+      ws.send(JSON.stringify({ type: "heartbeat", status: await collectStatus() }));
+    }, heartbeatInterval);
   });
 
   ws.on("message", async (raw) => {

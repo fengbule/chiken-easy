@@ -7,9 +7,19 @@ import fs from "fs";
 import net from "net";
 import os from "os";
 import path from "path";
+import crypto from "crypto";
 import { pipeline } from "stream/promises";
 import { fileURLToPath } from "url";
 import { buildConfig, buildForwardConfig, buildForwardRule, forwardCatalog, protocolCatalog } from "./configFactory.js";
+import {
+  buildPanelNode,
+  createSubscriptionToken,
+  parseNodeImport,
+  publicNode,
+  publicSubscriptionToken,
+  renderSubscription,
+  upsertNode
+} from "./subscriptions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -37,12 +47,19 @@ const defaultState = {
   sshProfiles: {},
   rdpProfiles: {},
   credentials: [],
-  commands: builtinCommands
+  commands: builtinCommands,
+  adminUsers: [],
+  sessions: [],
+  probeTasks: [],
+  probeResults: {},
+  nodePool: [],
+  subscriptionTokens: []
 };
 
 const clients = new Map();
 const logStreams = new Map();
 const eventStreams = new Set();
+const publicProbeStreams = new Set();
 const commandWaiters = new Map();
 const configCommandRefs = new Map();
 const forwardCommandRefs = new Map();
@@ -62,11 +79,44 @@ function loadState() {
     sshProfiles: raw.sshProfiles || {},
     rdpProfiles: raw.rdpProfiles || {},
     credentials: raw.credentials || [],
-    commands: normalizeCommands(raw.commands)
+    commands: normalizeCommands(raw.commands),
+    adminUsers: raw.adminUsers || [],
+    sessions: raw.sessions || [],
+    probeTasks: raw.probeTasks || [],
+    probeResults: raw.probeResults || {},
+    nodePool: raw.nodePool || [],
+    subscriptionTokens: raw.subscriptionTokens || []
   };
 }
 
 let state = loadState();
+
+function hashPassword(password, salt = nanoid(16)) {
+  const hash = crypto.createHash("sha256").update(`${salt}:${password}`).digest("hex");
+  return { salt, hash };
+}
+
+function verifyPassword(password, record) {
+  if (!record?.salt || !record?.hash) return false;
+  return hashPassword(password, record.salt).hash === record.hash;
+}
+
+function ensureDefaultAdmin() {
+  state.adminUsers ||= [];
+  if (state.adminUsers.length) return;
+  const username = String(process.env.CHIKEN_ADMIN_USER || "admin").trim() || "admin";
+  const password = String(process.env.CHIKEN_ADMIN_PASSWORD || "chiken-easy").trim() || "chiken-easy";
+  const passwordHash = hashPassword(password);
+  state.adminUsers.push({ id: nanoid(), username, ...passwordHash, createdAt: new Date().toISOString(), bootstrap: true });
+  saveState();
+}
+
+function ensureDefaultSubscriptionToken() {
+  state.subscriptionTokens ||= [];
+  if (state.subscriptionTokens.some((item) => item.enabled !== false)) return;
+  state.subscriptionTokens.push(createSubscriptionToken("默认订阅"));
+  saveState();
+}
 
 if (process.env.CHIKEN_BOOTSTRAP_TOKEN && !state.tokens.some((item) => item.token === process.env.CHIKEN_BOOTSTRAP_TOKEN)) {
   state.tokens.push({ token: process.env.CHIKEN_BOOTSTRAP_TOKEN, createdAt: new Date().toISOString(), used: false, bootstrap: true });
@@ -76,6 +126,9 @@ if (process.env.CHIKEN_API_TOKEN && !state.apiTokens.some((item) => item.token =
   state.apiTokens.push({ id: "bootstrap", name: "bootstrap", token: process.env.CHIKEN_API_TOKEN, createdAt: new Date().toISOString(), bootstrap: true });
 }
 
+ensureDefaultAdmin();
+ensureDefaultSubscriptionToken();
+
 function saveState() {
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 }
@@ -83,6 +136,12 @@ function saveState() {
 function emitEvent(type, payload = {}) {
   const message = `data: ${JSON.stringify({ type, payload, at: new Date().toISOString() })}\n\n`;
   for (const res of eventStreams) res.write(message);
+}
+
+function emitPublicProbeEvent() {
+  if (!publicProbeStreams.size) return;
+  const message = `data: ${JSON.stringify({ type: "probes", payload: publicProbePayload(), at: new Date().toISOString() })}\n\n`;
+  for (const res of publicProbeStreams) res.write(message);
 }
 
 function audit(actor, action, target, detail = {}) {
@@ -202,6 +261,61 @@ function publicRdpProfile(agentId) {
   };
 }
 
+function finiteNumber(value, fallback = null) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function publicProbe(probe = {}) {
+  probe ||= {};
+  return {
+    updatedAt: probe.updatedAt || null,
+    uptime: finiteNumber(probe.uptime),
+    load: Array.isArray(probe.load) ? probe.load.map((item) => finiteNumber(item, 0)).slice(0, 3) : [],
+    cpu: {
+      usage: finiteNumber(probe.cpu?.usage),
+      cores: finiteNumber(probe.cpu?.cores),
+      model: String(probe.cpu?.model || "")
+    },
+    memory: {
+      total: finiteNumber(probe.memory?.total, 0),
+      used: finiteNumber(probe.memory?.used, 0),
+      free: finiteNumber(probe.memory?.free, 0),
+      usage: finiteNumber(probe.memory?.usage)
+    },
+    swap: probe.swap
+      ? {
+          total: finiteNumber(probe.swap.total, 0),
+          used: finiteNumber(probe.swap.used, 0),
+          free: finiteNumber(probe.swap.free, 0),
+          usage: finiteNumber(probe.swap.usage)
+        }
+      : null,
+    disk: probe.disk
+      ? {
+          mount: String(probe.disk.mount || "/"),
+          total: finiteNumber(probe.disk.total, 0),
+          used: finiteNumber(probe.disk.used, 0),
+          free: finiteNumber(probe.disk.free, 0),
+          usage: finiteNumber(probe.disk.usage)
+        }
+      : null,
+    network: probe.network
+      ? {
+          rxBytes: finiteNumber(probe.network.rxBytes, 0),
+          txBytes: finiteNumber(probe.network.txBytes, 0),
+          rxSpeed: finiteNumber(probe.network.rxSpeed),
+          txSpeed: finiteNumber(probe.network.txSpeed),
+          interfaces: finiteNumber(probe.network.interfaces, 0)
+        }
+      : null,
+    process: {
+      count: finiteNumber(probe.process?.count)
+    }
+  };
+}
+
 function publicAgent(agent) {
   const ssh = publicSshProfile(agent.id);
   const rdp = publicRdpProfile(agent.id);
@@ -225,8 +339,95 @@ function publicAgent(agent) {
     sshMode: ssh.mode,
     rdpConfigured: rdp.ready,
     rdpHost: rdp.host,
-    rdpPort: rdp.port
+    rdpPort: rdp.port,
+    probe: publicProbe(agent.probe)
   };
+}
+
+function average(rows) {
+  const values = rows.map((item) => Number(item)).filter(Number.isFinite);
+  if (!values.length) return null;
+  return Math.round((values.reduce((sum, item) => sum + item, 0) / values.length) * 10) / 10;
+}
+
+function dashboardSummary(agents) {
+  return {
+    avgCpu: average(agents.map((agent) => agent.probe?.cpu?.usage)),
+    avgMemory: average(agents.map((agent) => agent.probe?.memory?.usage)),
+    avgDisk: average(agents.map((agent) => agent.probe?.disk?.usage)),
+    rxSpeed: agents.reduce((sum, agent) => sum + (Number(agent.probe?.network?.rxSpeed) || 0), 0),
+    txSpeed: agents.reduce((sum, agent) => sum + (Number(agent.probe?.network?.txSpeed) || 0), 0)
+  };
+}
+
+function publicProbeAgent(agent) {
+  const row = publicAgent(agent);
+  return {
+    id: row.id,
+    name: row.name,
+    os: row.os,
+    arch: row.arch,
+    tags: row.tags,
+    connected: row.connected,
+    singboxStatus: row.singboxStatus,
+    lastSeen: row.lastSeen,
+    probe: row.probe
+  };
+}
+
+function publicProbePayload() {
+  const agents = Object.values(state.agents).map(publicProbeAgent).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return {
+    total: agents.length,
+    online: agents.filter((agent) => agent.connected).length,
+    offline: agents.filter((agent) => !agent.connected).length,
+    summary: dashboardSummary(agents),
+    agents
+  };
+}
+
+function publicProbeTasks() {
+  return (state.probeTasks || []).map((task) => ({
+    ...task,
+    lastResults: Object.values(state.probeResults?.[task.id] || {}).sort((a, b) => String(b.at).localeCompare(String(a.at))),
+    lastResult: Object.values(state.probeResults?.[task.id] || {}).sort((a, b) => String(b.at).localeCompare(String(a.at)))[0] || null
+  }));
+}
+
+function normalizeProbeTask(input = {}) {
+  const type = String(input.type || "tcp").trim().toLowerCase();
+  if (!["icmp", "tcp", "http"].includes(type)) throw new Error("unsupported probe type");
+  const target = String(input.target || "").trim();
+  if (!target) throw new Error("target is required");
+  const interval = Math.max(10, Math.min(3600, Number(input.interval || 60) || 60));
+  return {
+    id: String(input.id || nanoid(10)),
+    name: String(input.name || `${type}:${target}`).trim(),
+    type,
+    target,
+    port: type === "tcp" ? Number(input.port || 80) || 80 : undefined,
+    method: type === "http" ? String(input.method || "GET").toUpperCase() : undefined,
+    timeout: Math.max(1000, Math.min(30000, Number(input.timeout || 5000) || 5000)),
+    interval,
+    agentId: String(input.agentId || "").trim(),
+    enabled: input.enabled !== false,
+    createdAt: input.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function dispatchProbeTask(task, forced = false) {
+  if (!task.enabled && !forced) return null;
+  const agentIds = task.agentId ? [task.agentId] : Array.from(clients.keys());
+  const sent = [];
+  for (const agentId of agentIds) {
+    if (!clients.has(agentId)) continue;
+    try {
+      const commandId = sendCommand(agentId, "probe_task", { task: { ...task, forced } });
+      sent.push({ agentId, commandId });
+    } catch {}
+  }
+  return sent;
 }
 
 function publicForwardRules(agentId) {
@@ -294,11 +495,15 @@ function extractTokenFromRequest(req) {
 }
 
 function validateApiToken(token) {
-  return (state.apiTokens || []).find((row) => row.token === token && !row.revoked) || null;
+  const apiToken = (state.apiTokens || []).find((row) => row.token === token && !row.revoked);
+  if (apiToken) return { type: "api-token", ...apiToken };
+  const session = (state.sessions || []).find((row) => row.token === token && !row.revoked && Date.parse(row.expiresAt || "") > Date.now());
+  if (session) return { type: "session", ...session };
+  return null;
 }
 
 function requestAccess(req) {
-  const required = process.env.CHIKEN_REQUIRE_API_TOKEN === "1";
+  const required = process.env.CHIKEN_REQUIRE_API_TOKEN !== "0";
   const token = extractTokenFromRequest(req);
   const apiToken = token ? validateApiToken(token) : null;
   return {
@@ -309,8 +514,12 @@ function requestAccess(req) {
   };
 }
 
+function isPublicApiPath(pathname) {
+  return pathname === "/api/health" || pathname === "/api/auth/login" || pathname === "/api/public/probes" || pathname === "/api/public/events";
+}
+
 function requireApiAccess(req, res, next) {
-  if (!req.path.startsWith("/api/") || req.path === "/api/health") return next();
+  if (!req.path.startsWith("/api/") || isPublicApiPath(req.path)) return next();
   const access = requestAccess(req);
   if (access.token && !access.apiToken) return res.status(401).json({ error: "invalid API token" });
   if (access.authorized) {
@@ -660,6 +869,73 @@ app.use(requireApiAccess);
 
 app.get("/api/health", (_, res) => res.json({ ok: true, name: "chiken-easy" }));
 
+app.post("/api/auth/login", (req, res) => {
+  const username = String(req.body?.username || "").trim();
+  const password = String(req.body?.password || "");
+  const user = (state.adminUsers || []).find((row) => row.username === username && !row.revoked);
+  if (!user || !verifyPassword(password, user)) return res.status(401).json({ error: "用户名或密码错误" });
+  const token = `sess_${nanoid(36)}`;
+  const session = {
+    id: nanoid(),
+    token,
+    userId: user.id,
+    username: user.username,
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 7 * 86400 * 1000).toISOString()
+  };
+  state.sessions ||= [];
+  state.sessions.unshift(session);
+  state.sessions = state.sessions.filter((row) => !row.revoked && Date.parse(row.expiresAt || "") > Date.now()).slice(0, 30);
+  saveState();
+  audit("admin", "login", "-", { username });
+  res.json({ token, username: user.username, expiresAt: session.expiresAt });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  res.json({ username: req.apiToken?.username || req.apiToken?.name || "admin", type: req.apiToken?.type || "api-token" });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  if (req.apiToken?.type === "session") {
+    const session = (state.sessions || []).find((row) => row.id === req.apiToken.id);
+    if (session) {
+      session.revoked = true;
+      session.updatedAt = new Date().toISOString();
+      saveState();
+    }
+  }
+  res.json({ ok: true });
+});
+
+app.put("/api/auth/password", (req, res) => {
+  if (req.apiToken?.type !== "session") return res.status(403).json({ error: "请使用账号密码登录后修改密码" });
+  const oldPassword = String(req.body?.oldPassword || "");
+  const newPassword = String(req.body?.newPassword || "");
+  if (newPassword.length < 8) return res.status(400).json({ error: "新密码至少 8 位" });
+  const user = (state.adminUsers || []).find((row) => row.id === req.apiToken.userId && !row.revoked);
+  if (!user || !verifyPassword(oldPassword, user)) return res.status(401).json({ error: "旧密码错误" });
+  Object.assign(user, hashPassword(newPassword), { updatedAt: new Date().toISOString() });
+  for (const session of state.sessions || []) {
+    if (session.userId === user.id && session.id !== req.apiToken.id) session.revoked = true;
+  }
+  saveState();
+  audit("admin", "change_password", "-", { username: user.username });
+  res.json({ ok: true });
+});
+
+app.get("/api/public/probes", (_, res) => res.json(publicProbePayload()));
+
+app.get("/api/public/events", (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive"
+  });
+  publicProbeStreams.add(res);
+  res.write(`data: ${JSON.stringify({ type: "probes", payload: publicProbePayload(), at: new Date().toISOString() })}\n\n`);
+  req.on("close", () => publicProbeStreams.delete(res));
+});
+
 app.get("/api/events", (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -678,6 +954,7 @@ app.get("/api/dashboard", (_, res) => {
     online: agents.filter((agent) => agent.connected).length,
     offline: agents.filter((agent) => !agent.connected).length,
     activeSingbox: agents.filter((agent) => agent.singboxStatus === "active").length,
+    summary: dashboardSummary(agents),
     recent: agents.sort((a, b) => String(b.lastSeen).localeCompare(String(a.lastSeen))).slice(0, 8)
   });
 });
@@ -688,6 +965,137 @@ app.get("/api/agents/:id", (req, res) => {
   const agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: "agent not found" });
   res.json(publicAgent(agent));
+});
+
+app.put("/api/agents/:id", (req, res) => {
+  const agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: "agent not found" });
+  const name = String(req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ error: "name is required" });
+  agent.name = name.slice(0, 80);
+  agent.updatedAt = new Date().toISOString();
+  saveState();
+  emitEvent("agent", { action: "renamed", agent: publicAgent(agent) });
+  emitPublicProbeEvent();
+  audit("admin", "rename_agent", req.params.id, { name: agent.name });
+  res.json(publicAgent(agent));
+});
+
+app.get("/api/node-pool", (req, res) => {
+  ensureDefaultSubscriptionToken();
+  res.json({
+    nodes: (state.nodePool || []).map(publicNode),
+    subscriptions: (state.subscriptionTokens || []).map((token) => publicSubscriptionToken(token, req))
+  });
+});
+
+app.post("/api/node-pool/import", async (req, res) => {
+  try {
+    let text = String(req.body?.text || "");
+    const url = String(req.body?.url || "").trim();
+    const sourceName = String(req.body?.sourceName || (url ? new URL(url).hostname : "手动导入")).trim() || "手动导入";
+    if (url) {
+      const response = await fetch(url, { redirect: "follow" });
+      if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
+      text += `\n${await response.text()}`;
+    }
+    const imported = parseNodeImport(text, sourceName);
+    state.nodePool ||= [];
+    const saved = imported.map((node) => upsertNode(state.nodePool, node));
+    saveState();
+    audit("admin", "import_nodes", "-", { sourceName, count: saved.length, url: url ? new URL(url).hostname : "" });
+    res.json({ imported: saved.length, nodes: saved.map(publicNode) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.put("/api/node-pool/:id", (req, res) => {
+  const node = (state.nodePool || []).find((row) => row.id === req.params.id);
+  if (!node) return res.status(404).json({ error: "node not found" });
+  if ("name" in (req.body || {})) node.name = String(req.body.name || node.name).trim() || node.name;
+  if ("enabled" in (req.body || {})) node.enabled = req.body.enabled !== false;
+  if ("tags" in (req.body || {})) {
+    node.tags = Array.isArray(req.body.tags)
+      ? req.body.tags.map((item) => String(item).trim()).filter(Boolean)
+      : String(req.body.tags || "").split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  node.updatedAt = new Date().toISOString();
+  saveState();
+  audit("admin", "update_node", node.id, { name: node.name, enabled: node.enabled !== false });
+  res.json(publicNode(node));
+});
+
+app.delete("/api/node-pool/:id", (req, res) => {
+  const before = state.nodePool || [];
+  const node = before.find((row) => row.id === req.params.id);
+  if (!node) return res.status(404).json({ error: "node not found" });
+  state.nodePool = before.filter((row) => row.id !== req.params.id);
+  saveState();
+  audit("admin", "delete_node", req.params.id, { name: node.name });
+  res.json({ ok: true });
+});
+
+app.get("/api/subscriptions", (req, res) => {
+  ensureDefaultSubscriptionToken();
+  res.json((state.subscriptionTokens || []).map((token) => publicSubscriptionToken(token, req)));
+});
+
+app.post("/api/subscriptions", (req, res) => {
+  state.subscriptionTokens ||= [];
+  const token = createSubscriptionToken(req.body?.name || "订阅");
+  state.subscriptionTokens.unshift(token);
+  saveState();
+  audit("admin", "create_subscription", token.id, { name: token.name });
+  res.json(publicSubscriptionToken(token, req));
+});
+
+app.get("/api/probe-tasks", (_, res) => res.json(publicProbeTasks()));
+
+app.post("/api/probe-tasks", (req, res) => {
+  try {
+    const task = normalizeProbeTask(req.body || {});
+    state.probeTasks ||= [];
+    state.probeTasks.unshift(task);
+    state.probeTasks = state.probeTasks.slice(0, 200);
+    saveState();
+    const sent = dispatchProbeTask(task, true) || [];
+    audit("admin", "create_probe_task", task.id, { type: task.type, target: task.target, sent: sent.length });
+    res.json({ task, sent });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.put("/api/probe-tasks/:id", (req, res) => {
+  const current = (state.probeTasks || []).find((task) => task.id === req.params.id);
+  if (!current) return res.status(404).json({ error: "probe task not found" });
+  try {
+    const next = normalizeProbeTask({ ...current, ...(req.body || {}), id: current.id, createdAt: current.createdAt });
+    Object.assign(current, next);
+    saveState();
+    audit("admin", "update_probe_task", current.id, { type: current.type, target: current.target });
+    res.json(current);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/probe-tasks/:id/run", (req, res) => {
+  const task = (state.probeTasks || []).find((row) => row.id === req.params.id);
+  if (!task) return res.status(404).json({ error: "probe task not found" });
+  const sent = dispatchProbeTask(task, true) || [];
+  audit("admin", "run_probe_task", task.id, { sent: sent.length });
+  res.json({ ok: true, sent });
+});
+
+app.delete("/api/probe-tasks/:id", (req, res) => {
+  const before = state.probeTasks || [];
+  state.probeTasks = before.filter((task) => task.id !== req.params.id);
+  if (state.probeResults) delete state.probeResults[req.params.id];
+  saveState();
+  audit("admin", "delete_probe_task", req.params.id);
+  res.json({ ok: true });
 });
 
 app.get("/api/agents/:id/ssh-profile", (req, res) => {
@@ -1005,17 +1413,24 @@ app.post("/api/agents/:id/forward/wizard", (req, res) => {
 });
 
 app.post("/api/agents/:id/config/wizard", (req, res) => {
+  const agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: "agent not found" });
   try {
     const config = buildConfig(req.body || {});
     const version = { id: nanoid(), at: new Date().toISOString(), status: "pending", config };
     state.configVersions[req.params.id] ||= [];
     state.configVersions[req.params.id].unshift(version);
     state.configVersions[req.params.id] = state.configVersions[req.params.id].slice(0, 30);
+    const panelNode = buildPanelNode(agent, req.body || {});
+    if (panelNode) {
+      state.nodePool ||= [];
+      upsertNode(state.nodePool, panelNode);
+    }
     saveState();
     const commandId = sendCommand(req.params.id, "apply_config", { config, restart: true, versionId: version.id });
     configCommandRefs.set(commandId, { agentId: req.params.id, versionId: version.id });
-    audit("admin", "wizard_apply_config", req.params.id, { commandId, versionId: version.id, protocol: req.body?.protocol });
-    res.json({ ok: true, commandId, versionId: version.id, config });
+    audit("admin", "wizard_apply_config", req.params.id, { commandId, versionId: version.id, protocol: req.body?.protocol, node: panelNode?.id || "" });
+    res.json({ ok: true, commandId, versionId: version.id, config, node: panelNode ? publicNode(panelNode) : null });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -1255,6 +1670,15 @@ app.get("/api/audit", (_, res) => {
   res.json(rows.reverse().slice(0, 300));
 });
 
+app.get("/sub/:token", (req, res) => {
+  const token = (state.subscriptionTokens || []).find((item) => item.token === req.params.token && item.enabled !== false);
+  if (!token) return res.status(404).send("subscription not found");
+  const { contentType, body } = renderSubscription(state.nodePool || [], String(req.query.format || "base64"));
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Cache-Control", "no-store");
+  res.send(body);
+});
+
 if (fs.existsSync(webDist)) app.use(express.static(webDist));
 app.get("*", (_, res, next) => {
   const index = path.join(webDist, "index.html");
@@ -1265,6 +1689,16 @@ app.get("*", (_, res, next) => {
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 const terminalWss = new WebSocketServer({ noServer: true });
+
+setInterval(() => {
+  for (const task of state.probeTasks || []) {
+    if (!task.enabled) continue;
+    const last = state.probeResults?.[task.id];
+    const lastAt = Date.parse(last?.at || "");
+    if (Number.isFinite(lastAt) && Date.now() - lastAt < (Number(task.interval || 60) || 60) * 1000) continue;
+    dispatchProbeTask(task);
+  }
+}, 5000);
 
 server.on("upgrade", (req, socket, head) => {
   const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
@@ -1330,6 +1764,7 @@ wss.on("connection", (ws) => {
       clients.set(agentId, ws);
       saveState();
       emitEvent("agent", { action: "online", agent: publicAgent(state.agents[agentId]) });
+      emitPublicProbeEvent();
       audit("agent", "agent_online", agentId, { host: msg.agent.host, ip: msg.agent.ip });
       ws.send(JSON.stringify({ type: "welcome", id: agentId }));    
       return;
@@ -1341,12 +1776,26 @@ wss.on("connection", (ws) => {
       Object.assign(state.agents[agentId], msg.status, { lastSeen: new Date().toISOString() });
       saveState();
       emitEvent("agent", { action: "heartbeat", agent: publicAgent(state.agents[agentId]) });
+      emitPublicProbeEvent();
     }
 
     if (msg.type === "log") pushLog(agentId, { at: new Date().toISOString(), line: msg.line });
 
     if (msg.type === "command_result") {
       audit("agent", "command_result", agentId, { commandId: msg.commandId, ok: msg.ok, output: String(msg.output || "").slice(0, 1000) });
+
+      if (msg.probeResult?.taskId) {
+        state.probeResults ||= {};
+        state.probeResults[msg.probeResult.taskId] ||= {};
+        state.probeResults[msg.probeResult.taskId][agentId] = {
+          ...msg.probeResult,
+          agentId,
+          agentName: state.agents[agentId]?.name || agentId,
+          at: new Date().toISOString()
+        };
+        saveState();
+        emitEvent("probe-result", state.probeResults[msg.probeResult.taskId][agentId]);
+      }
 
       if (configCommandRefs.has(msg.commandId)) {
         const ref = configCommandRefs.get(msg.commandId);
@@ -1394,6 +1843,7 @@ wss.on("connection", (ws) => {
     if (state.agents[agentId]) state.agents[agentId].lastSeen = new Date().toISOString();
     saveState();
     emitEvent("agent", { action: "offline", agent: publicAgent(state.agents[agentId]) });
+    emitPublicProbeEvent();
     audit("agent", "agent_offline", agentId);
   });
 });
