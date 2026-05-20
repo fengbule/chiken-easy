@@ -363,15 +363,20 @@ section {
 .komari-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  height: 40px;
+  flex: 0 0 auto;
 }
 
 .square-btn {
-  width: 38px;
-  min-width: 38px;
-  height: 38px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
   justify-content: center;
   padding: 0;
+  line-height: 1;
+  border-radius: 9px;
   border-color: rgba(15, 118, 110, 0.12);
   background: rgba(255, 255, 255, 0.86);
   color: #35524d;
@@ -575,20 +580,20 @@ section {
 
 .komari-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 13px;
 }
 
 .komari-grid.compact {
-  grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
 }
 
 .komari-card {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 13px;
   border: 1px solid rgba(15, 118, 110, 0.12);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.94);
@@ -599,8 +604,8 @@ section {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 9px;
+  gap: 10px;
+  padding-bottom: 8px;
   border-bottom: 1px solid rgba(15, 118, 110, 0.1);
 }
 
@@ -612,14 +617,14 @@ section {
 }
 
 .flag {
-  min-width: 34px;
-  height: 28px;
+  min-width: 30px;
+  height: 25px;
   display: inline-grid;
   place-items: center;
   margin-top: 2px;
   border-radius: 7px;
   background: #f8fafc;
-  font-size: 21px;
+  font-size: 19px;
   line-height: 1;
 }
 
@@ -638,7 +643,7 @@ section {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #0f172a;
-  font-size: 21px;
+  font-size: 18px;
   line-height: 1.1;
 }
 
@@ -647,16 +652,16 @@ section {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  margin-top: 5px;
+  margin-top: 4px;
 }
 
 .badge {
-  min-height: 22px;
+  min-height: 20px;
   display: inline-flex;
   align-items: center;
   padding: 0 7px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
 }
 
@@ -683,9 +688,10 @@ section {
 .komari-os-row,
 .komari-fact-row {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: 68px minmax(0, 1fr);
+  gap: 8px;
   align-items: center;
+  font-size: 13px;
 }
 
 .komari-os-row span,
@@ -716,7 +722,7 @@ section {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 9px;
+  padding: 6px 8px;
   border-radius: 8px;
   background: #f8fafc;
   color: #48615b;
@@ -735,7 +741,8 @@ section {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 6px;
+  margin-bottom: 5px;
+  font-size: 13px;
 }
 
 .komari-line b {
@@ -744,14 +751,15 @@ section {
 
 .komari-line .mini-meter {
   width: 100%;
-  height: 8px;
+  height: 6px;
   margin: 0;
   background: #e8f3f0;
 }
 
 .komari-line small {
   display: block;
-  margin-top: 5px;
+  margin-top: 4px;
+  font-size: 12px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -760,11 +768,11 @@ section {
 }
 
 .komari-note {
-  padding: 8px 10px;
+  padding: 7px 9px;
   border-radius: 8px;
   background: #f8fafc;
   color: #646b75;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.5;
 }
 

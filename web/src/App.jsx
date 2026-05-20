@@ -315,6 +315,10 @@ function countryCodeToFlag(code = "") {
   return Array.from(upper).map((char) => String.fromCodePoint(127397 + char.charCodeAt(0))).join("");
 }
 
+function isFlagEmoji(value = "") {
+  return /^[\u{1F1E6}-\u{1F1FF}]{2}$/u.test(String(value).trim());
+}
+
 const regionFlagRules = [
   ["HK", ["hk", "hkg", "hong kong", "香港"]],
   ["JP", ["jp", "jpn", "tokyo", "osaka", "日本", "东京", "大阪"]],
@@ -333,10 +337,16 @@ const regionFlagRules = [
 function inferFlag(profile = {}, agent = {}) {
   const custom = String(profile.flag || "").trim();
   if (/^[a-z]{2}$/i.test(custom)) return countryCodeToFlag(custom);
-  if (custom) return custom;
+  if (isFlagEmoji(custom)) return custom;
   const haystack = [profile.region, profile.group, profile.displayName, agent.name, ...(profile.tags || [])].join(" ").toLowerCase();
   const match = regionFlagRules.find(([, keys]) => keys.some((key) => haystack.includes(key)));
-  return match ? countryCodeToFlag(match[0]) : countryCodeToFlag("UN");
+  return match ? countryCodeToFlag(match[0]) : "";
+}
+
+function normalizeFlagInput(value = "") {
+  const text = String(value || "").trim();
+  if (/^[a-z]{2}$/i.test(text)) return countryCodeToFlag(text);
+  return isFlagEmoji(text) ? text : "";
 }
 
 function systemInfo(agent = {}) {
@@ -2392,7 +2402,7 @@ function ProbeManagePage({ liveTick, agents }) {
                 <tbody>
                   {rows.map((row) => (
                     <tr key={row.agent.id} className={selectedId === row.agent.id ? "selected-row" : ""} onClick={() => selectRow(row)}>
-                      <td><b>{row.profile.flag} {row.profile.displayName || row.agent.name}</b><div className="muted">{row.agent.os}/{row.agent.arch}</div></td>
+                      <td><b>{inferFlag(row.profile, row.agent)} {row.profile.displayName || row.agent.name}</b><div className="muted">{row.agent.os}/{row.agent.arch}</div></td>
                       <td>{row.profile.group || "默认"}</td>
                       <td>{row.profile.region || "-"}</td>
                       <td>{[row.profile.price, row.profile.expireText].filter(Boolean).join(" · ") || "-"}</td>
@@ -2431,7 +2441,7 @@ function ProbeManagePage({ liveTick, agents }) {
                 </div>
                 <div className="form-grid">
                   <Field label="公开名称" value={form.displayName} onChange={(value) => patch("displayName", value)} />
-                  <Field label="旗标" value={form.flag} onChange={(value) => patch("flag", /^[a-z]{2}$/i.test(value) ? countryCodeToFlag(value) : value)} placeholder="如 🇭🇰 / US / JP" />
+                  <Field label="旗标" value={form.flag} onChange={(value) => patch("flag", normalizeFlagInput(value))} placeholder="如 🇭🇰 / US / JP" />
                   <Field label="分组" value={form.group} onChange={(value) => patch("group", value)} placeholder="亚洲 / 欧洲 / 美洲" />
                   <Field label="地区" value={form.region} onChange={(value) => patch("region", value)} placeholder="香港 / 日本 / SFO" />
                   <Field label="系统显示" value={form.osLabel} onChange={(value) => patch("osLabel", value)} placeholder={selectedSystem.distro || "留空使用 Agent 上报系统"} />

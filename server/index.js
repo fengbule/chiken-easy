@@ -575,6 +575,18 @@ function finiteNumber(value, fallback = null) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function countryCodeToFlag(code = "") {
+  const upper = String(code).trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(upper)) return "";
+  return Array.from(upper).map((char) => String.fromCodePoint(127397 + char.charCodeAt(0))).join("");
+}
+
+function normalizeFlag(value = "") {
+  const text = String(value || "").trim();
+  if (/^[a-z]{2}$/i.test(text)) return countryCodeToFlag(text);
+  return /^[\u{1F1E6}-\u{1F1FF}]{2}$/u.test(text) ? text : "";
+}
+
 function publicProbe(probe = {}) {
   probe ||= {};
   return {
@@ -711,7 +723,7 @@ function normalizeProbeProfile(input = {}, current = {}) {
     displayName: String(input.displayName ?? current.displayName ?? "").trim().slice(0, 80),
     region: String(input.region ?? current.region ?? "").trim().slice(0, 40),
     group: String(input.group ?? current.group ?? "").trim().slice(0, 40),
-    flag: String(input.flag ?? current.flag ?? "").trim().slice(0, 8),
+    flag: normalizeFlag(input.flag ?? current.flag ?? ""),
     osLabel: String(input.osLabel ?? current.osLabel ?? "").trim().slice(0, 40),
     price: String(input.price ?? current.price ?? "").trim().slice(0, 40),
     billing: String(input.billing ?? current.billing ?? "").trim().slice(0, 40),
