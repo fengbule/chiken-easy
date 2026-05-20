@@ -118,6 +118,7 @@ const commandWaiters = new Map();
 const configCommandRefs = new Map();
 const forwardCommandRefs = new Map();
 const notificationState = new Map();
+const loginAttempts = new Map();
 
 function normalizeCommands(commands = []) {
   const custom = Array.isArray(commands) ? commands.filter((item) => item && !builtinCommands.some((builtin) => builtin.id === item.id)) : [];
@@ -231,6 +232,42 @@ function ensureDefaultSubscriptionToken() {
   if (state.subscriptionTokens.some((item) => item.enabled !== false)) return;
   state.subscriptionTokens.push(createSubscriptionToken("默认订阅"));
   saveState();
+}
+
+function getClientIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.socket?.remoteAddress || "unknown";
+}
+
+function cleanupLoginAttempts(now = Date.now()) {
+  for (const [key, entry] of loginAttempts.entries()) {
+    if (!entry || entry.blockedUntil < now - 86400000) loginAttempts.delete(key);
+  }
+}
+
+function loginAttemptState(req, username = "") {
+  cleanupLoginAttempts();
+  const key = `${getClientIp(req)}:${String(username || "").trim().toLowerCase()}`;
+  const current = loginAttempts.get(key) || { count: 0, blockedUntil: 0 };
+  return { key, current };
+}
+
+function isLoginBlocked(req, username = "") {
+  const { current } = loginAttemptState(req, username);
+  return current.blockedUntil > Date.now() ? current.blockedUntil : 0;
+}
+
+function recordFailedLogin(req, username = "") {
+  const { key, current } = loginAttemptState(req, username);
+  const count = Number(current.count || 0) + 1;
+  const blockedUntil = count >= 5 ? Date.now() + 10 * 60 * 1000 : 0;
+  loginAttempts.set(key, { count, blockedUntil });
+  return { count, blockedUntil };
+}
+
+function clearFailedLogin(req, username = "") {
+  const { key } = loginAttemptState(req, username);
+  loginAttempts.delete(key);
 }
 
 function publicSubscriptionWithStats(token, req) {
@@ -1347,8 +1384,19 @@ app.get("/api/health", (_, res) => res.json({ ok: true, name: "chiken-easy" }));
 app.post("/api/auth/login", (req, res) => {
   const username = String(req.body?.username || "").trim();
   const password = String(req.body?.password || "");
+  const blockedUntil = isLoginBlocked(req, username);
+  if (blockedUntil > Date.now()) {
+    const retryAfter = Math.max(1, Math.ceil((blockedUntil - Date.now()) / 1000));
+    res.setHeader("Retry-After", String(retryAfter));
+    return res.status(429).json({ error: `登录失败次数过多，请 ${Math.ceil(retryAfter / 60)} 分钟后再试` });
+  }
   const user = (state.adminUsers || []).find((row) => row.username === username && !row.revoked);
-  if (!user || !verifyPassword(password, user)) return res.status(401).json({ error: "用户名或密码错误" });
+  if (!user || !verifyPassword(password, user)) {
+    const failure = recordFailedLogin(req, username);
+    audit("security", "login_failed", "-", { username, attempts: failure.count, blocked: Boolean(failure.blockedUntil) });
+    return res.status(401).json({ error: "用户名或密码错误" });
+  }
+  clearFailedLogin(req, username);
   const token = `sess_${nanoid(36)}`;
   const sessionDays = Math.max(1, Math.min(30, Number(state.monitorSettings?.login?.sessionDays || 7) || 7));
   const session = {
@@ -2619,7 +2667,8 @@ wss.on("connection", (ws) => {
 
     if (msg.type === "hello") {
       const token = state.tokens.find((item) => item.token === msg.token && !item.revoked);
-      if (!token && process.env.CHIKEN_ALLOW_OPEN_REGISTER !== "1") {
+      const openRegister = process.env.CHIKEN_ALLOW_OPEN_REGISTER === "1";
+      if (!token && !openRegister) {
         ws.send(JSON.stringify({ type: "error", error: "invalid token" }));
         ws.close();
         return;
@@ -2636,6 +2685,7 @@ wss.on("connection", (ws) => {
       if (token) token.used = true;
       clients.set(agentId, ws);
       saveState();
+      if (openRegister && !token) audit("security", "agent_open_register", agentId, { host: msg.agent.host, ip: msg.agent.ip });
       clearNotifyKey(`${agentId}:offline`);
       emitEvent("agent", { action: "online", agent: publicAgent(state.agents[agentId]) });
       emitPublicProbeEvent();

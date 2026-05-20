@@ -5,9 +5,11 @@ services:
     container_name: chiken-server
     restart: unless-stopped
     environment:
-      PORT: "7788"
+      PORT: "${PORT:-7788}"
       CHIKEN_BOOTSTRAP_TOKEN: "${CHIKEN_BOOTSTRAP_TOKEN}"
       CHIKEN_API_TOKEN: "${CHIKEN_API_TOKEN:-}"
+      CHIKEN_ADMIN_USER: "${CHIKEN_ADMIN_USER:-admin}"
+      CHIKEN_ADMIN_PASSWORD: "${CHIKEN_ADMIN_PASSWORD:-}"
     ports:
       - "7788:7788"
     volumes:

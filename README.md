@@ -117,6 +117,13 @@ docker compose -f docker-compose.agent.yml up -d --build
 docker logs chiken-server | grep bootstrap-admin
 ```
 
+### 安全建议
+
+- 不要开启 `CHIKEN_ALLOW_OPEN_REGISTER=1`，除非你非常明确知道自己在做什么
+- 管理后台建议始终设置 `CHIKEN_API_TOKEN`
+- 连续登录失败过多时，系统会临时限流，降低暴力尝试风险
+- 开源仓库不要提交 `.env`、密码、token、私钥、服务器清单
+
 现在默认会额外挂载：
 
 - `./data/sing-box`：主 `sing-box` 配置
