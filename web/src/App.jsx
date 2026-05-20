@@ -378,6 +378,35 @@ function flagImageUrl(code = "") {
   return /^[A-Z]{2}$/.test(upper) ? `https://flagcdn.com/w40/${upper.toLowerCase()}.png` : "";
 }
 
+function inferProbePreset(agent = {}, profile = {}) {
+  const system = systemInfo(agent);
+  const haystack = [
+    profile.region,
+    profile.group,
+    profile.displayName,
+    agent.name,
+    agent.host,
+    agent.ip,
+    system.distro,
+    system.kernel,
+    ...(profile.tags || [])
+  ].join(" ").toLowerCase();
+  const match = regionFlagRules.find(([, keys]) => keys.some((key) => haystack.includes(key)));
+  const code = match?.[0] || "";
+  const regionMap = {
+    HK: { region: "香港", group: "香港", osLabel: "Ubuntu 22.04", note: "香港云服务器" },
+    JP: { region: "日本", group: "亚洲", osLabel: "Ubuntu 22.04", note: "日本节点" },
+    SG: { region: "新加坡", group: "亚洲", osLabel: "Ubuntu 22.04", note: "新加坡节点" },
+    US: { region: "美国", group: "美洲", osLabel: "Ubuntu 22.04", note: "美国节点" },
+    DE: { region: "德国", group: "欧洲", osLabel: "Ubuntu 22.04", note: "德国节点" },
+    GB: { region: "英国", group: "欧洲", osLabel: "Ubuntu 22.04", note: "英国节点" }
+  };
+  return {
+    code,
+    ...(regionMap[code] || { region: "", group: profile.group || "默认", osLabel: systemShortName(system) === "Ubuntu" ? "Ubuntu 22.04" : "", note: "" })
+  };
+}
+
 function normalizeFlagInput(value = "") {
   const text = String(value || "").trim();
   if (/^[a-z]{2}$/i.test(text)) return countryCodeToFlag(text);
@@ -2302,6 +2331,7 @@ function ProbeManagePage({ liveTick, agents }) {
   const [form, setForm] = useState(empty);
   const [message, setMessage] = useState("");
   const [module, setModule] = useState("profiles");
+  const [bulk, setBulk] = useState({ region: "", group: "", hidden: "", sortStart: 10, sortStep: 10 });
 
   const load = async () => {
     const data = await api("/api/probe-settings");
@@ -2380,13 +2410,39 @@ function ProbeManagePage({ liveTick, agents }) {
   };
   const fillAgentDefaults = () => {
     if (!selected) return;
+    const preset = inferProbePreset(selectedAgent, selectedProfile);
     setForm((current) => ({
       ...current,
       displayName: current.displayName || selectedAgent.name || "",
-      osLabel: current.osLabel || osLabel({ ...selectedAgent, profile: selectedProfile }, current),
-      flag: current.flag || inferFlag(current, selectedAgent),
-      group: current.group || "默认"
+      osLabel: current.osLabel || preset.osLabel || osLabel({ ...selectedAgent, profile: selectedProfile }, current),
+      flag: current.flag || (preset.code ? countryCodeToFlag(preset.code) : inferFlag(current, selectedAgent)),
+      region: current.region || preset.region || "",
+      group: current.group && current.group !== "默认" ? current.group : (preset.group || "默认"),
+      note: current.note || preset.note || ""
     }));
+  };
+  const fillAllByGuess = async () => {
+    try {
+      setMessage("");
+      for (const row of rows) {
+        const preset = inferProbePreset(row.agent, row.profile);
+        await api(`/api/probe-settings/${row.agent.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            displayName: row.profile.displayName || row.agent.name || row.agent.id,
+            flag: row.profile.flag || (preset.code ? countryCodeToFlag(preset.code) : ""),
+            region: row.profile.region || preset.region || "",
+            group: row.profile.group && row.profile.group !== "默认" ? row.profile.group : (preset.group || "默认"),
+            osLabel: row.profile.osLabel || preset.osLabel || "",
+            note: row.profile.note || preset.note || ""
+          })
+        });
+      }
+      setMessage("已按节点信息批量猜测并填充地区、国旗、系统与备注。请检查后再微调。");
+      await load();
+    } catch (error) {
+      setMessage(error.message);
+    }
   };
   const clearOptionalLabels = () => {
     setForm((current) => ({
@@ -2397,6 +2453,29 @@ function ProbeManagePage({ liveTick, agents }) {
       trafficLimitGb: "",
       note: ""
     }));
+  };
+  const patchBulk = (key, value) => setBulk((current) => ({ ...current, [key]: value }));
+  const applyBulk = async () => {
+    try {
+      setMessage("");
+      let index = 0;
+      for (const row of rows) {
+        const payload = {
+          ...row.profile,
+          displayName: row.profile.displayName || row.agent.name || row.agent.id,
+          region: bulk.region || row.profile.region || "",
+          group: bulk.group || row.profile.group || "默认",
+          hidden: bulk.hidden === "" ? Boolean(row.profile.hidden) : bulk.hidden === "hidden",
+          displayOrder: Number(bulk.sortStart || 0) + index * Number(bulk.sortStep || 10)
+        };
+        await api(`/api/probe-settings/${row.agent.id}`, { method: "PUT", body: JSON.stringify(payload) });
+        index += 1;
+      }
+      setMessage("已批量更新地区、分组、显隐和排序。公开页会实时刷新。");
+      await load();
+    } catch (error) {
+      setMessage(error.message);
+    }
   };
   const moduleCards = [
     ["profiles", Monitor, "服务器", "编辑公开探针卡片、分组、账单与展示排序"],
@@ -2422,7 +2501,17 @@ function ProbeManagePage({ liveTick, agents }) {
     if (module === "profiles") {
       return (
         <div className="grid2 probe-manage-layout">
-          <Panel title="探针节点" right={<button onClick={load}><RefreshCw size={15} />刷新</button>}>
+          <Panel title="探针节点" right={<div className="actions"><button onClick={fillAllByGuess}>一键智能填充</button><button onClick={load}><RefreshCw size={15} />刷新</button></div>}>
+            <div className="form-grid" style={{ marginBottom: 12 }}>
+              <Field label="批量地区" value={bulk.region} onChange={(value) => patchBulk("region", value)} placeholder="如 香港 / 日本 / 美国" />
+              <Field label="批量分组" value={bulk.group} onChange={(value) => patchBulk("group", value)} placeholder="如 亚洲 / 香港 / 欧洲" />
+              <Field label="批量公开" type="select" value={bulk.hidden} onChange={(value) => patchBulk("hidden", value)} options={[["", "保持不变"], ["visible", "全部显示"], ["hidden", "全部隐藏"]]} />
+              <Field label="排序起点" type="number" value={bulk.sortStart} onChange={(value) => patchBulk("sortStart", value)} />
+              <Field label="排序步长" type="number" value={bulk.sortStep} onChange={(value) => patchBulk("sortStep", value)} />
+            </div>
+            <div className="actions" style={{ marginBottom: 12 }}>
+              <button onClick={applyBulk}>批量应用到全部节点</button>
+            </div>
             <div className="table-scroll">
               <table>
                 <thead>
