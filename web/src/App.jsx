@@ -2231,6 +2231,16 @@ function ProbeManagePage({ liveTick, agents }) {
       setMessage(error.message);
     }
   };
+  const testNotification = async () => {
+    try {
+      const response = await api("/api/admin/settings", { method: "PUT", body: JSON.stringify({ [section]: current }) });
+      setSettings(response);
+      const result = await api("/api/admin/notifications/test", { method: "POST", body: JSON.stringify({}) });
+      setMessage(`测试通知已发送：${(result.results || []).map((row) => row.channel).join(", ") || "无通道"}`);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
 
   const selected = rows.find((row) => row.agent.id === selectedId);
   const moduleCards = [
@@ -2391,8 +2401,12 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
       ["cpuThreshold", "CPU 阈值", "number", "90"],
       ["memoryThreshold", "内存阈值", "number", "90"],
       ["diskThreshold", "磁盘阈值", "number", "90"],
-      ["channel", "通知通道", "text", "webhook"],
-      ["webhookUrl", "Webhook URL", "text", ""]
+      ["cooldownMinutes", "冷却分钟", "number", "10"],
+      ["channel", "通知通道", "select", "", [["webhook", "Webhook"], ["telegram", "Telegram"], ["both", "Webhook + Telegram"]]],
+      ["webhookUrl", "Webhook URL", "text", ""],
+      ["telegramBotToken", "Telegram Bot Token", "password", ""],
+      ["telegramChatId", "Telegram Chat ID", "text", ""],
+      ["telegramApiBase", "Telegram API Base", "text", "https://api.telegram.org"]
     ],
     general: [
       ["publicRefreshSeconds", "公开页刷新秒数", "number", "5"],
@@ -2420,6 +2434,7 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
         </div>
         <div className="actions">
           <button className="primary" onClick={save}><Save size={16} />保存</button>
+          {section === "notifications" ? <button onClick={testNotification}><Bell size={16} />发送测试通知</button> : null}
           <button onClick={load}><RefreshCw size={16} />重载</button>
         </div>
         {message ? <p className="panel-message">{message}</p> : null}

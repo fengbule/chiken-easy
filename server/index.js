@@ -88,7 +88,11 @@ const defaultState = {
       memoryThreshold: 90,
       diskThreshold: 90,
       webhookUrl: "",
-      channel: "webhook"
+      channel: "webhook",
+      telegramBotToken: "",
+      telegramChatId: "",
+      telegramApiBase: "https://api.telegram.org",
+      cooldownMinutes: 10
     },
     general: {
       publicRefreshSeconds: 5,
@@ -113,6 +117,7 @@ const publicProbeStreams = new Set();
 const commandWaiters = new Map();
 const configCommandRefs = new Map();
 const forwardCommandRefs = new Map();
+const notificationState = new Map();
 
 function normalizeCommands(commands = []) {
   const custom = Array.isArray(commands) ? commands.filter((item) => item && !builtinCommands.some((builtin) => builtin.id === item.id)) : [];
@@ -150,7 +155,11 @@ function mergeMonitorSettings(input = {}) {
   next.notifications.memoryThreshold = Math.max(1, Math.min(100, Number(next.notifications.memoryThreshold || 90) || 90));
   next.notifications.diskThreshold = Math.max(1, Math.min(100, Number(next.notifications.diskThreshold || 90) || 90));
   next.notifications.webhookUrl = cleanText(next.notifications.webhookUrl, "", 400);
-  next.notifications.channel = cleanText(next.notifications.channel, "webhook", 40) || "webhook";
+  next.notifications.channel = ["webhook", "telegram", "both"].includes(next.notifications.channel) ? next.notifications.channel : "webhook";
+  next.notifications.telegramBotToken = cleanText(next.notifications.telegramBotToken, "", 180);
+  next.notifications.telegramChatId = cleanText(next.notifications.telegramChatId, "", 120);
+  next.notifications.telegramApiBase = cleanText(next.notifications.telegramApiBase, "https://api.telegram.org", 220) || "https://api.telegram.org";
+  next.notifications.cooldownMinutes = Math.max(1, Math.min(1440, Number(next.notifications.cooldownMinutes || 10) || 10));
   next.general.publicRefreshSeconds = Math.max(3, Math.min(120, Number(next.general.publicRefreshSeconds || 5) || 5));
   next.general.adminRefreshSeconds = Math.max(3, Math.min(120, Number(next.general.adminRefreshSeconds || 5) || 5));
   next.general.publicHideIp = next.general.publicHideIp !== false;
@@ -285,6 +294,105 @@ function audit(actor, action, target, detail = {}) {
   fs.appendFileSync(auditFile, JSON.stringify(row) + "\n");
   emitEvent("audit", row);
   return row;
+}
+
+function notificationSettings() {
+  state.monitorSettings = mergeMonitorSettings(state.monitorSettings || {});
+  return state.monitorSettings.notifications || defaultState.monitorSettings.notifications;
+}
+
+function shouldNotify(key, cooldownMinutes = 10) {
+  const lastAt = notificationState.get(key) || 0;
+  if (Date.now() - lastAt < cooldownMinutes * 60 * 1000) return false;
+  notificationState.set(key, Date.now());
+  return true;
+}
+
+function clearNotifyKey(key) {
+  notificationState.delete(key);
+}
+
+async function sendTelegramNotification(settings, title, message) {
+  if (!settings.telegramBotToken || !settings.telegramChatId) throw new Error("Telegram bot token/chat id is required");
+  const base = String(settings.telegramApiBase || "https://api.telegram.org").replace(/\/+$/, "");
+  const url = `${base}/bot${encodeURIComponent(settings.telegramBotToken)}/sendMessage`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: settings.telegramChatId,
+      text: `*${title}*\n${message}`,
+      parse_mode: "Markdown",
+      disable_web_page_preview: true
+    })
+  });
+  if (!response.ok) throw new Error(`Telegram failed: ${response.status} ${await response.text()}`);
+  return { ok: true, channel: "telegram" };
+}
+
+async function sendWebhookNotification(settings, title, message, payload = {}) {
+  if (!settings.webhookUrl) throw new Error("Webhook URL is required");
+  const response = await fetch(settings.webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, message, ...payload, at: new Date().toISOString() })
+  });
+  if (!response.ok) throw new Error(`Webhook failed: ${response.status} ${await response.text()}`);
+  return { ok: true, channel: "webhook" };
+}
+
+async function sendNotification(title, message, payload = {}, force = false) {
+  const settings = notificationSettings();
+  const results = [];
+  const errors = [];
+  const channel = settings.channel || "webhook";
+  const tasks = [];
+  if (channel === "webhook" || channel === "both") tasks.push(() => sendWebhookNotification(settings, title, message, payload));
+  if (channel === "telegram" || channel === "both") tasks.push(() => sendTelegramNotification(settings, title, message));
+  if (!tasks.length) throw new Error("notification channel is not configured");
+  for (const task of tasks) {
+    try {
+      results.push(await task());
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+  audit("system", force ? "notification_test" : "notification_send", payload.agentId || "-", { title, channels: results.map((row) => row.channel), errors });
+  if (!results.length && errors.length) throw new Error(errors.join("; "));
+  return { ok: Boolean(results.length), results, errors };
+}
+
+function loadAlertsForAgent(agentId, agent = {}) {
+  const settings = notificationSettings();
+  if (!settings.loadEnabled) return [];
+  const probe = agent.probe || {};
+  const rows = [
+    ["cpu", "CPU", probe.cpu?.usage, settings.cpuThreshold],
+    ["memory", "Memory", probe.memory?.usage, settings.memoryThreshold],
+    ["disk", "Disk", probe.disk?.usage, settings.diskThreshold]
+  ];
+  return rows
+    .filter(([, , value, threshold]) => Number.isFinite(Number(value)) && Number(value) >= Number(threshold))
+    .map(([key, label, value, threshold]) => ({ key: `${agentId}:load:${key}`, label, value: Number(value), threshold: Number(threshold) }));
+}
+
+async function evaluateAgentNotifications(agentId, previous = {}, next = {}) {
+  const settings = notificationSettings();
+  const name = next.name || previous.name || agentId;
+  const cooldown = settings.cooldownMinutes || 10;
+  const wasOnline = clients.has(agentId) || previous.connected;
+  if (settings.offlineEnabled && previous.lastSeen && wasOnline && !clients.has(agentId)) {
+    const key = `${agentId}:offline`;
+    if (shouldNotify(key, cooldown)) {
+      await sendNotification("Chiken Monitor 离线告警", `${name} 已离线，最后心跳 ${previous.lastSeen || "-"}`, { agentId, type: "offline" }).catch((error) => audit("system", "notification_error", agentId, { error: error.message }));
+    }
+  }
+  if (clients.has(agentId)) clearNotifyKey(`${agentId}:offline`);
+
+  for (const alert of loadAlertsForAgent(agentId, next)) {
+    if (!shouldNotify(alert.key, cooldown)) continue;
+    await sendNotification("Chiken Monitor 负载告警", `${name} ${alert.label} ${alert.value.toFixed(1)}% 已超过阈值 ${alert.threshold}%`, { agentId, type: "load", metric: alert.label, value: alert.value, threshold: alert.threshold }).catch((error) => audit("system", "notification_error", agentId, { error: error.message }));
+  }
 }
 
 function arrayFromInput(value) {
@@ -1384,6 +1492,17 @@ app.put("/api/admin/settings", (req, res) => {
   emitPublicProbeEvent();
   audit("admin", "update_monitor_settings", "-", { sections: Object.keys(req.body || {}) });
   res.json(state.monitorSettings);
+});
+
+app.post("/api/admin/notifications/test", async (req, res) => {
+  try {
+    const title = cleanText(req.body?.title, "Chiken Monitor 测试通知", 120) || "Chiken Monitor 测试通知";
+    const message = cleanText(req.body?.message, "这是一条来自探针管理的测试通知。", 500) || "这是一条来自探针管理的测试通知。";
+    const result = await sendNotification(title, message, { type: "test" }, true);
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.get("/api/admin/sessions", (_, res) => {
@@ -2488,6 +2607,7 @@ wss.on("connection", (ws) => {
       if (token) token.used = true;
       clients.set(agentId, ws);
       saveState();
+      clearNotifyKey(`${agentId}:offline`);
       emitEvent("agent", { action: "online", agent: publicAgent(state.agents[agentId]) });
       emitPublicProbeEvent();
       audit("agent", "agent_online", agentId, { host: msg.agent.host, ip: msg.agent.ip });
@@ -2498,11 +2618,13 @@ wss.on("connection", (ws) => {
     if (!agentId) return;
 
     if (msg.type === "heartbeat") {
+      const previous = structuredClone(state.agents[agentId] || {});
       const status = applyTrafficAccounting(agentId, msg.status || {});
       Object.assign(state.agents[agentId], status, { lastSeen: new Date().toISOString() });
       saveState();
       emitEvent("agent", { action: "heartbeat", agent: publicAgent(state.agents[agentId]) });
       emitPublicProbeEvent();
+      evaluateAgentNotifications(agentId, previous, state.agents[agentId]).catch((error) => audit("system", "notification_error", agentId, { error: error.message }));
     }
 
     if (msg.type === "log") pushLog(agentId, { at: new Date().toISOString(), line: msg.line });
@@ -2565,12 +2687,14 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     if (!agentId) return;
+    const previous = structuredClone(state.agents[agentId] || {});
     clients.delete(agentId);
     if (state.agents[agentId]) state.agents[agentId].lastSeen = new Date().toISOString();
     saveState();
     emitEvent("agent", { action: "offline", agent: publicAgent(state.agents[agentId]) });
     emitPublicProbeEvent();
     audit("agent", "agent_offline", agentId);
+    evaluateAgentNotifications(agentId, previous, state.agents[agentId] || previous).catch((error) => audit("system", "notification_error", agentId, { error: error.message }));
   });
 });
 
