@@ -3,6 +3,36 @@ import { nanoid } from "nanoid";
 const shareProtocols = ["vmess", "vless", "trojan", "ss", "ssr", "hysteria2", "hy2", "hy", "tuic", "socks", "socks5", "http", "https", "anytls"];
 const sharePattern = /^(vmess|vless|trojan|ss|ssr|hysteria2|hy2|hy|tuic|socks|socks5|http|https|anytls):\/\//i;
 
+export const routeTemplates = {
+  minimal: {
+    id: "minimal",
+    name: "Minimal",
+    description: "Only a selector and MATCH rule.",
+    rules: ["MATCH,Auto"],
+    ruleProviders: {}
+  },
+  mainland: {
+    id: "mainland",
+    name: "Mainland Smart",
+    description: "DIRECT for LAN/CN/private, reject ads, proxy the rest.",
+    rules: ["RULE-SET,reject,REJECT", "RULE-SET,private,DIRECT", "RULE-SET,cn,DIRECT", "GEOIP,CN,DIRECT", "MATCH,Auto"],
+    ruleProviders: {
+      reject: { type: "http", behavior: "domain", url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/reject.txt", path: "./ruleset/reject.yaml", interval: 86400 },
+      private: { type: "http", behavior: "domain", url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/private.txt", path: "./ruleset/private.yaml", interval: 86400 },
+      cn: { type: "http", behavior: "domain", url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/cncidr.txt", path: "./ruleset/cn.yaml", interval: 86400 }
+    }
+  },
+  streaming: {
+    id: "streaming",
+    name: "Streaming",
+    description: "Add media and AI selectors for daily use.",
+    rules: ["DOMAIN-SUFFIX,openai.com,Auto", "DOMAIN-SUFFIX,chatgpt.com,Auto", "DOMAIN-SUFFIX,netflix.com,Auto", "DOMAIN-SUFFIX,youtube.com,Auto", "RULE-SET,private,DIRECT", "GEOIP,CN,DIRECT", "MATCH,Auto"],
+    ruleProviders: {
+      private: { type: "http", behavior: "domain", url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/private.txt", path: "./ruleset/private.yaml", interval: 86400 }
+    }
+  }
+};
+
 function base64Encode(text) {
   return Buffer.from(String(text || ""), "utf8").toString("base64");
 }
@@ -248,6 +278,11 @@ function arrayFromValue(value) {
   return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
+function rulesFromValue(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  return String(value || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+}
+
 export function publicNode(node) {
   return {
     id: node.id,
@@ -318,8 +353,10 @@ export function publicSubscriptionToken(token, req) {
     createdAt: token.createdAt,
     links: {
       base64: `${origin}/sub/${token.token}`,
+      v2rayn: `${origin}/sub/${token.token}?format=v2rayn`,
       raw: `${origin}/sub/${token.token}?format=raw`,
       clash: `${origin}/sub/${token.token}?format=clash`,
+      mihomo: `${origin}/sub/${token.token}?format=mihomo`,
       singbox: `${origin}/sub/${token.token}?format=sing-box`
     }
   };
@@ -341,7 +378,10 @@ export function normalizeSubscriptionToken(input = {}, current = {}) {
       groupIds: arrayFromValue(profile.groupIds),
       keyword: String(profile.keyword ?? "").trim(),
       limit: Math.max(0, Number(profile.limit || 0) || 0),
-      sort: String(profile.sort || "name").trim() || "name"
+      sort: String(profile.sort || "name").trim() || "name",
+      routeTemplate: String(profile.routeTemplate || current.profile?.routeTemplate || "mainland").trim() || "mainland",
+      customRules: rulesFromValue(profile.customRules),
+      prependRules: rulesFromValue(profile.prependRules)
     },
     expiresAt: String(input.expiresAt ?? current.expiresAt ?? "").trim(),
     maxAccess: Math.max(0, Number(input.maxAccess ?? current.maxAccess ?? 0) || 0),
@@ -444,6 +484,48 @@ export function summarizeSubscriptionNodes(nodes = []) {
   };
 }
 
+export function validateSubscriptionOutputs(nodes = [], token = {}) {
+  const formats = ["v2rayn", "raw", "clash", "mihomo", "sing-box"];
+  const results = {};
+  for (const format of formats) {
+    try {
+      const rendered = renderSubscription(nodes, format, token.profile || {});
+      const checks = [];
+      if (format === "v2rayn") {
+        const decoded = base64Decode(rendered.body).split(/\r?\n/).filter(Boolean);
+        checks.push({ name: "base64-decodes", ok: decoded.length > 0 });
+        checks.push({ name: "share-links", ok: decoded.every((line) => sharePattern.test(line)) });
+      }
+      if (format === "raw") {
+        const rows = rendered.body.split(/\r?\n/).filter(Boolean);
+        checks.push({ name: "raw-links", ok: rows.length > 0 && rows.every((line) => sharePattern.test(line)) });
+      }
+      if (format === "clash" || format === "mihomo") {
+        checks.push({ name: "has-proxies", ok: /proxies:\n\s+- name:/m.test(rendered.body) });
+        checks.push({ name: "has-groups", ok: /proxy-groups:/m.test(rendered.body) });
+        checks.push({ name: "has-rules", ok: /rules:\n\s+- /m.test(rendered.body) });
+      }
+      if (format === "sing-box") {
+        const parsed = JSON.parse(rendered.body);
+        checks.push({ name: "json", ok: Boolean(parsed?.outbounds) });
+      }
+      results[format] = {
+        ok: checks.every((check) => check.ok),
+        contentType: rendered.contentType,
+        bytes: Buffer.byteLength(rendered.body),
+        checks
+      };
+    } catch (error) {
+      results[format] = { ok: false, error: error.message, checks: [] };
+    }
+  }
+  return {
+    ok: Object.values(results).every((row) => row.ok),
+    formats: results,
+    summary: summarizeSubscriptionNodes(nodes)
+  };
+}
+
 export function buildPanelNode(agent, input = {}) {
   const protocol = String(input.protocol || "").trim();
   const host = normalizeHost(firstNonEmpty(input.publicHost, agent?.ip, agent?.host));
@@ -537,12 +619,49 @@ function proxyFromNode(node) {
   return `  - name: ${yamlString(name)}\n    type: ${yamlString(protocol || "unknown")}\n    server: ${yamlString(node.server)}\n    port: ${Number(node.port || 0)}`;
 }
 
-export function renderSubscription(nodes = [], format = "base64") {
+function yamlBlock(value, indent = 0) {
+  const pad = " ".repeat(indent);
+  if (Array.isArray(value)) return value.map((item) => `${pad}- ${typeof item === "object" ? `\n${yamlBlock(item, indent + 2)}` : yamlString(item)}`).join("\n");
+  if (value && typeof value === "object") {
+    return Object.entries(value)
+      .map(([key, item]) => {
+        if (Array.isArray(item)) return `${pad}${key}:\n${yamlBlock(item, indent + 2)}`;
+        if (item && typeof item === "object") return `${pad}${key}:\n${yamlBlock(item, indent + 2)}`;
+        return `${pad}${key}: ${typeof item === "number" || typeof item === "boolean" ? item : yamlString(item)}`;
+      })
+      .join("\n");
+  }
+  return `${pad}${yamlString(value)}`;
+}
+
+function normalizeRouteTemplate(options = {}) {
+  const id = String(options.routeTemplate || options.template || "mainland").trim() || "mainland";
+  const base = routeTemplates[id] || routeTemplates.mainland;
+  return {
+    ...base,
+    ruleProviders: { ...(base.ruleProviders || {}) },
+    rules: [...rulesFromValue(options.prependRules), ...(base.rules || []), ...rulesFromValue(options.customRules)]
+  };
+}
+
+function renderClashSubscription(enabled, options = {}) {
+  const names = enabled.map((node) => yamlString(node.name || node.id));
+  const proxies = enabled.map(proxyFromNode).filter(Boolean).join("\n");
+  const template = normalizeRouteTemplate(options);
+  const providers = Object.keys(template.ruleProviders || {}).length ? `rule-providers:\n${yamlBlock(template.ruleProviders, 2)}\n` : "";
+  return {
+    contentType: "text/yaml; charset=utf-8",
+    body: `mixed-port: 7890\nallow-lan: false\nmode: rule\nlog-level: info\nexternal-controller: 127.0.0.1:9090\nprofile:\n  store-selected: true\n  store-fake-ip: true\ndns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n  fallback:\n    - https://1.1.1.1/dns-query\n    - https://8.8.8.8/dns-query\nproxies:\n${proxies || "[]"}\nproxy-groups:\n  - name: Auto\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies:\n${names.map((name) => `      - ${name}`).join("\n") || "      - DIRECT"}\n  - name: Manual\n    type: select\n    proxies:\n${names.map((name) => `      - ${name}`).join("\n") || "      - DIRECT"}\n${providers}rules:\n${template.rules.map((rule) => `  - ${rule}`).join("\n")}\n`
+  };
+}
+
+export function renderSubscription(nodes = [], format = "base64", options = {}) {
   const enabled = nodes.filter((node) => node.enabled !== false && node.raw);
   const raw = enabled.map((node) => node.raw).join("\n");
   const normalized = String(format || "base64").toLowerCase();
 
   if (normalized === "raw" || normalized === "plain") return { contentType: "text/plain; charset=utf-8", body: `${raw}\n` };
+  if (["v2rayn", "v2ray", "base64"].includes(normalized)) return { contentType: "text/plain; charset=utf-8", body: base64Encode(raw) };
   if (normalized === "sing-box" || normalized === "singbox") {
     return {
       contentType: "application/json; charset=utf-8",
@@ -557,14 +676,7 @@ export function renderSubscription(nodes = [], format = "base64") {
       )
     };
   }
-  if (normalized === "clash" || normalized === "yaml") {
-    const names = enabled.map((node) => yamlString(node.name || node.id));
-    const proxies = enabled.map(proxyFromNode).filter(Boolean).join("\n");
-    return {
-      contentType: "text/yaml; charset=utf-8",
-      body: `mixed-port: 7890\nallow-lan: false\nmode: rule\nproxies:\n${proxies || "[]"}\nproxy-groups:\n  - name: Auto\n    type: select\n    proxies:\n${names.map((name) => `      - ${name}`).join("\n") || "      - DIRECT"}\nrules:\n  - MATCH,Auto\n`
-    };
-  }
+  if (["clash", "mihomo", "yaml", "yml"].includes(normalized)) return renderClashSubscription(enabled, options);
   return { contentType: "text/plain; charset=utf-8", body: base64Encode(raw) };
 }
 

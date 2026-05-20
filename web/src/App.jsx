@@ -59,6 +59,7 @@ const navGroups = [
       ["probeManage", SlidersHorizontal, "探针管理"],
       ["nodes", Code2, "节点配置"],
       ["subscriptions", Link2, "订阅分发"],
+      ["protocolLab", PlugZap, "协议实验室"],
       ["memos", BookOpen, "Memos 笔记"],
       ["forward", PlugZap, "端口转发"],
       ["files", FolderSync, "文件对传"],
@@ -257,6 +258,10 @@ function formatSpeed(value) {
   return Number.isFinite(Number(value)) ? `${formatBytes(Number(value))}/s` : "0 B/s";
 }
 
+function formatTrafficPair(network = {}) {
+  return `↓ ${formatBytes(network.rxBytes || network.totalRxBytes || 0)} / ↑ ${formatBytes(network.txBytes || network.totalTxBytes || 0)}`;
+}
+
 function formatDuration(seconds) {
   const total = Number(seconds);
   if (!Number.isFinite(total) || total <= 0) return "-";
@@ -368,7 +373,8 @@ function ProbePanel({ probe = {} }) {
       <ProbeMetric icon={MemoryStick} label="内存" value={formatPercent(memory.usage)} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} percent={memory.usage} tone="green" />
       <ProbeMetric icon={HardDrive} label="硬盘" value={formatPercent(disk.usage)} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)} ${disk.mount || ""}`} percent={disk.usage} tone="amber" />
       <ProbeMetric icon={Gauge} label="Swap" value={formatPercent(swap.usage)} detail={`${formatBytes(swap.used)} / ${formatBytes(swap.total)}`} percent={swap.usage} tone="violet" />
-      <ProbeMetric icon={Wifi} label="网络" value={`↓ ${formatSpeed(network.rxSpeed)}`} detail={`↑ ${formatSpeed(network.txSpeed)} · ${network.interfaces || 0} 网卡`} tone="blue" />
+      <ProbeMetric icon={Wifi} label="实时速率" value={`↓ ${formatSpeed(network.rxSpeed)}`} detail={`↑ ${formatSpeed(network.txSpeed)} · Δ ${formatBytes((network.rxDelta || 0) + (network.txDelta || 0))}`} tone="blue" />
+      <ProbeMetric icon={TrendingUp} label="累计流量" value={formatTrafficPair(network)} detail={`${network.interfaces || 0} 网卡 · ${network.sampleInterval ? `${Number(network.sampleInterval).toFixed(1)}s 采样` : "等待采样"}`} tone="green" />
       <ProbeMetric icon={Clock3} label="运行时间" value={formatDuration(probe.uptime)} detail={probe.updatedAt ? `更新于 ${probe.updatedAt}` : ""} tone="green" />
     </div>
   );
@@ -732,7 +738,8 @@ function PublicProbePage() {
                 <ProbeLine label="磁盘" value={formatPercent(disk.usage)} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} percent={disk.usage} tone={meterTone(disk.usage)} />
                 <ProbeLine label="总流量" value={Number.isFinite(trafficPercent) ? formatPercent(trafficPercent) : ""} detail={`↑ ${formatBytes(network.txBytes)} ↓ ${formatBytes(network.rxBytes)}${trafficLimitBytes(profile) ? ` / Sum(${formatBytes(trafficLimitBytes(profile))})` : ""}`} percent={trafficPercent} tone={meterTone(trafficPercent)} />
 
-                <div className="komari-fact-row"><span>网络</span><b>↑ {formatSpeed(network.txSpeed)} ↓ {formatSpeed(network.rxSpeed)}</b></div>
+                <div className="komari-fact-row"><span>速率</span><b>↑ {formatSpeed(network.txSpeed)} ↓ {formatSpeed(network.rxSpeed)}</b></div>
+                <div className="komari-fact-row"><span>累计</span><b>{formatTrafficPair(network)}</b></div>
                 <div className="komari-fact-row"><span>运行时间</span><b>{formatDurationLong(probe.uptime)}</b></div>
                 {profile.note ? <div className="komari-note">{profile.note}</div> : null}
                 <span className="live-stamp">更新 {formatTimeAgo(probe.updatedAt)}</span>
@@ -1551,15 +1558,17 @@ function SubscriptionPage({ liveTick }) {
   const [subscriptions, setSubscriptions] = useState([]);
   const [sources, setSources] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [routeTemplates, setRouteTemplates] = useState([]);
   const [accessLog, setAccessLog] = useState([]);
   const [summary, setSummary] = useState({});
   const [preview, setPreview] = useState(null);
+  const [diagnostics, setDiagnostics] = useState(null);
   const [importText, setImportText] = useState("");
   const [importUrl, setImportUrl] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [sourceForm, setSourceForm] = useState({ name: "", url: "", text: "", tags: "", intervalHours: 24, replaceExisting: true });
   const [groupForm, setGroupForm] = useState({ name: "", protocols: "", tags: "", sources: "", keyword: "", sort: "name" });
-  const [shareForm, setShareForm] = useState({ name: "默认订阅", format: "base64", protocols: "", tags: "", sources: "", groupIds: "", keyword: "", limit: "", sort: "name", expiresAt: "", maxAccess: "" });
+  const [shareForm, setShareForm] = useState({ name: "默认订阅", format: "v2rayn", protocols: "", tags: "", sources: "", groupIds: "", keyword: "", limit: "", sort: "name", routeTemplate: "mainland", prependRules: "", customRules: "", expiresAt: "", maxAccess: "" });
   const [message, setMessage] = useState("");
 
   const load = () =>
@@ -1568,6 +1577,7 @@ function SubscriptionPage({ liveTick }) {
       setSubscriptions(data.subscriptions || []);
       setSources(data.sources || []);
       setGroups(data.groups || []);
+      setRouteTemplates(data.routeTemplates || []);
       setAccessLog(data.accessLog || []);
       setSummary(data.summary || {});
     });
@@ -1635,7 +1645,7 @@ function SubscriptionPage({ liveTick }) {
           format: shareForm.format,
           expiresAt: shareForm.expiresAt,
           maxAccess: shareForm.maxAccess,
-          profile: { protocols: shareForm.protocols, tags: shareForm.tags, sources: shareForm.sources, groupIds: shareForm.groupIds, keyword: shareForm.keyword, limit: shareForm.limit, sort: shareForm.sort }
+          profile: { protocols: shareForm.protocols, tags: shareForm.tags, sources: shareForm.sources, groupIds: shareForm.groupIds, keyword: shareForm.keyword, limit: shareForm.limit, sort: shareForm.sort, routeTemplate: shareForm.routeTemplate, prependRules: shareForm.prependRules, customRules: shareForm.customRules }
         })
       });
       setMessage("分享链接已创建。");
@@ -1648,6 +1658,11 @@ function SubscriptionPage({ liveTick }) {
   const previewSubscription = async (subscription, format = subscription.format || "raw") => {
     const data = await api(`/api/subscriptions/${subscription.id}/preview?format=${encodeURIComponent(format)}`);
     setPreview(data);
+  };
+
+  const diagnoseSubscription = async (subscription) => {
+    const data = await api(`/api/subscriptions/${subscription.id}/diagnostics`);
+    setDiagnostics({ subscription, data });
   };
 
   const updateSubscription = async (subscription, patch) => {
@@ -1674,6 +1689,9 @@ function SubscriptionPage({ liveTick }) {
       keyword: profile.keyword || "",
       limit: profile.limit || "",
       sort: profile.sort || "name",
+      routeTemplate: profile.routeTemplate || "mainland",
+      prependRules: (profile.prependRules || []).join("\n"),
+      customRules: (profile.customRules || []).join("\n"),
       expiresAt: subscription.expiresAt || "",
       maxAccess: subscription.maxAccess || ""
     });
@@ -1714,6 +1732,7 @@ function SubscriptionPage({ liveTick }) {
                 ))}
                 <div className="subscription-tools">
                   <button onClick={() => previewSubscription(subscription, subscription.format)}>预览</button>
+                  <button onClick={() => diagnoseSubscription(subscription)}>自检</button>
                   <button onClick={() => fillShareForm(subscription)}>复制配置</button>
                   <button onClick={() => updateSubscription(subscription, { enabled: !subscription.enabled })}>{subscription.enabled ? "停用" : "启用"}</button>
                   <button className="link danger" onClick={() => deleteSubscription(subscription)}>删除</button>
@@ -1726,7 +1745,7 @@ function SubscriptionPage({ liveTick }) {
         <Panel title="新建分享">
           <div className="form-grid single">
             <Field label="名称" value={shareForm.name} onChange={(value) => setShareForm((current) => ({ ...current, name: value }))} />
-            <Field label="默认格式" type="select" value={shareForm.format} onChange={(value) => setShareForm((current) => ({ ...current, format: value }))} options={[["base64", "Base64"], ["raw", "Raw"], ["clash", "Clash/Mihomo"], ["sing-box", "sing-box"]]} />
+            <Field label="默认格式" type="select" value={shareForm.format} onChange={(value) => setShareForm((current) => ({ ...current, format: value }))} options={[["v2rayn", "v2rayN/Base64"], ["raw", "Raw"], ["clash", "Clash"], ["mihomo", "Mihomo"], ["sing-box", "sing-box"]]} />
             <Field label="协议过滤" value={shareForm.protocols} onChange={(value) => setShareForm((current) => ({ ...current, protocols: value }))} placeholder="ss,vmess,trojan,vless" />
             <Field label="标签过滤" value={shareForm.tags} onChange={(value) => setShareForm((current) => ({ ...current, tags: value }))} />
             <Field label="来源过滤" value={shareForm.sources} onChange={(value) => setShareForm((current) => ({ ...current, sources: value }))} placeholder="订阅源名称，逗号分隔" />
@@ -1734,6 +1753,9 @@ function SubscriptionPage({ liveTick }) {
             <Field label="关键词" value={shareForm.keyword} onChange={(value) => setShareForm((current) => ({ ...current, keyword: value }))} placeholder="节点名/来源/标签关键词" />
             <Field label="节点上限" type="number" value={shareForm.limit} onChange={(value) => setShareForm((current) => ({ ...current, limit: value }))} placeholder="0 表示不限" />
             <Field label="排序" type="select" value={shareForm.sort} onChange={(value) => setShareForm((current) => ({ ...current, sort: value }))} options={[["name", "名称"], ["protocol", "协议"], ["source", "来源"], ["updated", "最近更新"]]} />
+            <Field label="分流模板" type="select" value={shareForm.routeTemplate} onChange={(value) => setShareForm((current) => ({ ...current, routeTemplate: value }))} options={(routeTemplates.length ? routeTemplates : [{ id: "mainland", name: "Mainland Smart" }]).map((item) => [item.id, item.name])} />
+            <Field label="前置规则" type="textarea" rows={3} value={shareForm.prependRules} onChange={(value) => setShareForm((current) => ({ ...current, prependRules: value }))} placeholder="每行一条 Clash/Mihomo rule，会放在模板规则前" />
+            <Field label="追加规则" type="textarea" rows={3} value={shareForm.customRules} onChange={(value) => setShareForm((current) => ({ ...current, customRules: value }))} placeholder="例如 DOMAIN-SUFFIX,example.com,Auto" />
             <Field label="过期时间" value={shareForm.expiresAt} onChange={(value) => setShareForm((current) => ({ ...current, expiresAt: value }))} placeholder="2026-12-31T23:59:59.000Z" />
             <Field label="访问上限" type="number" value={shareForm.maxAccess} onChange={(value) => setShareForm((current) => ({ ...current, maxAccess: value }))} placeholder="0 表示不限" />
           </div>
@@ -1750,6 +1772,21 @@ function SubscriptionPage({ liveTick }) {
             {preview.truncated ? <span>内容已截断</span> : null}
           </div>
           <pre className="preview subscription-preview">{preview.body || "当前筛选没有节点。"}</pre>
+        </Panel>
+      ) : null}
+
+      {diagnostics ? (
+        <Panel title={`订阅自检：${diagnostics.subscription?.name || ""}`} right={<button onClick={() => setDiagnostics(null)}>关闭</button>}>
+          <div className="diagnostic-grid">
+            {Object.entries(diagnostics.data?.formats || {}).map(([format, row]) => (
+              <div className={`diagnostic-card ${row.ok ? "ok" : "bad"}`} key={format}>
+                <b>{format}</b>
+                <span>{row.ok ? "通过" : "失败"} · {formatBytes(row.bytes || 0)}</span>
+                {(row.checks || []).map((check) => <small key={check.name}>{check.ok ? "OK" : "FAIL"} {check.name}</small>)}
+                {row.error ? <small>{row.error}</small> : null}
+              </div>
+            ))}
+          </div>
         </Panel>
       ) : null}
 
@@ -1880,6 +1917,56 @@ function SubscriptionPage({ liveTick }) {
             ))}
           </tbody>
         </table>
+      </Panel>
+    </section>
+  );
+}
+
+function ProtocolLabPage({ agents, liveTick }) {
+  const [selected, setSelected] = useState("");
+  const [reports, setReports] = useState([]);
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    if (!selected && agents[0]) setSelected(agents[0].id);
+  }, [agents, selected, liveTick]);
+
+  const runSmoke = async (agentId = selected) => {
+    if (!agentId) return;
+    setRunning(true);
+    try {
+      const report = await api(`/api/agents/${agentId}/protocol-smoke`, { method: "POST", body: JSON.stringify({}) });
+      setReports((current) => [report, ...current].slice(0, 8));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <section>
+      <div className="stats">
+        <Card icon={Shield} label="测试对象" value={agents.length} hint="在线 agent 可执行真实下发" />
+        <Card icon={Code2} label="协议覆盖" value="6" hint="VMess / VLESS / Trojan / HY2 / SS / Mixed" />
+        <Card icon={Link2} label="订阅自检" value="5" hint="v2rayN / raw / Clash / Mihomo / sing-box" />
+        <Card icon={RotateCcw} label="恢复机制" value="ON" hint="测试后恢复原配置" />
+      </div>
+      <Panel title="协议实验室" right={<button className="primary" disabled={running || !selected} onClick={() => runSmoke()}><PlugZap size={16} />{running ? "测试中" : "开始测试"}</button>}>
+        <div className="form-grid">
+          <Field label="选择服务器" type="select" value={selected} onChange={setSelected} options={agents.map((agent) => [agent.id, `${agent.name} · ${agent.connected ? "在线" : "离线"}`])} />
+        </div>
+        <p className="panel-tip">测试会依次下发协议配置、检查 sing-box 状态，然后恢复原配置。VLESS Reality 会尝试在目标机生成 keypair。</p>
+      </Panel>
+      <Panel title="测试报告">
+        <div className="diagnostic-grid">
+          {reports.flatMap((report) => (report.rows || []).map((row) => (
+            <div className={`diagnostic-card ${row.ok ? "ok" : "bad"}`} key={`${report.at}-${report.agentId}-${row.protocol}`}>
+              <b>{report.agentName} · {row.protocol}</b>
+              <span>{row.ok ? "通过" : "失败"}{row.port ? ` · :${row.port}` : ""}</span>
+              <small>{row.status || row.output || "-"}</small>
+            </div>
+          )))}
+          {!reports.length ? <div className="empty">还没有测试报告。</div> : null}
+        </div>
       </Panel>
     </section>
   );
@@ -2924,6 +3011,7 @@ function App() {
     if (page === "servers") return <Servers agents={agents} openAgent={openAgent} openSsh={openSsh} openDesktop={openDesktop} openFiles={openFiles} />;
     if (page === "nodes") return <NodeWizard agents={agents} />;
     if (page === "subscriptions") return <SubscriptionPage liveTick={liveTick} />;
+    if (page === "protocolLab") return <ProtocolLabPage agents={agents} liveTick={liveTick} />;
     if (page === "memos") return <MemosPage liveTick={liveTick} />;
     if (page === "forward") return <ForwardWizard agents={agents} />;
     if (page === "probeManage") return <ProbeManagePage liveTick={liveTick} agents={agents} />;

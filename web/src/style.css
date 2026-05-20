@@ -1,11 +1,11 @@
 :root {
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   color: #17191f;
-  background: #f3f6f8;
-  --panel: rgba(255, 255, 255, 0.92);
-  --line: #dfe6ea;
-  --text-soft: #60707f;
-  --text-muted: #91a0ac;
+  background: #eef7f5;
+  --panel: rgba(255, 255, 255, 0.88);
+  --line: #d8e7e4;
+  --text-soft: #5f7180;
+  --text-muted: #9aaab5;
   --blue: #2563eb;
   --green: #10a37f;
   --amber: #d98519;
@@ -14,7 +14,7 @@
   --ink: #101419;
   --accent: #10a37f;
   --accent-2: #ff4d8d;
-  --shadow: 0 18px 45px rgba(17, 24, 39, 0.08);
+  --shadow: 0 18px 45px rgba(13, 76, 68, 0.08);
 }
 
 * {
@@ -142,9 +142,10 @@ textarea {
 section {
   padding: 22px 26px;
   background:
-    radial-gradient(circle at 88% 4%, rgba(16, 163, 127, 0.1), transparent 24%),
-    radial-gradient(circle at 18% 22%, rgba(119, 92, 255, 0.08), transparent 22%),
-    #f3f6f8;
+    linear-gradient(135deg, rgba(255, 255, 255, 0.68), rgba(238, 247, 245, 0.9)),
+    radial-gradient(circle at 88% 4%, rgba(16, 163, 127, 0.14), transparent 24%),
+    radial-gradient(circle at 18% 22%, rgba(119, 92, 255, 0.09), transparent 22%),
+    #eef7f5;
 }
 
 .login-page,
@@ -392,6 +393,10 @@ section {
 
 .komari-summary div {
   min-width: 0;
+  border-color: #d8e7e4;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 14px 32px rgba(13, 76, 68, 0.07);
 }
 
 .komari-summary span,
@@ -515,9 +520,10 @@ section {
   flex-direction: column;
   gap: 12px;
   padding: 14px;
-  border: 1px solid #dddddd;
-  border-radius: 7px;
-  background: #ffffff;
+  border: 1px solid #d8e7e4;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 18px 42px rgba(13, 76, 68, 0.08);
 }
 
 .komari-card-head {
@@ -681,6 +687,7 @@ section {
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
 }
 
 .stat {
@@ -1372,6 +1379,37 @@ textarea {
 .subscription-preview {
   max-height: 360px;
   overflow: auto;
+}
+
+.diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.diagnostic-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.diagnostic-card.ok {
+  border-color: rgba(16, 163, 127, 0.35);
+  background: #f2fbf8;
+}
+
+.diagnostic-card.bad {
+  border-color: rgba(229, 72, 77, 0.35);
+  background: #fff6f6;
+}
+
+.diagnostic-card span,
+.diagnostic-card small {
+  color: var(--text-soft);
 }
 
 .check-row {

@@ -21,8 +21,10 @@ import {
   normalizeSubscriptionGroup,
   normalizeSubscriptionSource,
   normalizeSubscriptionToken,
+  routeTemplates,
   selectSubscriptionNodes,
   summarizeSubscriptionNodes,
+  validateSubscriptionOutputs,
   upsertNode
 } from "./subscriptions.js";
 
@@ -509,6 +511,10 @@ function publicProbe(probe = {}) {
           totalTxBytes: finiteNumber(probe.network.totalTxBytes, finiteNumber(probe.network.txBytes, 0)),
           rxSpeed: finiteNumber(probe.network.rxSpeed),
           txSpeed: finiteNumber(probe.network.txSpeed),
+          rxDelta: finiteNumber(probe.network.rxDelta, 0),
+          txDelta: finiteNumber(probe.network.txDelta, 0),
+          sampleInterval: finiteNumber(probe.network.sampleInterval, 0),
+          speedUpdatedAt: probe.network.speedUpdatedAt || probe.network.updatedAt || probe.updatedAt || null,
           interfaces: finiteNumber(probe.network.interfaces, 0)
         }
       : null,
@@ -527,23 +533,38 @@ function applyTrafficAccounting(agentId, status = {}) {
   const previous = state.trafficCounters[agentId] || {};
   let totalRx = finiteNumber(previous.totalRxBytes, null);
   let totalTx = finiteNumber(previous.totalTxBytes, null);
+  let rxDelta = finiteNumber(network.rxDelta, null);
+  let txDelta = finiteNumber(network.txDelta, null);
+  let sampleInterval = finiteNumber(network.sampleInterval, null);
+  const now = Date.now();
 
   if (totalRx === null || totalTx === null) {
     const existing = state.agents?.[agentId]?.probe?.network || {};
     totalRx = finiteNumber(existing.totalRxBytes ?? existing.rxBytes, rawRx) || 0;
     totalTx = finiteNumber(existing.totalTxBytes ?? existing.txBytes, rawTx) || 0;
   } else if (Number.isFinite(previous.lastRxBytes) && Number.isFinite(previous.lastTxBytes)) {
-    totalRx += rawRx >= previous.lastRxBytes ? rawRx - previous.lastRxBytes : rawRx;
-    totalTx += rawTx >= previous.lastTxBytes ? rawTx - previous.lastTxBytes : rawTx;
+    rxDelta = rawRx >= previous.lastRxBytes ? rawRx - previous.lastRxBytes : rawRx;
+    txDelta = rawTx >= previous.lastTxBytes ? rawTx - previous.lastTxBytes : rawTx;
+    totalRx += rxDelta;
+    totalTx += txDelta;
   }
   totalRx = Math.max(totalRx, rawRx);
   totalTx = Math.max(totalTx, rawTx);
+  if (!Number.isFinite(sampleInterval) || sampleInterval <= 0) {
+    const previousAt = Date.parse(previous.updatedAt || "");
+    sampleInterval = Number.isFinite(previousAt) ? Math.max(1, (now - previousAt) / 1000) : 0;
+  }
+  const calculatedRxSpeed = sampleInterval > 0 && Number.isFinite(rxDelta) ? Math.max(0, rxDelta) / sampleInterval : finiteNumber(network.rxSpeed, 0);
+  const calculatedTxSpeed = sampleInterval > 0 && Number.isFinite(txDelta) ? Math.max(0, txDelta) / sampleInterval : finiteNumber(network.txSpeed, 0);
 
   state.trafficCounters[agentId] = {
     totalRxBytes: totalRx,
     totalTxBytes: totalTx,
     lastRxBytes: rawRx,
     lastTxBytes: rawTx,
+    lastRxDelta: Number.isFinite(rxDelta) ? rxDelta : 0,
+    lastTxDelta: Number.isFinite(txDelta) ? txDelta : 0,
+    sampleInterval,
     updatedAt: new Date().toISOString()
   };
   status.probe.network = {
@@ -553,7 +574,13 @@ function applyTrafficAccounting(agentId, status = {}) {
     rxBytes: totalRx,
     txBytes: totalTx,
     totalRxBytes: totalRx,
-    totalTxBytes: totalTx
+    totalTxBytes: totalTx,
+    rxDelta: Number.isFinite(rxDelta) ? rxDelta : 0,
+    txDelta: Number.isFinite(txDelta) ? txDelta : 0,
+    sampleInterval,
+    rxSpeed: Math.round(calculatedRxSpeed * 10) / 10,
+    txSpeed: Math.round(calculatedTxSpeed * 10) / 10,
+    speedUpdatedAt: new Date().toISOString()
   };
   return status;
 }
@@ -797,6 +824,20 @@ function validateApiToken(token) {
   const session = (state.sessions || []).find((row) => row.token === token && !row.revoked && Date.parse(row.expiresAt || "") > Date.now());
   if (session) return { type: "session", ...session };
   return null;
+}
+
+function waitForCommandResult(commandId, timeoutMs = 90000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      commandWaiters.delete(commandId);
+      resolve({ ok: false, output: "command timeout" });
+    }, timeoutMs);
+    commandWaiters.set(commandId, (msg) => {
+      clearTimeout(timer);
+      commandWaiters.delete(commandId);
+      resolve(msg);
+    });
+  });
 }
 
 function requestAccess(req) {
@@ -1452,6 +1493,7 @@ app.get("/api/node-pool", (req, res) => {
     subscriptions: (state.subscriptionTokens || []).map((token) => publicSubscriptionWithStats(token, req)),
     sources: state.subscriptionSources || [],
     groups: state.subscriptionGroups || [],
+    routeTemplates: Object.values(routeTemplates),
     summary: summarizeSubscriptionNodes(state.nodePool || []),
     accessLog: (state.subscriptionAccessLog || []).slice(0, 100)
   });
@@ -1538,7 +1580,7 @@ app.get("/api/subscriptions/:id/preview", (req, res) => {
   if (!token) return res.status(404).json({ error: "subscription not found" });
   const nodes = selectSubscriptionNodes(state.nodePool || [], token, state.subscriptionGroups || []);
   const format = String(req.query.format || token.format || "raw");
-  const rendered = renderSubscription(nodes, format);
+  const rendered = renderSubscription(nodes, format, token.profile || {});
   res.json({
     subscription: publicSubscriptionWithStats(token, req),
     summary: summarizeSubscriptionNodes(nodes),
@@ -1548,6 +1590,13 @@ app.get("/api/subscriptions/:id/preview", (req, res) => {
     body: rendered.body.slice(0, 12000),
     truncated: rendered.body.length > 12000
   });
+});
+
+app.get("/api/subscriptions/:id/diagnostics", (req, res) => {
+  const token = (state.subscriptionTokens || []).find((row) => row.id === req.params.id);
+  if (!token) return res.status(404).json({ error: "subscription not found" });
+  const nodes = selectSubscriptionNodes(state.nodePool || [], token, state.subscriptionGroups || []);
+  res.json(validateSubscriptionOutputs(nodes, token));
 });
 
 app.delete("/api/subscriptions/:id", (req, res) => {
@@ -2024,6 +2073,76 @@ app.post("/api/agents/:id/config/wizard", (req, res) => {
   }
 });
 
+app.post("/api/agents/:id/protocol-smoke", async (req, res) => {
+  const agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: "agent not found" });
+  const requested = Array.isArray(req.body?.protocols) && req.body.protocols.length
+    ? req.body.protocols.map(String)
+    : ["vmess-ws", "vless-reality", "trojan", "hysteria2", "shadowsocks", "mixed"];
+  const basePort = Math.max(20000, Math.min(60000, Number(req.body?.basePort || 36000) || 36000));
+  const readId = sendCommand(agent.id, "read_config");
+  const readResult = await waitForCommandResult(readId, 30000);
+  const previousConfig = readResult.config || null;
+  const rows = [];
+  const at = new Date().toISOString();
+  let realityKeys = { privateKey: req.body?.privateKey || "", publicKey: req.body?.publicKey || "" };
+
+  if (requested.includes("vless-reality") && !realityKeys.privateKey) {
+    try {
+      const keyId = sendCommand(agent.id, "exec", { command: "docker exec chiken-singbox sing-box generate reality-keypair 2>/dev/null || sing-box generate reality-keypair" });
+      const keyResult = await waitForCommandResult(keyId, 30000);
+      const privateKey = String(keyResult.output || "").match(/PrivateKey:\s*([A-Za-z0-9_-]+)/i)?.[1] || "";
+      const publicKey = String(keyResult.output || "").match(/PublicKey:\s*([A-Za-z0-9_-]+)/i)?.[1] || "";
+      if (privateKey) realityKeys = { privateKey, publicKey };
+    } catch {}
+  }
+
+  for (const [index, protocol] of requested.entries()) {
+    const port = basePort + index;
+    const input = {
+      protocol,
+      port,
+      listen: "::",
+      tag: `smoke-${protocol}-${port}`,
+      nodeName: `Smoke ${protocol}`,
+      publicHost: agent.ip || agent.host || "127.0.0.1",
+      uuid: "11111111-1111-4111-8111-111111111111",
+      path: "/smoke",
+      password: `smoke-${port}`,
+      method: "aes-256-gcm",
+      serverName: "www.cloudflare.com",
+      serverPort: 443,
+      privateKey: realityKeys.privateKey || "CHANGE_ME_REALITY_PRIVATE_KEY",
+      publicKey: realityKeys.publicKey || "",
+      shortId: "0123456789abcdef"
+    };
+    try {
+      const config = buildConfig(input);
+      const commandId = sendCommand(agent.id, "apply_config", { config, restart: true });
+      const result = await waitForCommandResult(commandId, 120000);
+      const statusId = sendCommand(agent.id, "service", { action: "status" });
+      const status = await waitForCommandResult(statusId, 30000);
+      rows.push({ protocol, port, ok: Boolean(result.ok && status.ok), output: String(result.output || status.output || "").slice(0, 1000), status: String(status.output || "").slice(0, 200) });
+    } catch (error) {
+      rows.push({ protocol, port, ok: false, output: error.message });
+    }
+  }
+
+  if (previousConfig) {
+    try {
+      const restoreId = sendCommand(agent.id, "apply_config", { config: previousConfig, restart: true });
+      const restore = await waitForCommandResult(restoreId, 120000);
+      rows.push({ protocol: "restore", ok: Boolean(restore.ok), output: String(restore.output || "").slice(0, 1000) });
+    } catch (error) {
+      rows.push({ protocol: "restore", ok: false, output: error.message });
+    }
+  }
+
+  const report = { agentId: agent.id, agentName: agent.name, at, ok: rows.filter((row) => row.protocol !== "restore").every((row) => row.ok), rows };
+  audit("admin", "protocol_smoke", agent.id, report);
+  res.json(report);
+});
+
 app.post("/api/agents/:id/service/:action", (req, res) => {
   const { id, action } = req.params;
   if (!["start", "stop", "restart", "status"].includes(action)) return res.status(400).json({ error: "bad action" });
@@ -2265,7 +2384,7 @@ app.get("/sub/:token", (req, res) => {
   if (Number(token.maxAccess || 0) > 0 && Number(token.accessCount || 0) >= Number(token.maxAccess || 0)) return res.status(403).send("subscription access limit reached");
   const nodes = selectSubscriptionNodes(state.nodePool || [], token, state.subscriptionGroups || []);
   const format = String(req.query.format || token.format || "base64");
-  const { contentType, body } = renderSubscription(nodes, format);
+  const { contentType, body } = renderSubscription(nodes, format, token.profile || {});
   token.accessCount = Number(token.accessCount || 0) + 1;
   token.lastAccessAt = new Date().toISOString();
   state.subscriptionAccessLog ||= [];

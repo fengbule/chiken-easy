@@ -183,13 +183,20 @@ function networkProbe() {
   if (!next) return null;
   const previous = previousNetworkSnapshot;
   previousNetworkSnapshot = next;
-  if (!previous) return { ...next, rxSpeed: null, txSpeed: null };
+  if (!previous) return { ...next, rawRxBytes: next.rxBytes, rawTxBytes: next.txBytes, rxSpeed: null, txSpeed: null, rxDelta: 0, txDelta: 0, sampleInterval: 0 };
 
   const seconds = Math.max(1, (next.at - previous.at) / 1000);
+  const rxDelta = next.rxBytes >= previous.rxBytes ? next.rxBytes - previous.rxBytes : next.rxBytes;
+  const txDelta = next.txBytes >= previous.txBytes ? next.txBytes - previous.txBytes : next.txBytes;
   return {
     ...next,
-    rxSpeed: round(Math.max(0, next.rxBytes - previous.rxBytes) / seconds, 1),
-    txSpeed: round(Math.max(0, next.txBytes - previous.txBytes) / seconds, 1)
+    rawRxBytes: next.rxBytes,
+    rawTxBytes: next.txBytes,
+    rxDelta,
+    txDelta,
+    sampleInterval: round(seconds, 3),
+    rxSpeed: round(Math.max(0, rxDelta) / seconds, 1),
+    txSpeed: round(Math.max(0, txDelta) / seconds, 1)
   };
 }
 
