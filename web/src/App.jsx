@@ -2629,6 +2629,7 @@ function ProbeManagePage({ liveTick, agents }) {
 function MonitorSettingsPage({ section, title, embedded = false }) {
   const [settings, setSettings] = useState(null);
   const [message, setMessage] = useState("");
+  const [testing, setTesting] = useState(false);
   const load = () => api("/api/admin/settings").then(setSettings);
   useEffect(() => {
     load().catch(() => {});
@@ -2637,6 +2638,7 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
   const patch = (key, value) => setSettings((data) => ({ ...data, [section]: { ...(data?.[section] || {}), [key]: value } }));
   const save = async () => {
     try {
+      setMessage("");
       const response = await api("/api/admin/settings", { method: "PUT", body: JSON.stringify({ [section]: current }) });
       setSettings(response);
       setMessage("设置已保存。");
@@ -2646,16 +2648,25 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
   };
   const testNotification = async () => {
     try {
+      setTesting(true);
       setMessage("");
       const response = await api("/api/admin/settings", { method: "PUT", body: JSON.stringify({ [section]: current }) });
       setSettings(response);
       const result = await api("/api/admin/notifications/test", { method: "POST", body: JSON.stringify({}) });
-      setMessage(`测试通知已发送：${(result.results || []).map((row) => row.channel).join(", ") || "无通道"}`);
+      const okChannels = (result.results || []).map((row) => row.channel).join(", ");
+      const errors = (result.errors || []).join("；");
+      setMessage(`测试通知完成：成功通道 ${okChannels || "无"}${errors ? `；失败原因：${errors}` : ""}`);
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setTesting(false);
     }
   };
   if (!settings) return null;
+
+  const channel = String(current.channel || "webhook");
+  const needsWebhook = channel === "webhook" || channel === "both";
+  const needsTelegram = channel === "telegram" || channel === "both";
 
   const fields = {
     site: [
@@ -2700,11 +2711,21 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
     <section className={embedded ? "embedded-section" : ""}>
       <Panel title={title}>
         {section === "notifications" ? (
-          <div className="settings-helper">
-            <div><b>通知通道</b><span>Webhook、Telegram 或两者同时发送，保存后可以立即点测试。</span></div>
-            <div><b>告警规则</b><span>离线与负载告警共用冷却时间，避免短时间重复轰炸。</span></div>
-            <div><b>隐私</b><span>测试与告警只发送节点名称和指标，不包含公开页隐藏的 IP。</span></div>
-          </div>
+          <>
+            <div className="settings-helper">
+              <div><b>通知通道</b><span>Webhook、Telegram 或两者同时发送，保存后可以立即点测试。</span></div>
+              <div><b>告警规则</b><span>离线与负载告警共用冷却时间，避免短时间重复轰炸。</span></div>
+              <div><b>隐私</b><span>测试与告警只发送节点名称和指标，不包含公开页隐藏的 IP。</span></div>
+            </div>
+            <div className="guide-card flat">
+              <h3>当前通道检查</h3>
+              <p>
+                {needsWebhook ? `Webhook：${current.webhookUrl ? "已填写" : "未填写"}` : "Webhook：当前未启用"}
+                <br />
+                {needsTelegram ? `Telegram：${current.telegramBotToken && current.telegramChatId ? "Bot Token / Chat ID 已填写" : "Bot Token 或 Chat ID 未填写"}` : "Telegram：当前未启用"}
+              </p>
+            </div>
+          </>
         ) : null}
         <div className="form-grid">
           {fields.map(([key, label, type, placeholder, options]) => (
@@ -2721,7 +2742,7 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
         </div>
         <div className="actions">
           <button className="primary" onClick={save}><Save size={16} />保存</button>
-          {section === "notifications" ? <button onClick={testNotification}><Bell size={16} />发送测试通知</button> : null}
+          {section === "notifications" ? <button onClick={testNotification} disabled={testing}><Bell size={16} />{testing ? "发送中..." : "发送测试通知"}</button> : null}
           <button onClick={load}><RefreshCw size={16} />重载</button>
         </div>
         {message ? <p className="panel-message">{message}</p> : null}
@@ -2732,6 +2753,7 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
 
 function SessionsPage({ liveTick, embedded = false }) {
   const [rows, setRows] = useState([]);
+  const [message, setMessage] = useState("");
   const load = () => api("/api/admin/sessions").then(setRows);
   useEffect(() => {
     load().catch(() => {});
@@ -2748,18 +2770,19 @@ function SessionsPage({ liveTick, embedded = false }) {
                 <td>{row.createdAt}</td>
                 <td>{row.expiresAt}</td>
                 <td>{row.revoked ? "已撤销" : "有效"}</td>
-                <td>{row.revoked ? null : <button className="link" onClick={async () => { await api(`/api/admin/sessions/${row.id}`, { method: "DELETE" }); await load(); }}>撤销</button>}</td>
+                <td>{row.revoked ? null : <button className="link" onClick={async () => { await api(`/api/admin/sessions/${row.id}`, { method: "DELETE" }); setMessage(`已撤销会话：${row.username}`); await load(); }}>撤销</button>}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        {message ? <p className="panel-message">{message}</p> : null}
       </Panel>
     </section>
   );
 }
 
 function AccountPage({ embedded = false }) {
-  const [form, setForm] = useState({ oldPassword: "", newPassword: "" });
+  const [form, setForm] = useState({ oldPassword: "", newPassword: "", confirmPassword: "" });
   const [message, setMessage] = useState("");
   const patch = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   return (
@@ -2768,13 +2791,15 @@ function AccountPage({ embedded = false }) {
         <div className="form-grid">
           <Field label="旧密码" type="password" value={form.oldPassword} onChange={(value) => patch("oldPassword", value)} />
           <Field label="新密码" type="password" value={form.newPassword} onChange={(value) => patch("newPassword", value)} />
+          <Field label="确认新密码" type="password" value={form.confirmPassword} onChange={(value) => patch("confirmPassword", value)} />
         </div>
         <div className="actions">
           <button className="primary" onClick={async () => {
             try {
+              if (form.newPassword !== form.confirmPassword) throw new Error("两次输入的新密码不一致");
               await api("/api/auth/password", { method: "PUT", body: JSON.stringify(form) });
               setMessage("密码已更新。");
-              setForm({ oldPassword: "", newPassword: "" });
+              setForm({ oldPassword: "", newPassword: "", confirmPassword: "" });
             } catch (error) {
               setMessage(error.message);
             }
@@ -2893,6 +2918,8 @@ function ForwardWizard({ agents }) {
 function ProbeTasksPage({ agents, liveTick }) {
   const [tasks, setTasks] = useState([]);
   const [form, setForm] = useState({ name: "", type: "tcp", target: "1.1.1.1", port: 443, interval: 60, timeout: 5000, agentId: "" });
+  const [editingId, setEditingId] = useState("");
+  const [expandedId, setExpandedId] = useState("");
   const [message, setMessage] = useState("");
 
   const load = () => api("/api/probe-tasks").then(setTasks);
@@ -2902,12 +2929,18 @@ function ProbeTasksPage({ agents, liveTick }) {
 
   const patch = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
-  const create = async () => {
+  const saveTask = async () => {
     try {
       setMessage("");
-      const result = await api("/api/probe-tasks", { method: "POST", body: JSON.stringify(form) });
+      if (editingId) {
+        await api(`/api/probe-tasks/${editingId}`, { method: "PUT", body: JSON.stringify(form) });
+        setMessage("任务已更新。");
+      } else {
+        const result = await api("/api/probe-tasks", { method: "POST", body: JSON.stringify(form) });
+        setMessage(`任务已创建，已下发 ${result.sent?.length || 0} 个在线节点。`);
+      }
+      setEditingId("");
       setForm((current) => ({ ...current, name: "" }));
-      setMessage(`任务已创建，已下发 ${result.sent?.length || 0} 个在线节点。`);
       await load();
     } catch (error) {
       setMessage(error.message);
@@ -2933,7 +2966,8 @@ function ProbeTasksPage({ agents, liveTick }) {
             <Field label="超时 ms" type="number" value={form.timeout} onChange={(value) => patch("timeout", value)} />
           </div>
           <div className="actions">
-            <button className="primary" onClick={create}>创建并运行</button>
+            <button className="primary" onClick={saveTask}>{editingId ? "保存任务" : "创建并运行"}</button>
+            {editingId ? <button onClick={() => { setEditingId(""); setForm({ name: "", type: "tcp", target: "1.1.1.1", port: 443, interval: 60, timeout: 5000, agentId: "" }); }}>取消编辑</button> : null}
           </div>
           {message ? <p className="panel-message">{message}</p> : null}
         </Panel>
@@ -2960,19 +2994,24 @@ function ProbeTasksPage({ agents, liveTick }) {
           </thead>
           <tbody>
             {tasks.map((task) => (
-              <tr key={task.id}>
-                <td>{task.name}</td>
-                <td>{task.type}</td>
-                <td>{task.type === "tcp" ? `${task.target}:${task.port}` : task.target}</td>
-                <td>{task.agentId ? agents.find((agent) => agent.id === task.agentId)?.name || task.agentId : "全部在线"}</td>
-                <td><span className={`status-pill ${task.lastResult?.ok ? "online" : ""}`}><StatusDot on={task.lastResult?.ok} />{task.lastResult ? (task.lastResult.ok ? "ok" : "fail") : "pending"}</span></td>
-                <td>{task.lastResult?.latency ? `${task.lastResult.latency} ms` : "-"}{task.lastResult?.agentName ? <div className="muted">{task.lastResult.agentName}</div> : null}</td>
-                <td>{task.lastResult?.at || "-"}</td>
-                <td className="actions-cell">
-                  <button className="link" onClick={async () => { const result = await api(`/api/probe-tasks/${task.id}/run`, { method: "POST" }); setMessage(`已重新下发 ${result.sent?.length || 0} 个在线节点。`); await load(); }}>运行</button>
-                  <button className="link" onClick={async () => { if (!window.confirm(`删除探测任务 ${task.name}？`)) return; await api(`/api/probe-tasks/${task.id}`, { method: "DELETE" }); setMessage("任务已删除。"); await load(); }}>删除</button>
-                </td>
-              </tr>
+              <React.Fragment key={task.id}>
+                <tr>
+                  <td>{task.name}</td>
+                  <td>{task.type}</td>
+                  <td>{task.type === "tcp" ? `${task.target}:${task.port}` : task.target}</td>
+                  <td>{task.agentId ? agents.find((agent) => agent.id === task.agentId)?.name || task.agentId : "全部在线"}</td>
+                  <td><span className={`status-pill ${task.lastResult?.ok ? "online" : ""}`}><StatusDot on={task.lastResult?.ok} />{task.lastResult ? (task.lastResult.ok ? "ok" : "fail") : "pending"}</span></td>
+                  <td>{task.lastResult?.latency ? `${task.lastResult.latency} ms` : "-"}{task.lastResult?.agentName ? <div className="muted">{task.lastResult.agentName}</div> : null}</td>
+                  <td>{task.lastResult?.at || "-"}</td>
+                  <td className="actions-cell">
+                    <button className="link" onClick={() => { setEditingId(task.id); setForm({ name: task.name || "", type: task.type || "tcp", target: task.target || "", port: task.port || 443, interval: task.interval || 60, timeout: task.timeout || 5000, agentId: task.agentId || "" }); }}>编辑</button>
+                    <button className="link" onClick={() => setExpandedId((current) => current === task.id ? "" : task.id)}>{expandedId === task.id ? "收起" : "详情"}</button>
+                    <button className="link" onClick={async () => { const result = await api(`/api/probe-tasks/${task.id}/run`, { method: "POST" }); setMessage(`已重新下发 ${result.sent?.length || 0} 个在线节点。`); await load(); }}>运行</button>
+                    <button className="link" onClick={async () => { if (!window.confirm(`删除探测任务 ${task.name}？`)) return; await api(`/api/probe-tasks/${task.id}`, { method: "DELETE" }); setMessage("任务已删除。"); await load(); }}>删除</button>
+                  </td>
+                </tr>
+                {expandedId === task.id ? <tr><td colSpan={8}><div className="guide-card flat"><h3>最近结果</h3>{task.lastResults?.length ? task.lastResults.slice(0, 8).map((row, index) => <div key={index} className="audit-row"><span>{row.agentName || row.agentId || "-"}</span><span>{row.ok ? "ok" : "fail"}</span><span>{Number.isFinite(Number(row.latency)) ? `${row.latency} ms` : "-"}</span><span>{row.status || ""}</span><span>{row.output || ""}</span><span>{row.at || "-"}</span></div>) : <div className="empty">暂无明细结果。</div>}</div></td></tr> : null}
+              </React.Fragment>
             ))}
           </tbody>
         </table>
