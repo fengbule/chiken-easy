@@ -207,14 +207,23 @@ function verifyPassword(password, record) {
   return hashPassword(password, record.salt).hash === record.hash;
 }
 
+function createBootstrapAdminPassword() {
+  const seed = crypto.randomBytes(18).toString("base64url");
+  return `ce_${seed}`;
+}
+
 function ensureDefaultAdmin() {
   state.adminUsers ||= [];
   if (state.adminUsers.length) return;
   const username = String(process.env.CHIKEN_ADMIN_USER || "admin").trim() || "admin";
-  const password = String(process.env.CHIKEN_ADMIN_PASSWORD || "chiken-easy").trim() || "chiken-easy";
+  const password = String(process.env.CHIKEN_ADMIN_PASSWORD || "").trim() || createBootstrapAdminPassword();
   const passwordHash = hashPassword(password);
   state.adminUsers.push({ id: nanoid(), username, ...passwordHash, createdAt: new Date().toISOString(), bootstrap: true });
   saveState();
+  if (!process.env.CHIKEN_ADMIN_PASSWORD) {
+    console.warn(`[bootstrap-admin] username=${username} password=${password}`);
+    console.warn("[bootstrap-admin] Set CHIKEN_ADMIN_PASSWORD in your environment to avoid random bootstrap credentials.");
+  }
 }
 
 function ensureDefaultSubscriptionToken() {

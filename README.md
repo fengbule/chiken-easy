@@ -86,6 +86,15 @@ npm run lint
 
 ## Docker 部署
 
+先准备环境变量：
+
+```bash
+cp .env.example .env
+# 修改 .env 中的 token、管理员账号密码、以及远程 Agent 的 CHIKEN_SERVER
+```
+
+> 隐私提醒：这是开源仓库，不要把真实服务器地址、密码、私钥、token、订阅内容或其他敏感信息提交进仓库。
+
 主控机：
 
 ```bash
@@ -98,6 +107,16 @@ docker compose -f docker-compose.server.yml up -d --build
 docker compose -f docker-compose.agent.yml up -d --build
 ```
 
+### 默认管理员说明
+
+- 建议显式设置 `CHIKEN_ADMIN_PASSWORD`
+- 如果未设置，服务首次启动时会自动生成一个随机初始密码，并打印到容器日志里
+- 可用下面命令查看：
+
+```bash
+docker logs chiken-server | grep bootstrap-admin
+```
+
 现在默认会额外挂载：
 
 - `./data/sing-box`：主 `sing-box` 配置
@@ -107,4 +126,5 @@ docker compose -f docker-compose.agent.yml up -d --build
 
 - 开发文档：`docs/development.md`
 - 开发报告：`docs/development-report-2026-05-20.md`
+- 测试记录：`docs/test-report-2026-05-20.md`
 - 节点配置与转发说明：`docs/node-config-guide.md`
