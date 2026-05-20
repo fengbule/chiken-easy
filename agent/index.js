@@ -21,6 +21,13 @@ const realmImage = process.env.CHIKEN_REALM_IMAGE || "4points/realm:latest";
 const gostImage = process.env.CHIKEN_GOST_IMAGE || "gogost/gost:latest";
 const heartbeatInterval = Math.max(2000, Number(process.env.CHIKEN_HEARTBEAT_INTERVAL || 5000) || 5000);
 const hostProcDir = process.env.CHIKEN_HOST_PROC || "/proc";
+const hostEtcDir = process.env.CHIKEN_HOST_ETC || "/etc";
+const diskPath = process.env.CHIKEN_DISK_PATH || "/";
+const preferredInterfaces = String(process.env.CHIKEN_NET_INTERFACES || "")
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
+const virtualInterfacePattern = /^(lo|docker\d*|br-|veth|virbr|vmnet|vboxnet|cni|flannel|kube-ipvs|tailscale|zt|wg|tun|tap)/i;
 
 fs.mkdirSync(stateDir, { recursive: true });
 fs.mkdirSync(forwardDir, { recursive: true });
@@ -84,6 +91,78 @@ function round(value, digits = 2) {
   return Math.round(value * base) / base;
 }
 
+function readTextIfExists(file) {
+  try {
+    if (fs.existsSync(file)) return fs.readFileSync(file, "utf8");
+  } catch {}
+  return "";
+}
+
+function hostProcFile(name) {
+  const first = path.join(hostProcDir, name);
+  if (fs.existsSync(first)) return first;
+  return path.join("/proc", name);
+}
+
+function parseOsRelease(text = "") {
+  return Object.fromEntries(
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#") && line.includes("="))
+      .map((line) => {
+        const index = line.indexOf("=");
+        const key = line.slice(0, index);
+        const value = line.slice(index + 1).replace(/^["']|["']$/g, "");
+        return [key, value];
+      })
+  );
+}
+
+function systemProbe() {
+  const release = parseOsRelease(
+    readTextIfExists(path.join(hostEtcDir, "os-release")) ||
+      readTextIfExists("/etc/os-release") ||
+      readTextIfExists("/usr/lib/os-release")
+  );
+  return {
+    platform: process.platform,
+    arch: process.arch,
+    distro: release.PRETTY_NAME || release.NAME || process.platform,
+    distroId: release.ID || "",
+    distroVersion: release.VERSION_ID || release.VERSION || "",
+    kernel: os.release()
+  };
+}
+
+function meminfoValues() {
+  const text = readTextIfExists(hostProcFile("meminfo"));
+  if (!text) return null;
+  return Object.fromEntries(
+    text
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/))
+      .filter((row) => row.length >= 2)
+      .map(([key, value]) => [key.replace(":", ""), Number(value) * 1024])
+  );
+}
+
+function uptimeProbe() {
+  const text = readTextIfExists(hostProcFile("uptime"));
+  const seconds = Number(text.trim().split(/\s+/)[0]);
+  return Number.isFinite(seconds) ? Math.floor(seconds) : Math.floor(os.uptime());
+}
+
+function loadProbe() {
+  const text = readTextIfExists(hostProcFile("loadavg"));
+  const values = text
+    .trim()
+    .split(/\s+/)
+    .slice(0, 3)
+    .map((value) => round(Number(value), 2));
+  return values.every((value) => Number.isFinite(value)) ? values : os.loadavg().map((value) => round(value, 2));
+}
+
 function cpuSnapshot() {
   const rows = os.cpus();
   const total = rows.reduce(
@@ -107,6 +186,18 @@ function cpuUsage() {
 }
 
 function memoryProbe() {
+  const values = meminfoValues();
+  if (values?.MemTotal) {
+    const total = values.MemTotal || 0;
+    const free = values.MemAvailable ?? values.MemFree ?? 0;
+    const used = Math.max(0, total - free);
+    return {
+      total,
+      free,
+      used,
+      usage: total ? round((used / total) * 100, 1) : null
+    };
+  }
   const total = os.totalmem();
   const free = os.freemem();
   const used = Math.max(0, total - free);
@@ -120,15 +211,8 @@ function memoryProbe() {
 
 async function swapProbe() {
   if (process.platform !== "linux") return null;
-  const result = await runShell("awk '/SwapTotal|SwapFree/ {print $1,$2}' /proc/meminfo");
-  if (!result.ok) return null;
-  const values = Object.fromEntries(
-    result.output
-      .split("\n")
-      .map((line) => line.trim().split(/\s+/))
-      .filter((row) => row.length >= 2)
-      .map(([key, value]) => [key.replace(":", ""), Number(value) * 1024])
-  );
+  const values = meminfoValues();
+  if (!values) return null;
   const total = values.SwapTotal || 0;
   const free = values.SwapFree || 0;
   const used = Math.max(0, total - free);
@@ -141,7 +225,8 @@ async function swapProbe() {
 }
 
 async function diskProbe() {
-  const result = await runShell("df -kP / 2>/dev/null | tail -1");
+  const safePath = String(diskPath || "/").replace(/'/g, "'\\''");
+  const result = await runShell(`df -kP '${safePath}' 2>/dev/null | tail -1`);
   if (!result.ok || !result.output) return null;
   const parts = result.output.trim().split(/\s+/);
   if (parts.length < 6) return null;
@@ -157,19 +242,30 @@ async function diskProbe() {
   };
 }
 
+function shouldCountInterface(iface) {
+  if (preferredInterfaces.length) return preferredInterfaces.includes(iface);
+  return !virtualInterfacePattern.test(iface);
+}
+
 function networkTotals() {
-  const netDevPath = path.join(hostProcDir, "net/dev");
+  const netDevPath = hostProcFile("net/dev");
   if (!fs.existsSync(netDevPath)) return null;
   const rows = fs.readFileSync(netDevPath, "utf8").split("\n").slice(2);
-  const totals = rows.reduce(
-    (sum, row) => {
+  const parsed = rows
+    .map((row) => {
       const [ifaceRaw, valuesRaw] = row.trim().split(":");
-      if (!ifaceRaw || !valuesRaw) return sum;
+      if (!ifaceRaw || !valuesRaw) return null;
       const iface = ifaceRaw.trim();
-      if (iface === "lo") return sum;
       const values = valuesRaw.trim().split(/\s+/).map(Number);
-      sum.rxBytes += values[0] || 0;
-      sum.txBytes += values[8] || 0;
+      return { iface, rxBytes: values[0] || 0, txBytes: values[8] || 0 };
+    })
+    .filter(Boolean);
+  const selected = parsed.filter((row) => shouldCountInterface(row.iface));
+  const counted = selected.length ? selected : parsed.filter((row) => row.iface !== "lo");
+  const totals = counted.reduce(
+    (sum, row) => {
+      sum.rxBytes += row.rxBytes;
+      sum.txBytes += row.txBytes;
       sum.interfaces += 1;
       return sum;
     },
@@ -202,6 +298,10 @@ function networkProbe() {
 
 async function processCount() {
   if (process.platform === "win32") return null;
+  try {
+    const rows = fs.readdirSync(hostProcDir).filter((item) => /^\d+$/.test(item));
+    if (rows.length) return rows.length;
+  } catch {}
   const result = await runShell("ps -e --no-headers 2>/dev/null | wc -l");
   const value = Number(result.output);
   return Number.isFinite(value) ? value : null;
@@ -286,8 +386,9 @@ async function collectProbe() {
   const [disk, swap, processes] = await Promise.all([diskProbe(), swapProbe(), processCount()]);
   return {
     updatedAt: new Date().toISOString(),
-    uptime: Math.floor(os.uptime()),
-    load: os.loadavg().map((value) => round(value, 2)),
+    uptime: uptimeProbe(),
+    system: systemProbe(),
+    load: loadProbe(),
     cpu: {
       usage: cpuUsage(),
       cores: os.cpus().length,

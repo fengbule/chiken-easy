@@ -309,8 +309,64 @@ function meterTone(value) {
   return "green";
 }
 
+function countryCodeToFlag(code = "") {
+  const upper = String(code).trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(upper)) return "";
+  return Array.from(upper).map((char) => String.fromCodePoint(127397 + char.charCodeAt(0))).join("");
+}
+
+const regionFlagRules = [
+  ["HK", ["hk", "hkg", "hong kong", "香港"]],
+  ["JP", ["jp", "jpn", "tokyo", "osaka", "日本", "东京", "大阪"]],
+  ["SG", ["sg", "sin", "singapore", "新加坡"]],
+  ["US", ["us", "usa", "america", "los angeles", "sfo", "lax", "美国", "洛杉矶", "圣何塞", "西雅图"]],
+  ["TW", ["tw", "taiwan", "台湾", "台北"]],
+  ["KR", ["kr", "korea", "seoul", "韩国", "首尔"]],
+  ["GB", ["gb", "uk", "london", "英国", "伦敦"]],
+  ["DE", ["de", "germany", "frankfurt", "德国", "法兰克福"]],
+  ["NL", ["nl", "netherlands", "amsterdam", "荷兰", "阿姆斯特丹"]],
+  ["FR", ["fr", "france", "paris", "法国", "巴黎"]],
+  ["CA", ["ca", "canada", "toronto", "加拿大", "多伦多"]],
+  ["AU", ["au", "australia", "sydney", "澳洲", "澳大利亚", "悉尼"]]
+];
+
+function inferFlag(profile = {}, agent = {}) {
+  const custom = String(profile.flag || "").trim();
+  if (/^[a-z]{2}$/i.test(custom)) return countryCodeToFlag(custom);
+  if (custom) return custom;
+  const haystack = [profile.region, profile.group, profile.displayName, agent.name, ...(profile.tags || [])].join(" ").toLowerCase();
+  const match = regionFlagRules.find(([, keys]) => keys.some((key) => haystack.includes(key)));
+  return match ? countryCodeToFlag(match[0]) : countryCodeToFlag("UN");
+}
+
+function systemInfo(agent = {}) {
+  return agent.probe?.system || {};
+}
+
+function systemShortName(system = {}) {
+  const label = system.distro || system.platform || "";
+  if (/debian/i.test(label)) return "Debian";
+  if (/ubuntu/i.test(label)) return "Ubuntu";
+  if (/centos/i.test(label)) return "CentOS";
+  if (/rocky/i.test(label)) return "Rocky";
+  if (/almalinux/i.test(label)) return "Alma";
+  if (/alpine/i.test(label)) return "Alpine";
+  if (/fedora/i.test(label)) return "Fedora";
+  if (/windows/i.test(label)) return "Windows";
+  if (/darwin|mac/i.test(label)) return "macOS";
+  return label || "-";
+}
+
 function osLabel(agent, profile = {}) {
-  return profile.osLabel || `${agent.os || "-"} / ${agent.arch || "-"}`;
+  const system = systemInfo(agent);
+  const distro = profile.osLabel || system.distro || agent.os || "-";
+  const arch = system.arch || agent.arch || "";
+  return arch && !String(distro).includes(arch) ? `${distro} / ${arch}` : distro;
+}
+
+function kernelLabel(agent = {}) {
+  const system = systemInfo(agent);
+  return [systemShortName(system), system.kernel].filter(Boolean).join(" · ") || "-";
 }
 
 function trafficLimitBytes(profile = {}) {
@@ -651,7 +707,8 @@ function PublicProbePage() {
   const groups = ["全部", ...Array.from(new Set(sourceRows.map((agent) => agent.profile?.group || agent.profile?.region).filter(Boolean)))];
   const rows = sourceRows.filter((agent) => {
     const profile = agent.profile || {};
-    const text = [profile.displayName, profile.region, profile.group, profile.flag, agent.os, agent.arch, ...(profile.tags || [])].join(" ").toLowerCase();
+    const system = systemInfo(agent);
+    const text = [profile.displayName, profile.region, profile.group, profile.flag, system.distro, system.kernel, agent.os, agent.arch, ...(profile.tags || [])].join(" ").toLowerCase();
     const groupOk = group === "全部" || profile.group === group || profile.region === group;
     return groupOk && text.includes(query.toLowerCase());
   });
@@ -660,27 +717,40 @@ function PublicProbePage() {
   const site = monitorSettings.site || {};
   const theme = monitorSettings.theme || {};
   const totalTraffic = (Number(summary.rxBytes) || 0) + (Number(summary.txBytes) || 0);
+  const avgSpeed = (Number(summary.rxSpeed) || 0) + (Number(summary.txSpeed) || 0);
   return (
     <main className="probe-page komari-page">
       <header className="komari-header">
         <div className="komari-brand">
-          <strong>针</strong>
+          <strong>CM</strong>
           <span>{site.subtitle || site.name || "Chiken Monitor"}</span>
         </div>
         {theme.showHeaderActions !== false ? <div className="komari-actions">
           <a className="square-btn" href="https://github.com/fengbule/chiken-easy" target="_blank" rel="noreferrer" title="GitHub"><Code2 size={17} /></a>
-          <button className="square-btn" title="主题"><Settings size={17} /></button>
+          <button className="square-btn" title="刷新" onClick={load}><RefreshCw size={17} /></button>
           <a className="square-btn admin" href="/admin" title="管理员入口"><KeyRound size={17} /></a>
         </div> : null}
       </header>
 
       <section className="komari-content">
+        <div className="komari-hero">
+          <div>
+            <span className="hero-kicker">Chiken Monitor</span>
+            <h1>{site.name || "Chiken Monitor"}</h1>
+            <p>{site.description || "公开服务器状态、负载、实时速率与累计流量。"}</p>
+          </div>
+          <div className="hero-live">
+            <span>Live</span>
+            <b>{formatClock(now)}</b>
+          </div>
+        </div>
+
         <div className="komari-summary">
           <div><span>当前时间</span><b>{formatClock(now)}</b></div>
           <div><span>当前在线</span><b>{data ? `${data.online} / ${data.total}` : "-"}</b></div>
           <div><span>点亮地区</span><b>{summary.regions || 0}</b></div>
           <div><span>流量概览</span><b>↑ {formatBytes(summary.txBytes)} / ↓ {formatBytes(summary.rxBytes)}</b></div>
-          <div><span>网络速率</span><b>↑ {formatSpeed(summary.txSpeed)} / ↓ {formatSpeed(summary.rxSpeed)}</b></div>
+          <div><span>网络速率</span><b>{formatSpeed(avgSpeed)}</b></div>
         </div>
 
         <div className="komari-toolbar">
@@ -706,20 +776,24 @@ function PublicProbePage() {
           {rows.map((agent) => {
             const probe = agent.probe || {};
             const profile = agent.profile || {};
+            const system = systemInfo(agent);
             const cpu = probe.cpu || {};
             const memory = probe.memory || {};
             const disk = probe.disk || {};
             const network = probe.network || {};
             const trafficPercent = trafficUsagePercent(agent);
             const trafficTotal = Number(network.rxBytes || 0) + Number(network.txBytes || 0);
+            const lastSpeed = (Number(network.rxSpeed) || 0) + (Number(network.txSpeed) || 0);
             return (
               <article className="komari-card" key={agent.id}>
                 <div className="komari-card-head">
                   <div className="komari-title">
-                    {profile.flag ? <span className="flag">{profile.flag}</span> : <span className="flag blank" />}
+                    <span className="flag">{inferFlag(profile, agent)}</span>
                     <div>
                       <h3>{profile.displayName || agent.name}</h3>
                       <div className="probe-badges">
+                        {profile.region ? <span className="badge cyan-badge">{profile.region}</span> : null}
+                        <span className="badge green-badge">{systemShortName(system)}</span>
                         {profile.price ? <span className="badge blue-badge">{profile.price}</span> : null}
                         {profile.expireText ? <span className={String(profile.expireText).includes("余") ? "badge green-badge" : "badge amber-badge"}>{profile.expireText}</span> : null}
                       </div>
@@ -732,14 +806,20 @@ function PublicProbePage() {
                   <span>OS</span>
                   <b>{osLabel(agent, profile)}</b>
                 </div>
+                <div className="komari-system-strip">
+                  <span><Monitor size={14} />{kernelLabel(agent)}</span>
+                  <span><Cpu size={14} />{cpu.cores || "-"} 核</span>
+                  <span><Clock3 size={14} />{formatTimeAgo(network.speedUpdatedAt || probe.updatedAt)}</span>
+                </div>
 
                 <ProbeLine label="CPU" value={formatPercent(cpu.usage)} percent={cpu.usage} tone={meterTone(cpu.usage)} />
                 <ProbeLine label="内存" value={formatPercent(memory.usage)} detail={`${formatBytes(memory.used)} / ${formatBytes(memory.total)}`} percent={memory.usage} tone={meterTone(memory.usage)} />
                 <ProbeLine label="磁盘" value={formatPercent(disk.usage)} detail={`${formatBytes(disk.used)} / ${formatBytes(disk.total)}`} percent={disk.usage} tone={meterTone(disk.usage)} />
                 <ProbeLine label="总流量" value={Number.isFinite(trafficPercent) ? formatPercent(trafficPercent) : ""} detail={`↑ ${formatBytes(network.txBytes)} ↓ ${formatBytes(network.rxBytes)}${trafficLimitBytes(profile) ? ` / Sum(${formatBytes(trafficLimitBytes(profile))})` : ""}`} percent={trafficPercent} tone={meterTone(trafficPercent)} />
 
-                <div className="komari-fact-row"><span>速率</span><b>↑ {formatSpeed(network.txSpeed)} ↓ {formatSpeed(network.rxSpeed)}</b></div>
-                <div className="komari-fact-row"><span>累计</span><b>{formatTrafficPair(network)}</b></div>
+                <div className="komari-fact-row"><span>速率</span><b>{formatSpeed(lastSpeed)} · ↑ {formatSpeed(network.txSpeed)} ↓ {formatSpeed(network.rxSpeed)}</b></div>
+                <div className="komari-fact-row"><span>累计</span><b>{formatTrafficPair(network)} · {formatBytes(trafficTotal)}</b></div>
+                <div className="komari-fact-row"><span>采样</span><b>{network.sampleInterval ? `${Number(network.sampleInterval).toFixed(1)}s · ${network.interfaces || 0} 网卡` : "等待下一次心跳"}</b></div>
                 <div className="komari-fact-row"><span>运行时间</span><b>{formatDurationLong(probe.uptime)}</b></div>
                 {profile.note ? <div className="komari-note">{profile.note}</div> : null}
                 <span className="live-stamp">更新 {formatTimeAgo(probe.updatedAt)}</span>
@@ -2231,18 +2311,48 @@ function ProbeManagePage({ liveTick, agents }) {
       setMessage(error.message);
     }
   };
-  const testNotification = async () => {
-    try {
-      const response = await api("/api/admin/settings", { method: "PUT", body: JSON.stringify({ [section]: current }) });
-      setSettings(response);
-      const result = await api("/api/admin/notifications/test", { method: "POST", body: JSON.stringify({}) });
-      setMessage(`测试通知已发送：${(result.results || []).map((row) => row.channel).join(", ") || "无通道"}`);
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
   const selected = rows.find((row) => row.agent.id === selectedId);
+  const selectedAgent = selected?.agent || {};
+  const selectedProfile = selected?.profile || {};
+  const selectedProbe = selectedAgent.probe || {};
+  const selectedSystem = selectedProbe.system || {};
+  const selectedNetwork = selectedProbe.network || {};
+  const quickRegions = [
+    ["香港", "HK", "亚洲"],
+    ["日本", "JP", "亚洲"],
+    ["新加坡", "SG", "亚洲"],
+    ["美国", "US", "美洲"],
+    ["德国", "DE", "欧洲"],
+    ["英国", "GB", "欧洲"]
+  ];
+  const applyQuickRegion = ([region, flag, groupName]) => {
+    setForm((current) => ({
+      ...current,
+      region,
+      flag: countryCodeToFlag(flag),
+      group: current.group && current.group !== "默认" ? current.group : groupName
+    }));
+  };
+  const fillAgentDefaults = () => {
+    if (!selected) return;
+    setForm((current) => ({
+      ...current,
+      displayName: current.displayName || selectedAgent.name || "",
+      osLabel: current.osLabel || osLabel({ ...selectedAgent, profile: selectedProfile }, current),
+      flag: current.flag || inferFlag(current, selectedAgent),
+      group: current.group || "默认"
+    }));
+  };
+  const clearOptionalLabels = () => {
+    setForm((current) => ({
+      ...current,
+      price: "",
+      billing: "",
+      expireText: "",
+      trafficLimitGb: "",
+      note: ""
+    }));
+  };
   const moduleCards = [
     ["profiles", Monitor, "服务器", "编辑公开探针卡片、分组、账单与展示排序"],
     ["site", House, "站点", "设置 Chiken Monitor 名称、公开标题与页脚"],
@@ -2297,12 +2407,34 @@ function ProbeManagePage({ liveTick, agents }) {
           <Panel title="编辑公开探针">
             {selected ? (
               <>
+                <div className="probe-editor-preview">
+                  <div className="preview-node-head">
+                    <span className="flag">{inferFlag(form, selectedAgent)}</span>
+                    <div>
+                      <b>{form.displayName || selectedAgent.name}</b>
+                      <small>{form.region || "未设置地区"} · {form.group || "默认"}</small>
+                    </div>
+                    <span className={`status-pill ${selectedAgent.connected ? "online" : ""}`}><StatusDot on={selectedAgent.connected} />{selectedAgent.connected ? "在线" : "离线"}</span>
+                  </div>
+                  <div className="preview-node-metrics">
+                    <span>系统 <b>{form.osLabel || osLabel(selectedAgent, selectedProfile)}</b></span>
+                    <span>流量 <b>{formatTrafficPair(selectedNetwork)}</b></span>
+                    <span>速率 <b>↑ {formatSpeed(selectedNetwork.txSpeed)} ↓ {formatSpeed(selectedNetwork.rxSpeed)}</b></span>
+                    <span>采样 <b>{selectedNetwork.sampleInterval ? `${Number(selectedNetwork.sampleInterval).toFixed(1)}s` : "等待"}</b></span>
+                  </div>
+                </div>
+                <div className="quick-picks">
+                  <span>常用地区</span>
+                  {quickRegions.map((item) => <button key={item[1]} onClick={() => applyQuickRegion(item)}>{countryCodeToFlag(item[1])} {item[0]}</button>)}
+                  <button onClick={fillAgentDefaults}>填入 Agent 信息</button>
+                  <button onClick={clearOptionalLabels}>清空账单标签</button>
+                </div>
                 <div className="form-grid">
                   <Field label="公开名称" value={form.displayName} onChange={(value) => patch("displayName", value)} />
-                  <Field label="旗标" value={form.flag} onChange={(value) => patch("flag", value)} placeholder="如 🇭🇰 / US / JP" />
+                  <Field label="旗标" value={form.flag} onChange={(value) => patch("flag", /^[a-z]{2}$/i.test(value) ? countryCodeToFlag(value) : value)} placeholder="如 🇭🇰 / US / JP" />
                   <Field label="分组" value={form.group} onChange={(value) => patch("group", value)} placeholder="亚洲 / 欧洲 / 美洲" />
                   <Field label="地区" value={form.region} onChange={(value) => patch("region", value)} placeholder="香港 / 日本 / SFO" />
-                  <Field label="系统显示" value={form.osLabel} onChange={(value) => patch("osLabel", value)} placeholder="留空使用 Agent 上报系统" />
+                  <Field label="系统显示" value={form.osLabel} onChange={(value) => patch("osLabel", value)} placeholder={selectedSystem.distro || "留空使用 Agent 上报系统"} />
                   <Field label="排序" type="number" value={form.displayOrder} onChange={(value) => patch("displayOrder", value)} />
                   <Field label="价格标签" value={form.price} onChange={(value) => patch("price", value)} placeholder="$60/三年" />
                   <Field label="到期/余量标签" value={form.expireText} onChange={(value) => patch("expireText", value)} placeholder="余1075天" />
@@ -2311,6 +2443,9 @@ function ProbeManagePage({ liveTick, agents }) {
                   <Field label="标签" value={form.tags} onChange={(value) => patch("tags", value)} placeholder="英文逗号分隔" />
                   <Field label="公开显示" type="select" value={form.hidden ? "hidden" : "visible"} onChange={(value) => patch("hidden", value === "hidden")} options={[["visible", "显示"], ["hidden", "隐藏"]]} />
                   <Field label="卡片备注" type="textarea" rows={3} value={form.note} onChange={(value) => patch("note", value)} />
+                </div>
+                <div className="panel-tip">
+                  公开页不会输出服务器 IP 或主机地址。系统发行版来自 Agent 上报，国旗优先使用这里填写的旗标，留空时会按地区/名称自动推断。
                 </div>
                 <div className="actions">
                   <button className="primary" onClick={save}><Save size={16} />保存探针</button>
@@ -2375,6 +2510,17 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
       setMessage(error.message);
     }
   };
+  const testNotification = async () => {
+    try {
+      setMessage("");
+      const response = await api("/api/admin/settings", { method: "PUT", body: JSON.stringify({ [section]: current }) });
+      setSettings(response);
+      const result = await api("/api/admin/notifications/test", { method: "POST", body: JSON.stringify({}) });
+      setMessage(`测试通知已发送：${(result.results || []).map((row) => row.channel).join(", ") || "无通道"}`);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
   if (!settings) return null;
 
   const fields = {
@@ -2419,6 +2565,13 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
   return (
     <section className={embedded ? "embedded-section" : ""}>
       <Panel title={title}>
+        {section === "notifications" ? (
+          <div className="settings-helper">
+            <div><b>通知通道</b><span>Webhook、Telegram 或两者同时发送，保存后可以立即点测试。</span></div>
+            <div><b>告警规则</b><span>离线与负载告警共用冷却时间，避免短时间重复轰炸。</span></div>
+            <div><b>隐私</b><span>测试与告警只发送节点名称和指标，不包含公开页隐藏的 IP。</span></div>
+          </div>
+        ) : null}
         <div className="form-grid">
           {fields.map(([key, label, type, placeholder, options]) => (
             <Field
@@ -2618,8 +2771,9 @@ function ProbeTasksPage({ agents, liveTick }) {
   const create = async () => {
     try {
       setMessage("");
-      await api("/api/probe-tasks", { method: "POST", body: JSON.stringify(form) });
+      const result = await api("/api/probe-tasks", { method: "POST", body: JSON.stringify(form) });
       setForm((current) => ({ ...current, name: "" }));
+      setMessage(`任务已创建，已下发 ${result.sent?.length || 0} 个在线节点。`);
       await load();
     } catch (error) {
       setMessage(error.message);
@@ -2630,6 +2784,11 @@ function ProbeTasksPage({ agents, liveTick }) {
     <section>
       <div className="grid2">
         <Panel title="新建探测任务">
+          <div className="probe-task-presets">
+            <button onClick={() => setForm({ name: "Cloudflare TCP", type: "tcp", target: "1.1.1.1", port: 443, interval: 60, timeout: 3000, agentId: "" })}>TCP 443</button>
+            <button onClick={() => setForm({ name: "Google HTTP", type: "http", target: "https://www.google.com/generate_204", port: 443, interval: 60, timeout: 5000, agentId: "" })}>HTTP 204</button>
+            <button onClick={() => setForm({ name: "DNS ICMP", type: "icmp", target: "1.1.1.1", port: 443, interval: 60, timeout: 3000, agentId: "" })}>ICMP</button>
+          </div>
           <div className="form-grid">
             <Field label="名称" value={form.name} onChange={(value) => patch("name", value)} placeholder="可留空自动生成" />
             <Field label="类型" type="select" value={form.type} onChange={(value) => patch("type", value)} options={[["tcp", "TCP Ping"], ["http", "HTTP Ping"], ["icmp", "ICMP Ping"]]} />
@@ -2676,8 +2835,8 @@ function ProbeTasksPage({ agents, liveTick }) {
                 <td>{task.lastResult?.latency ? `${task.lastResult.latency} ms` : "-"}{task.lastResult?.agentName ? <div className="muted">{task.lastResult.agentName}</div> : null}</td>
                 <td>{task.lastResult?.at || "-"}</td>
                 <td className="actions-cell">
-                  <button className="link" onClick={async () => { await api(`/api/probe-tasks/${task.id}/run`, { method: "POST" }); await load(); }}>运行</button>
-                  <button className="link" onClick={async () => { await api(`/api/probe-tasks/${task.id}`, { method: "DELETE" }); await load(); }}>删除</button>
+                  <button className="link" onClick={async () => { const result = await api(`/api/probe-tasks/${task.id}/run`, { method: "POST" }); setMessage(`已重新下发 ${result.sent?.length || 0} 个在线节点。`); await load(); }}>运行</button>
+                  <button className="link" onClick={async () => { if (!window.confirm(`删除探测任务 ${task.name}？`)) return; await api(`/api/probe-tasks/${task.id}`, { method: "DELETE" }); setMessage("任务已删除。"); await load(); }}>删除</button>
                 </td>
               </tr>
             ))}

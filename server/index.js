@@ -580,6 +580,14 @@ function publicProbe(probe = {}) {
   return {
     updatedAt: probe.updatedAt || null,
     uptime: finiteNumber(probe.uptime),
+    system: {
+      platform: String(probe.system?.platform || ""),
+      arch: String(probe.system?.arch || ""),
+      distro: String(probe.system?.distro || ""),
+      distroId: String(probe.system?.distroId || ""),
+      distroVersion: String(probe.system?.distroVersion || ""),
+      kernel: String(probe.system?.kernel || "")
+    },
     load: Array.isArray(probe.load) ? probe.load.map((item) => finiteNumber(item, 0)).slice(0, 3) : [],
     cpu: {
       usage: finiteNumber(probe.cpu?.usage),

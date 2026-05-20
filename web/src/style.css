@@ -314,19 +314,21 @@ section {
 
 .komari-page {
   min-height: 100vh;
-  background: #fafafa;
-  color: #2d2f33;
+  background:
+    linear-gradient(180deg, rgba(236, 253, 245, 0.9) 0%, rgba(248, 250, 252, 0.96) 42%, #ffffff 100%);
+  color: #172033;
 }
 
 .komari-header {
-  height: 56px;
+  min-height: 64px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 18px;
-  background: rgba(255, 255, 255, 0.94);
-  border-bottom: 1px solid #e7e7e7;
+  padding: 0 clamp(14px, 3vw, 34px);
+  background: rgba(255, 255, 255, 0.76);
+  border-bottom: 1px solid rgba(15, 118, 110, 0.12);
+  backdrop-filter: blur(18px);
   position: sticky;
   top: 0;
   z-index: 20;
@@ -340,13 +342,20 @@ section {
 }
 
 .komari-brand strong {
-  font-size: 30px;
+  width: 40px;
+  height: 40px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 15px;
   line-height: 1;
-  color: #151515;
+  box-shadow: 0 14px 30px rgba(15, 118, 110, 0.22);
 }
 
 .komari-brand span {
-  color: #c9c9c9;
+  color: #173a34;
   font-weight: 700;
   font-size: 16px;
 }
@@ -363,40 +372,100 @@ section {
   height: 38px;
   justify-content: center;
   padding: 0;
-  border-color: #ececec;
-  background: #f0f0f0;
-  color: #595f68;
+  border-color: rgba(15, 118, 110, 0.12);
+  background: rgba(255, 255, 255, 0.86);
+  color: #35524d;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
 }
 
 .square-btn.admin {
-  background: #8f8f8f;
+  background: #111827;
   color: #ffffff;
-  border-color: #8f8f8f;
+  border-color: #111827;
 }
 
 .komari-content {
   max-width: none;
   margin: 0;
-  padding: 18px;
+  padding: clamp(14px, 3vw, 30px);
+}
+
+.komari-hero {
+  min-height: 150px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  padding: clamp(18px, 3vw, 30px);
+  margin-bottom: 16px;
+  border: 1px solid rgba(15, 118, 110, 0.13);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(240, 253, 250, 0.94), rgba(255, 255, 255, 0.84)),
+    url("https://commons.wikimedia.org/wiki/Special:FilePath/Grand%20Canyon%2C%20South%20Rim%20IMG%204531.jpg?width=1600") center/cover;
+  box-shadow: 0 20px 50px rgba(13, 76, 68, 0.09);
+}
+
+.hero-kicker {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.komari-hero h1 {
+  margin: 6px 0;
+  color: #0f172a;
+  font-size: clamp(28px, 4vw, 48px);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.komari-hero p {
+  max-width: 560px;
+  margin: 0;
+  color: #35524d;
+}
+
+.hero-live {
+  min-width: 150px;
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(15, 118, 110, 0.1);
+}
+
+.hero-live span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.hero-live b {
+  color: #0f172a;
+  font-size: 24px;
 }
 
 .komari-summary {
-  min-height: 72px;
+  min-height: 82px;
   display: grid;
   grid-template-columns: repeat(5, minmax(150px, 1fr));
   gap: 12px;
-  padding: 15px 14px;
-  border: 1px solid #dedede;
-  border-radius: 7px;
-  background: #ffffff;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .komari-summary div {
   min-width: 0;
-  border-color: #d8e7e4;
+  padding: 15px;
+  border: 1px solid rgba(15, 118, 110, 0.1);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 14px 32px rgba(13, 76, 68, 0.07);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 14px 34px rgba(13, 76, 68, 0.06);
 }
 
 .komari-summary span,
@@ -419,7 +488,7 @@ section {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #2d2f33;
-  font-size: 17px;
+  font-size: 18px;
 }
 
 .komari-toolbar {
@@ -432,15 +501,15 @@ section {
 
 .komari-search {
   width: min(484px, 100%);
-  height: 38px;
+  height: 42px;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 0 10px;
-  border: 1px solid #d8d8d8;
-  border-radius: 6px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-radius: 8px;
   background: #ffffff;
-  color: #8b8f96;
+  color: #5f7180;
 }
 
 .komari-search input {
@@ -462,22 +531,22 @@ section {
 
 .view-switch button,
 .komari-groups button {
-  height: 32px;
-  border-radius: 6px;
+  height: 34px;
+  border-radius: 8px;
 }
 
 .view-switch button {
   width: 38px;
   justify-content: center;
   padding: 0;
-  background: #efefef;
-  border-color: #efefef;
+  background: #ffffff;
+  border-color: rgba(15, 118, 110, 0.12);
 }
 
 .view-switch button.active {
-  background: #878787;
+  background: #0f766e;
   color: #ffffff;
-  border-color: #878787;
+  border-color: #0f766e;
 }
 
 .komari-groups {
@@ -489,15 +558,15 @@ section {
 }
 
 .komari-groups button {
-  background: #f0f0f0;
-  border-color: #f0f0f0;
-  color: #2f343b;
+  background: rgba(255, 255, 255, 0.86);
+  border-color: rgba(15, 118, 110, 0.12);
+  color: #2f4f4a;
 }
 
 .komari-groups button.active {
-  background: #ffffff;
-  border-color: #d6d6d6;
-  color: #111827;
+  background: #e6fffb;
+  border-color: #99f6e4;
+  color: #0f766e;
 }
 
 .komari-count {
@@ -506,7 +575,7 @@ section {
 
 .komari-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   gap: 16px;
 }
 
@@ -519,11 +588,11 @@ section {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 14px;
-  border: 1px solid #d8e7e4;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 18px 42px rgba(13, 76, 68, 0.08);
+  padding: 16px;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 18px 44px rgba(13, 76, 68, 0.07);
 }
 
 .komari-card-head {
@@ -532,7 +601,7 @@ section {
   justify-content: space-between;
   gap: 12px;
   padding-bottom: 9px;
-  border-bottom: 1px solid #dcdcdc;
+  border-bottom: 1px solid rgba(15, 118, 110, 0.1);
 }
 
 .komari-title {
@@ -543,14 +612,14 @@ section {
 }
 
 .flag {
-  min-width: 26px;
-  height: 20px;
+  min-width: 34px;
+  height: 28px;
   display: inline-grid;
   place-items: center;
   margin-top: 2px;
-  border-radius: 3px;
-  background: #f1f5f9;
-  font-size: 17px;
+  border-radius: 7px;
+  background: #f8fafc;
+  font-size: 21px;
   line-height: 1;
 }
 
@@ -568,8 +637,8 @@ section {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #25282d;
-  font-size: 22px;
+  color: #0f172a;
+  font-size: 21px;
   line-height: 1.1;
 }
 
@@ -586,9 +655,14 @@ section {
   display: inline-flex;
   align-items: center;
   padding: 0 7px;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 13px;
   line-height: 1;
+}
+
+.cyan-badge {
+  background: #e6fffb;
+  color: #0f766e;
 }
 
 .blue-badge {
@@ -609,7 +683,7 @@ section {
 .komari-os-row,
 .komari-fact-row {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-columns: 76px minmax(0, 1fr);
   gap: 10px;
   align-items: center;
 }
@@ -629,6 +703,27 @@ section {
   text-align: right;
   color: #3d4148;
   font-weight: 500;
+}
+
+.komari-system-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(78px, 0.5fr) minmax(92px, 0.6fr);
+  gap: 8px;
+}
+
+.komari-system-strip span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #48615b;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .komari-line {
@@ -651,7 +746,7 @@ section {
   width: 100%;
   height: 8px;
   margin: 0;
-  background: #e4e4e4;
+  background: #e8f3f0;
 }
 
 .komari-line small {
@@ -666,8 +761,8 @@ section {
 
 .komari-note {
   padding: 8px 10px;
-  border-radius: 6px;
-  background: #f6f7f8;
+  border-radius: 8px;
+  background: #f8fafc;
   color: #646b75;
   font-size: 13px;
   line-height: 1.5;
@@ -1258,11 +1353,11 @@ textarea {
 }
 
 .selected-row {
-  background: #f6f7f8;
+  background: #ecfdf5;
 }
 
 .selected-row td:first-child {
-  box-shadow: inset 3px 0 0 #8a8f98;
+  box-shadow: inset 3px 0 0 #10a37f;
 }
 
 .probe-manage-layout {
@@ -1290,6 +1385,12 @@ textarea {
   background: #ffffff;
 }
 
+.monitor-module-card:hover {
+  border-color: #99f6e4;
+  box-shadow: 0 12px 28px rgba(13, 76, 68, 0.07);
+  transform: translateY(-1px);
+}
+
 .monitor-module-card span {
   min-width: 0;
   overflow: hidden;
@@ -1306,12 +1407,106 @@ textarea {
 }
 
 .monitor-module-card.active {
-  border-color: #9aa1aa;
-  background: #f6f7f8;
+  border-color: #10a37f;
+  background: #ecfdf5;
 }
 
 .monitor-module-body > section.embedded-section {
   padding: 0;
+}
+
+.probe-editor-preview,
+.settings-helper {
+  display: grid;
+  gap: 12px;
+  margin: 18px 18px 0;
+  padding: 14px;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(240, 253, 250, 0.92), rgba(255, 255, 255, 0.94));
+}
+
+.preview-node-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.preview-node-head > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.preview-node-head b,
+.preview-node-head small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-node-head small,
+.preview-node-metrics span,
+.settings-helper span {
+  color: var(--text-soft);
+}
+
+.preview-node-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.preview-node-metrics span,
+.settings-helper div {
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.preview-node-metrics b,
+.settings-helper b {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #173a34;
+}
+
+.quick-picks,
+.probe-task-presets {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 18px 0;
+}
+
+.quick-picks span {
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.quick-picks button,
+.probe-task-presets button {
+  height: 32px;
+  border-radius: 8px;
+  background: #ffffff;
+  border-color: rgba(15, 118, 110, 0.14);
+  color: #27524b;
+}
+
+.settings-helper {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.settings-helper div {
+  display: grid;
+  gap: 4px;
 }
 
 .subscription-links {
@@ -1769,6 +1964,16 @@ code {
     grid-template-columns: 1fr;
   }
 
+  .komari-hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .hero-live {
+    width: 100%;
+    justify-items: start;
+  }
+
   .komari-toolbar {
     align-items: stretch;
     flex-direction: column;
@@ -1776,6 +1981,12 @@ code {
 
   .komari-search {
     width: 100%;
+  }
+
+  .komari-system-strip,
+  .preview-node-metrics,
+  .settings-helper {
+    grid-template-columns: 1fr;
   }
 
   .copy-row {
