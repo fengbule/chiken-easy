@@ -106,4 +106,5 @@ docker compose -f docker-compose.agent.yml up -d --build
 ## 文档
 
 - 开发文档：`docs/development.md`
+- 开发报告：`docs/development-report-2026-05-20.md`
 - 节点配置与转发说明：`docs/node-config-guide.md`
