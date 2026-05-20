@@ -338,9 +338,44 @@ function inferFlag(profile = {}, agent = {}) {
   const custom = String(profile.flag || "").trim();
   if (/^[a-z]{2}$/i.test(custom)) return countryCodeToFlag(custom);
   if (isFlagEmoji(custom)) return custom;
-  const haystack = [profile.region, profile.group, profile.displayName, agent.name, ...(profile.tags || [])].join(" ").toLowerCase();
+  const system = systemInfo(agent);
+  const haystack = [
+    profile.region,
+    profile.group,
+    profile.displayName,
+    agent.name,
+    agent.host,
+    agent.ip,
+    system.distro,
+    system.kernel,
+    ...(profile.tags || [])
+  ].join(" ").toLowerCase();
   const match = regionFlagRules.find(([, keys]) => keys.some((key) => haystack.includes(key)));
   return match ? countryCodeToFlag(match[0]) : "";
+}
+
+function inferFlagCode(profile = {}, agent = {}) {
+  const custom = String(profile.flag || "").trim();
+  if (/^[a-z]{2}$/i.test(custom)) return custom.toUpperCase();
+  const system = systemInfo(agent);
+  const haystack = [
+    profile.region,
+    profile.group,
+    profile.displayName,
+    agent.name,
+    agent.host,
+    agent.ip,
+    system.distro,
+    system.kernel,
+    ...(profile.tags || [])
+  ].join(" ").toLowerCase();
+  const match = regionFlagRules.find(([, keys]) => keys.some((key) => haystack.includes(key)));
+  return match ? match[0] : "";
+}
+
+function flagImageUrl(code = "") {
+  const upper = String(code || "").trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(upper) ? `https://flagcdn.com/w40/${upper.toLowerCase()}.png` : "";
 }
 
 function normalizeFlagInput(value = "") {
@@ -359,7 +394,7 @@ function systemShortName(system = {}) {
   if (/ubuntu/i.test(label)) return "Ubuntu";
   if (/centos/i.test(label)) return "CentOS";
   if (/rocky/i.test(label)) return "Rocky";
-  if (/almalinux/i.test(label)) return "Alma";
+  if (/almalinux/i.test(label)) return "AlmaLinux";
   if (/alpine/i.test(label)) return "Alpine";
   if (/fedora/i.test(label)) return "Fedora";
   if (/windows/i.test(label)) return "Windows";
@@ -759,7 +794,7 @@ function PublicProbePage() {
           <div><span>当前时间</span><b>{formatClock(now)}</b></div>
           <div><span>当前在线</span><b>{data ? `${data.online} / ${data.total}` : "-"}</b></div>
           <div><span>点亮地区</span><b>{summary.regions || 0}</b></div>
-          <div><span>流量概览</span><b>↑ {formatBytes(summary.txBytes)} / ↓ {formatBytes(summary.rxBytes)}</b></div>
+          <div><span>接管后累计</span><b>↑ {formatBytes(summary.txBytes)} / ↓ {formatBytes(summary.rxBytes)}</b></div>
           <div><span>网络速率</span><b>{formatSpeed(avgSpeed)}</b></div>
         </div>
 
@@ -798,7 +833,7 @@ function PublicProbePage() {
               <article className="komari-card" key={agent.id}>
                 <div className="komari-card-head">
                   <div className="komari-title">
-                    <span className="flag">{inferFlag(profile, agent)}</span>
+                    <span className="flag">{flagImageUrl(inferFlagCode(profile, agent)) ? <img src={flagImageUrl(inferFlagCode(profile, agent))} alt={inferFlagCode(profile, agent)} loading="lazy" /> : (inferFlag(profile, agent) || "🌐")}</span>
                     <div>
                       <h3>{profile.displayName || agent.name}</h3>
                       <div className="probe-badges">
@@ -828,7 +863,7 @@ function PublicProbePage() {
                 <ProbeLine label="总流量" value={Number.isFinite(trafficPercent) ? formatPercent(trafficPercent) : ""} detail={`↑ ${formatBytes(network.txBytes)} ↓ ${formatBytes(network.rxBytes)}${trafficLimitBytes(profile) ? ` / Sum(${formatBytes(trafficLimitBytes(profile))})` : ""}`} percent={trafficPercent} tone={meterTone(trafficPercent)} />
 
                 <div className="komari-fact-row"><span>速率</span><b>{formatSpeed(lastSpeed)} · ↑ {formatSpeed(network.txSpeed)} ↓ {formatSpeed(network.rxSpeed)}</b></div>
-                <div className="komari-fact-row"><span>累计</span><b>{formatTrafficPair(network)} · {formatBytes(trafficTotal)}</b></div>
+                <div className="komari-fact-row"><span>接管后累计</span><b>{formatTrafficPair(network)} · {formatBytes(trafficTotal)}</b></div>
                 <div className="komari-fact-row"><span>采样</span><b>{network.sampleInterval ? `${Number(network.sampleInterval).toFixed(1)}s · ${network.interfaces || 0} 网卡` : "等待下一次心跳"}</b></div>
                 <div className="komari-fact-row"><span>运行时间</span><b>{formatDurationLong(probe.uptime)}</b></div>
                 {profile.note ? <div className="komari-note">{profile.note}</div> : null}

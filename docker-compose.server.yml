@@ -51,6 +51,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /proc:/host/proc:ro
       - /etc:/host/etc:ro
+      - /usr/lib/os-release:/host/usr-lib/os-release:ro
       - chiken-agent-state:/app/agent-state
       - ./data/sing-box:/etc/sing-box
       - ./data/forwarders:/app/forwarders

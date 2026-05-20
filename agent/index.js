@@ -120,18 +120,24 @@ function parseOsRelease(text = "") {
 }
 
 function systemProbe() {
-  const release = parseOsRelease(
-    readTextIfExists(path.join(hostEtcDir, "os-release")) ||
-      readTextIfExists("/etc/os-release") ||
-      readTextIfExists("/usr/lib/os-release")
-  );
+  const hostRootCandidates = [
+    "/host/usr-lib/os-release",
+    path.join(hostProcDir, "1/root/etc/os-release"),
+    path.join(hostProcDir, "1/root/usr/lib/os-release"),
+    path.join(hostEtcDir, "os-release"),
+    "/host/etc/os-release",
+    "/etc/os-release",
+    "/usr/lib/os-release"
+  ];
+  const release = parseOsRelease(hostRootCandidates.map((file) => readTextIfExists(file)).find(Boolean) || "");
+  const kernel = readTextIfExists(hostProcFile("sys/kernel/osrelease")).trim() || os.release();
   return {
     platform: process.platform,
     arch: process.arch,
     distro: release.PRETTY_NAME || release.NAME || process.platform,
     distroId: release.ID || "",
     distroVersion: release.VERSION_ID || release.VERSION || "",
-    kernel: os.release()
+    kernel
   };
 }
 
@@ -225,21 +231,32 @@ async function swapProbe() {
 }
 
 async function diskProbe() {
-  const safePath = String(diskPath || "/").replace(/'/g, "'\\''");
-  const result = await runShell(`df -kP '${safePath}' 2>/dev/null | tail -1`);
-  if (!result.ok || !result.output) return null;
-  const parts = result.output.trim().split(/\s+/);
-  if (parts.length < 6) return null;
-  const total = Number(parts[1]) * 1024;
-  const used = Number(parts[2]) * 1024;
-  const free = Number(parts[3]) * 1024;
-  return {
-    mount: parts[5],
-    total,
-    used,
-    free,
-    usage: total ? round((used / total) * 100, 1) : null
-  };
+  const candidates = [...new Set([String(diskPath || "/").trim() || "/", "/host/proc/1/root", "/"] )];
+  for (const candidate of candidates) {
+    const safePath = candidate.replace(/'/g, "'\\''");
+    const result = await runShell(`df -kP '${safePath}' 2>/dev/null | tail -n 1`);
+    if (!result.ok || !result.output) continue;
+    const line = result.output
+      .split("\n")
+      .map((row) => row.trim())
+      .filter(Boolean)
+      .find((row) => /^\S+\s+\d+\s+\d+\s+\d+\s+\d+%\s+/.test(row));
+    if (!line) continue;
+    const parts = line.split(/\s+/);
+    if (parts.length < 6) continue;
+    const total = Number(parts[1]) * 1024;
+    const used = Number(parts[2]) * 1024;
+    const free = Number(parts[3]) * 1024;
+    if (!Number.isFinite(total) || total <= 0) continue;
+    return {
+      mount: parts.slice(5).join(" "),
+      total,
+      used,
+      free,
+      usage: total ? round((used / total) * 100, 1) : null
+    };
+  }
+  return null;
 }
 
 function shouldCountInterface(iface) {

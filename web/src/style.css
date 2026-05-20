@@ -332,6 +332,7 @@ section {
   position: sticky;
   top: 0;
   z-index: 20;
+  flex-wrap: nowrap;
 }
 
 .komari-brand {
@@ -339,6 +340,7 @@ section {
   align-items: center;
   gap: 14px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .komari-brand strong {
@@ -367,6 +369,8 @@ section {
   gap: 8px;
   height: 40px;
   flex: 0 0 auto;
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .square-btn {
@@ -619,13 +623,24 @@ section {
 .flag {
   min-width: 30px;
   height: 25px;
-  display: inline-grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   margin-top: 2px;
   border-radius: 7px;
-  background: #f8fafc;
+  background: transparent;
   font-size: 19px;
   line-height: 1;
+  white-space: nowrap;
+}
+
+.flag img {
+  width: 24px;
+  height: 18px;
+  display: block;
+  object-fit: cover;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.08);
 }
 
 .flag.blank::before {
