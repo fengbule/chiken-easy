@@ -1061,7 +1061,7 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh, openDesktop, ope
             <button className="blue-bg" onClick={() => service("restart")}>重启</button>
             <button className="red-bg" onClick={() => service("stop")}>停止</button>
           </div>
-          <pre>{result || "操作结果会显示在这里。"}</pre>
+          <pre>{result || "这里会展示最近一次启动、停止、重启或卸载操作的返回结果。"}</pre>
         </Panel>
       </div>
     </section>
@@ -1411,7 +1411,7 @@ function FilePane({ title, agentId, setAgentId, agents, data, selected, setSelec
             <span>{item.type === "dir" ? "dir" : `${item.size} B`}</span>
           </button>
         ))}
-        {!data.items?.length ? <div className="empty">当前目录为空</div> : null}
+        {!data.items?.length ? <EmptyState title="当前目录为空" detail="可以先上传文件、创建目录，或返回上一级继续浏览。" /> : null}
       </div>
     </Panel>
   );
@@ -2380,7 +2380,7 @@ function MemosPage({ liveTick }) {
                 <button className="link danger" onClick={() => deleteFile(file)}><Trash2 size={15} />删除</button>
               </div>
             ))}
-            {!files.length ? <div className="empty">暂无附件。</div> : null}
+            {!files.length ? <EmptyState title="暂无附件" detail="上传图片、音频、PDF 或其他文件后，这里会自动汇总。" /> : null}
           </div>
         </Panel>
       </div>
@@ -2685,15 +2685,15 @@ function ProbeManagePage({ liveTick, agents }) {
     if (module === "sessions") return <SessionsPage liveTick={liveTick} embedded />;
     if (module === "account") return <AccountPage embedded />;
     if (module === "logs") return <Audit liveTick={liveTick} embedded />;
-    if (module === "about") return <StaticAdminPage title="关于" body="Chiken Monitor 是 chiken-easy 的监控、探测、节点控制与订阅分发后台。" embedded />;
-    if (module === "docs") return <StaticAdminPage title="文档" body="这里集中放置 Chiken Monitor 功能：服务器展示、站点设置、主题、通知、远程执行、延迟监测、会话、账户和日志。" actions={<a className="button-link" href="https://github.com/fengbule/chiken-easy" target="_blank" rel="noreferrer">打开 GitHub</a>} embedded />;
-    if (module === "home") return <StaticAdminPage title="主页" body="公开主页是 Chiken Monitor 探针面板，默认无需登录可查看服务器状态。" actions={<a className="button-link" href="/" target="_blank" rel="noreferrer">打开公开主页</a>} embedded />;
+    if (module === "about") return <StaticAdminPage title="关于" body="Chiken Monitor 是 chiken-easy 内置的公开探针与后台控制面板，用来统一查看节点状态、整理展示文案、执行运维动作并分发订阅。" highlights={["公开探针", "后台控制", "订阅分发"]} tips={[{ title: "适合做什么", body: "快速检查节点健康、统一调整展示信息、集中管理订阅与通知。" }, { title: "不会影响什么", body: "这里只是说明页，不会触发探针、重启服务或修改节点配置。" }, { title: "版本关系", body: "Chiken Monitor 随 chiken-easy 一起提供，适合作为轻量的一体化管理后台。" }]} embedded />;
+    if (module === "docs") return <StaticAdminPage title="文档" body="这里集中放置 Chiken Monitor 常用入口与外部资料，适合新接手时快速找功能，不必再逐个翻模块。" highlights={["快速上手", "常用入口", "外部资料"]} tips={[{ title: "建议先看", body: "先从站点设置、主题管理、探针管理开始，最容易立刻看到变化。" }, { title: "运维相关", body: "远程执行、延迟监测、会话管理和日志更适合排障与日常巡检。" }, { title: "文档策略", body: "如果某块功能还没写成长文档，先用这里的入口页和内联提示即可。" }]} empty={{ title: "还没有内置长文档", detail: "当前以模块内提示和 GitHub 项目页为主；后续可以把部署、告警、订阅策略再补成独立文档。" }} actions={<><a className="button-link" href="https://github.com/fengbule/chiken-easy" target="_blank" rel="noreferrer">打开 GitHub 项目</a><a className="button-link" href="/" target="_blank" rel="noreferrer">查看公开探针页</a></>} embedded />;
+    if (module === "home") return <StaticAdminPage title="主页" body="公开主页默认无需登录，适合对外展示在线状态、负载、速率与累计流量；卡片文案与分组可在探针管理里实时调整。" highlights={["默认公开", "实时刷新", "支持分组筛选"]} tips={[{ title: "推荐搭配", body: "先在站点设置里改标题和描述，再去主题管理调密度与强调色，主页观感会更完整。" }, { title: "内容来源", body: "节点卡片数据来自 Agent 探针，展示名称、地区、国旗和备注来自探针管理。" }, { title: "隐私提示", body: "若已开启公开隐藏 IP，主页不会暴露主机地址。" }]} actions={<><a className="button-link" href="/" target="_blank" rel="noreferrer">打开公开主页</a><button onClick={() => setModule("site")}>前往站点设置</button><button onClick={() => setModule("theme")}>前往主题管理</button></>} embedded />;
     return null;
   };
 
   return (
     <section>
-      <Panel title="Chiken Monitor 功能卡片">
+      <Panel title="Chiken Monitor 功能卡片" right={<span className="muted">已收纳 {moduleCards.length} 个边角模块入口</span>}>
         <div className="monitor-module-grid">
           {moduleCards.map(([id, Icon, title, body]) => (
             <button key={id} className={module === id ? "monitor-module-card active" : "monitor-module-card"} onClick={() => setModule(id)}>
@@ -2717,6 +2717,15 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState("");
+  const notificationSummaryKey = section === "notifications"
+    ? JSON.stringify({
+      channel: current.channel || "",
+      webhookUrl: current.webhookUrl || "",
+      telegramBotToken: current.telegramBotToken || "",
+      telegramChatId: current.telegramChatId || "",
+      telegramApiBase: current.telegramApiBase || ""
+    })
+    : "";
   const load = () => api("/api/admin/settings").then((data) => {
     setSettings(data);
     setDirty(false);
@@ -2774,7 +2783,7 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
     api("/api/admin/notifications/test", { method: "POST", body: JSON.stringify({ dryRun: true }) })
       .then((result) => setSummary(result))
       .catch(() => setSummary(null));
-  }, [section, current.channel, current.webhookUrl, current.telegramBotToken, current.telegramChatId, current.telegramApiBase]);
+  }, [section, notificationSummaryKey]);
 
   const fields = {
     site: [
@@ -2911,6 +2920,7 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
 function SessionsPage({ liveTick, embedded = false }) {
   const [rows, setRows] = useState([]);
   const [message, setMessage] = useState("");
+  const [busyId, setBusyId] = useState("");
   const load = () => api("/api/admin/sessions").then(setRows);
   useEffect(() => {
     load().catch(() => {});
@@ -2927,7 +2937,18 @@ function SessionsPage({ liveTick, embedded = false }) {
                 <td>{row.createdAt}</td>
                 <td>{row.expiresAt}</td>
                 <td>{row.revoked ? "已撤销" : "有效"}</td>
-                <td>{row.revoked ? null : <button className="link" onClick={async () => { await api(`/api/admin/sessions/${row.id}`, { method: "DELETE" }); setMessage(`已撤销会话：${row.username}`); await load(); }}>撤销</button>}</td>
+                <td>{row.revoked ? null : <button className="link" disabled={busyId === row.id} onClick={async () => {
+                  try {
+                    setBusyId(row.id);
+                    await api(`/api/admin/sessions/${row.id}`, { method: "DELETE" });
+                    setMessage(`已撤销会话：${row.username}`);
+                    await load();
+                  } catch (error) {
+                    setMessage(error.message);
+                  } finally {
+                    setBusyId("");
+                  }
+                }}>{busyId === row.id ? "撤销中..." : "撤销"}</button>}</td>
               </tr>
             ))}
           </tbody>
@@ -2941,26 +2962,32 @@ function SessionsPage({ liveTick, embedded = false }) {
 function AccountPage({ embedded = false }) {
   const [form, setForm] = useState({ oldPassword: "", newPassword: "", confirmPassword: "" });
   const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
   const patch = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   return (
     <section className={embedded ? "embedded-section" : ""}>
       <Panel title="账户">
         <div className="form-grid">
-          <Field label="旧密码" type="password" value={form.oldPassword} onChange={(value) => patch("oldPassword", value)} />
-          <Field label="新密码" type="password" value={form.newPassword} onChange={(value) => patch("newPassword", value)} />
-          <Field label="确认新密码" type="password" value={form.confirmPassword} onChange={(value) => patch("confirmPassword", value)} />
+          <Field label="旧密码" type="password" value={form.oldPassword} onChange={(value) => patch("oldPassword", value)} disabled={saving} />
+          <Field label="新密码" type="password" value={form.newPassword} onChange={(value) => patch("newPassword", value)} hint="至少 8 位" disabled={saving} />
+          <Field label="确认新密码" type="password" value={form.confirmPassword} onChange={(value) => patch("confirmPassword", value)} disabled={saving} />
         </div>
         <div className="actions">
-          <button className="primary" onClick={async () => {
+          <button className="primary" disabled={saving} onClick={async () => {
             try {
+              setSaving(true);
+              setMessage("");
+              if (!form.oldPassword || !form.newPassword || !form.confirmPassword) throw new Error("请填写完整后再提交");
               if (form.newPassword !== form.confirmPassword) throw new Error("两次输入的新密码不一致");
               await api("/api/auth/password", { method: "PUT", body: JSON.stringify(form) });
-              setMessage("密码已更新。");
+              setMessage("密码已更新。其他登录会话已失效，请妥善保管新密码。");
               setForm({ oldPassword: "", newPassword: "", confirmPassword: "" });
             } catch (error) {
               setMessage(error.message);
+            } finally {
+              setSaving(false);
             }
-          }}>修改密码</button>
+          }}>{saving ? "提交中..." : "修改密码"}</button>
         </div>
         {message ? <p className="panel-message">{message}</p> : null}
       </Panel>
@@ -2968,15 +2995,33 @@ function AccountPage({ embedded = false }) {
   );
 }
 
-function StaticAdminPage({ title, body, actions = null, embedded = false }) {
+function StaticAdminPage({ title, body, actions = null, embedded = false, highlights = [], tips = [], empty = null }) {
   return (
     <section className={embedded ? "embedded-section" : ""}>
       <Panel title={title}>
-        <div className="guide-card flat">
-          <h3>{title}</h3>
-          <p>{body}</p>
+        <div className="static-admin-shell">
+          <div className="guide-card flat static-admin-hero">
+            <h3>{title}</h3>
+            <p>{body}</p>
+            {highlights.length ? (
+              <div className="static-admin-badges">
+                {highlights.map((item) => <span key={item} className="mini-tag">{item}</span>)}
+              </div>
+            ) : null}
+          </div>
+          {tips.length ? (
+            <div className="settings-helper static-admin-helper">
+              {tips.map((item) => (
+                <div key={item.title}>
+                  <b>{item.title}</b>
+                  <span>{item.body}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {empty ? <EmptyState title={empty.title} detail={empty.detail} /> : null}
+          {actions ? <div className="actions">{actions}</div> : null}
         </div>
-        {actions ? <div className="actions">{actions}</div> : null}
       </Panel>
     </section>
   );
@@ -3080,6 +3125,9 @@ function ProbeTasksPage({ agents, liveTick }) {
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
+  const [savingTask, setSavingTask] = useState(false);
+  const [runningTaskId, setRunningTaskId] = useState("");
+  const [deletingTaskId, setDeletingTaskId] = useState("");
 
   const load = () => api("/api/probe-tasks").then(setTasks);
   useEffect(() => {
@@ -3106,6 +3154,7 @@ function ProbeTasksPage({ agents, liveTick }) {
 
   const saveTask = async () => {
     try {
+      setSavingTask(true);
       setMessage("");
       if (editingId) {
         await api(`/api/probe-tasks/${editingId}`, { method: "PUT", body: JSON.stringify(form) });
@@ -3119,6 +3168,8 @@ function ProbeTasksPage({ agents, liveTick }) {
       await load();
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setSavingTask(false);
     }
   };
 
@@ -3141,8 +3192,8 @@ function ProbeTasksPage({ agents, liveTick }) {
             <Field label="超时 ms" type="number" value={form.timeout} onChange={(value) => patch("timeout", value)} />
           </div>
           <div className="actions">
-            <button className="primary" onClick={saveTask}>{editingId ? "保存任务" : "创建并运行"}</button>
-            {editingId ? <button onClick={() => { setEditingId(""); setForm({ name: "", type: "tcp", target: "1.1.1.1", port: 443, interval: 60, timeout: 5000, agentId: "" }); }}>取消编辑</button> : null}
+            <button className="primary" onClick={saveTask} disabled={savingTask}>{savingTask ? (editingId ? "保存中..." : "创建中...") : (editingId ? "保存任务" : "创建并运行")}</button>
+            {editingId ? <button onClick={() => { setEditingId(""); setForm({ name: "", type: "tcp", target: "1.1.1.1", port: 443, interval: 60, timeout: 5000, agentId: "" }); }} disabled={savingTask}>取消编辑</button> : null}
           </div>
           {message ? <p className="panel-message">{message}</p> : null}
         </Panel>
@@ -3193,8 +3244,36 @@ function ProbeTasksPage({ agents, liveTick }) {
                   <td className="actions-cell">
                     <button className="link" onClick={() => { setEditingId(task.id); setForm({ name: task.name || "", type: task.type || "tcp", target: task.target || "", port: task.port || 443, interval: task.interval || 60, timeout: task.timeout || 5000, agentId: task.agentId || "" }); }}>编辑</button>
                     <button className="link" onClick={() => setExpandedId((current) => current === task.id ? "" : task.id)}>{expandedId === task.id ? "收起" : "详情"}</button>
-                    <button className="link" onClick={async () => { const result = await api(`/api/probe-tasks/${task.id}/run`, { method: "POST" }); setMessage(`已重新下发 ${result.sent?.length || 0} 个在线节点。`); await load(); }}>运行</button>
-                    <button className="link" onClick={async () => { if (!window.confirm(`删除探测任务 ${task.name}？`)) return; await api(`/api/probe-tasks/${task.id}`, { method: "DELETE" }); setMessage("任务已删除。"); await load(); }}>删除</button>
+                    <button className="link" disabled={runningTaskId === task.id || deletingTaskId === task.id} onClick={async () => {
+                      try {
+                        setRunningTaskId(task.id);
+                        const result = await api(`/api/probe-tasks/${task.id}/run`, { method: "POST" });
+                        setMessage(`已重新下发 ${result.sent?.length || 0} 个在线节点。`);
+                        await load();
+                      } catch (error) {
+                        setMessage(error.message);
+                      } finally {
+                        setRunningTaskId("");
+                      }
+                    }}>{runningTaskId === task.id ? "运行中..." : "运行"}</button>
+                    <button className="link" disabled={runningTaskId === task.id || deletingTaskId === task.id} onClick={async () => {
+                      try {
+                        if (!window.confirm(`删除探测任务 ${task.name || "未命名任务"}？`)) return;
+                        setDeletingTaskId(task.id);
+                        await api(`/api/probe-tasks/${task.id}`, { method: "DELETE" });
+                        setMessage("任务已删除。");
+                        if (expandedId === task.id) setExpandedId("");
+                        if (editingId === task.id) {
+                          setEditingId("");
+                          setForm({ name: "", type: "tcp", target: "1.1.1.1", port: 443, interval: 60, timeout: 5000, agentId: "" });
+                        }
+                        await load();
+                      } catch (error) {
+                        setMessage(error.message);
+                      } finally {
+                        setDeletingTaskId("");
+                      }
+                    }}>{deletingTaskId === task.id ? "删除中..." : "删除"}</button>
                   </td>
                 </tr>
                 {expandedId === task.id ? <tr><td colSpan={8}><div className="guide-card flat"><h3>最近结果</h3>{task.lastResults?.length ? <div className="task-result-list">{task.lastResults.slice(0, 8).map((row, index) => <div key={index} className={`task-result-card ${row.ok ? "ok" : "bad"}`}><div className="task-result-head"><b>{row.agentName || row.agentId || "-"}</b><span className={`status-pill ${row.ok ? "online" : ""}`}><StatusDot on={row.ok} />{row.ok ? "ok" : "fail"}</span></div><div className="task-result-meta"><span>延迟：{formatLatency(row.latency)}</span><span>时间：{formatDateTime(row.at)}</span></div>{row.status ? <div className="task-result-text"><b>状态</b><span>{row.status}</span></div> : null}{row.output ? <div className="task-result-text"><b>输出</b><code>{summarizeText(row.output, 240)}</code></div> : null}</div>)}</div> : <EmptyState title="暂无明细结果" detail="任务运行后会在这里展示最近各节点的探测结果。" />}</div></td></tr> : null}
@@ -3262,7 +3341,7 @@ function ConfigPage({ id, back, liveTick }) {
                 回滚
               </button>
             </div>
-          )) : <div className="empty">暂无版本</div>}
+          )) : <EmptyState title="暂无版本记录" detail="应用过 sing-box 配置后，这里会显示历史版本，方便回滚。" />}
         </Panel>
       </div>
     </section>
@@ -3581,9 +3660,9 @@ function App() {
     if (page === "generalSettings") return <MonitorSettingsPage section="general" title="通用设置" />;
     if (page === "sessions") return <SessionsPage liveTick={liveTick} />;
     if (page === "account") return <AccountPage />;
-    if (page === "about") return <StaticAdminPage title="关于" body="Chiken Monitor 是 chiken-easy 的监控、探测、节点控制与订阅分发后台。" />;
-    if (page === "docs") return <StaticAdminPage title="文档" body="常用入口已经集中在侧边栏：服务器、探针管理、延迟监测、远程执行、订阅分发、文件对传和凭据管理。" actions={<a className="button-link" href="https://github.com/fengbule/chiken-easy" target="_blank" rel="noreferrer">打开 GitHub</a>} />;
-    if (page === "home") return <StaticAdminPage title="主页" body="公开主页是 Chiken Monitor 探针面板，默认无需登录可查看服务器状态。" actions={<a className="button-link" href="/" target="_blank" rel="noreferrer">打开公开主页</a>} />;
+    if (page === "about") return <StaticAdminPage title="关于" body="Chiken Monitor 是 chiken-easy 内置的公开探针与后台控制面板，用来统一查看节点状态、整理展示文案、执行运维动作并分发订阅。" highlights={["公开探针", "后台控制", "订阅分发"]} tips={[{ title: "适合做什么", body: "快速检查节点健康、统一调整展示信息、集中管理订阅与通知。" }, { title: "不会影响什么", body: "这里只是说明页，不会触发探针、重启服务或修改节点配置。" }, { title: "版本关系", body: "Chiken Monitor 随 chiken-easy 一起提供，适合作为轻量的一体化管理后台。" }]} />;
+    if (page === "docs") return <StaticAdminPage title="文档" body="常用入口已经集中在侧边栏，适合把服务器、探针管理、延迟监测、远程执行、订阅分发、文件对传和凭据管理串起来用。" highlights={["快速上手", "集中入口", "减少跳转成本"]} tips={[{ title: "新手路径", body: "建议先完成站点设置、主题管理，再处理探针管理与通知。" }, { title: "排障路径", body: "日志、远程执行、延迟监测和 SSH 页面适合配合使用。" }, { title: "资料补充", body: "外部长文档以 GitHub 项目页为主，模块内提示负责兜底。" }]} empty={{ title: "当前没有更多内置长文档", detail: "先用模块内说明完成配置即可；需要看源码、部署细节或更新记录时再跳 GitHub。" }} actions={<><a className="button-link" href="https://github.com/fengbule/chiken-easy" target="_blank" rel="noreferrer">打开 GitHub 项目</a><button onClick={() => setPage("settings")}>查看使用说明</button></>} />;
+    if (page === "home") return <StaticAdminPage title="主页" body="公开主页默认无需登录，适合对外展示在线状态、负载、速率与累计流量；卡片文案与分组可在探针管理里实时调整。" highlights={["默认公开", "实时刷新", "支持分组筛选"]} tips={[{ title: "推荐搭配", body: "先改站点名称和描述，再调整主题密度与强调色，主页观感会更完整。" }, { title: "数据来源", body: "节点指标来自 Agent 探针，展示文案来自探针管理。" }, { title: "隐私提示", body: "开启公开隐藏 IP 后，主页不会暴露主机地址。" }]} actions={<><a className="button-link" href="/" target="_blank" rel="noreferrer">打开公开主页</a><button onClick={() => setPage("probeManage")}>前往探针管理</button></>} />;
     if (page === "defaultTheme") return <MonitorSettingsPage section="theme" title="默认主题设置" />;
     if (page === "files" || page === "files-agent") return <FilesPage agents={agents} initialAgentId={page === "files-agent" ? agentId : ""} />;
     if (page === "credentials") return <CredentialsPage liveTick={liveTick} />;
