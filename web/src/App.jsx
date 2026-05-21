@@ -302,6 +302,69 @@ function formatTimeAgo(value) {
   return `${Math.floor(hours / 24)} 天前`;
 }
 
+function formatDateTime(value) {
+  const time = Date.parse(value || "");
+  if (!Number.isFinite(time)) return value || "-";
+  return new Date(time).toLocaleString("zh-CN", {
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
+function formatLatency(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return "-";
+  return `${Math.round(number)} ms`;
+}
+
+function latencyTone(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return "muted";
+  if (number >= 300) return "bad";
+  if (number >= 150) return "warn";
+  return "good";
+}
+
+function summarizeText(text = "", limit = 120) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (!clean) return "-";
+  if (clean.length <= limit) return clean;
+  return `${clean.slice(0, limit)}…`;
+}
+
+function describeTaskTarget(task = {}) {
+  if (task.type === "tcp") return `${task.target}:${task.port}`;
+  return task.target || "-";
+}
+
+function taskScopeLabel(task = {}, agents = []) {
+  if (!task.agentId) return "全部在线节点";
+  return agents.find((agent) => agent.id === task.agentId)?.name || task.agentId;
+}
+
+function notificationChannelLabel(channel = "") {
+  const map = {
+    webhook: "Webhook",
+    telegram: "Telegram",
+    both: "Webhook + Telegram"
+  };
+  return map[String(channel || "")] || String(channel || "-");
+}
+
+function EmptyState({ title = "暂无数据", detail = "" }) {
+  return (
+    <div className="empty state-empty">
+      <strong>{title}</strong>
+      {detail ? <small>{detail}</small> : null}
+    </div>
+  );
+}
+
 function meterTone(value) {
   const number = Number(value) || 0;
   if (number >= 85) return "red";
@@ -532,11 +595,11 @@ function Card({ label, value, accent = "", icon: Icon = null, hint = "" }) {
   );
 }
 
-function Field({ label, value, onChange, type = "text", placeholder = "", rows = 4, options = [], random = null }) {
+function Field({ label, value, onChange, type = "text", placeholder = "", rows = 4, options = [], random = null, hint = "", inputMode = undefined, min = undefined, max = undefined, step = undefined, disabled = false }) {
   let control = null;
   if (type === "select") {
     control = (
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <select value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled}>
         {options.map(([optionValue, optionLabel]) => (
           <option key={optionValue} value={optionValue}>
             {optionLabel}
@@ -545,21 +608,22 @@ function Field({ label, value, onChange, type = "text", placeholder = "", rows =
       </select>
     );
   } else if (type === "textarea") {
-    control = <textarea className="inline-textarea" rows={rows} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />;
+    control = <textarea className="inline-textarea" rows={rows} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} disabled={disabled} />;
   } else {
-    control = <input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />;
+    control = <input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} inputMode={inputMode} min={min} max={max} step={step} disabled={disabled} />;
   }
   return (
     <label>
-      {label}
+      <span className="field-label">{label}</span>
       <div className="input-row">
         {control}
         {random ? (
-          <button type="button" className="icon-btn" onClick={random} title="随机生成">
+          <button type="button" className="icon-btn" onClick={random} title="随机生成" disabled={disabled}>
             <Shuffle size={15} />
           </button>
         ) : null}
       </div>
+      {hint ? <small className="field-hint">{hint}</small> : null}
     </label>
   );
 }
@@ -2332,6 +2396,9 @@ function ProbeManagePage({ liveTick, agents }) {
   const [message, setMessage] = useState("");
   const [module, setModule] = useState("profiles");
   const [bulk, setBulk] = useState({ region: "", group: "", hidden: "", sortStart: 10, sortStep: 10 });
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState("");
 
   const load = async () => {
     const data = await api("/api/probe-settings");
@@ -2355,6 +2422,8 @@ function ProbeManagePage({ liveTick, agents }) {
 
   const selectRow = (row) => {
     setSelectedId(row.agent.id);
+    setDirty(false);
+    setMessage("");
     setForm({
       ...empty,
       ...row.profile,
@@ -2364,11 +2433,15 @@ function ProbeManagePage({ liveTick, agents }) {
     });
   };
 
-  const patch = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const patch = (key, value) => {
+    setDirty(true);
+    setForm((current) => ({ ...current, [key]: value }));
+  };
 
   const save = async () => {
     if (!selectedId) return;
     try {
+      setSaving(true);
       setMessage("");
       await api(`/api/probe-settings/${selectedId}`, {
         method: "PUT",
@@ -2380,10 +2453,14 @@ function ProbeManagePage({ liveTick, agents }) {
           hidden: Boolean(form.hidden)
         })
       });
+      setDirty(false);
+      setLastSavedAt(formatClock(new Date()));
       setMessage("探针展示信息已保存，公开页会实时刷新。");
       await load();
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setSaving(false);
     }
   };
   const selected = rows.find((row) => row.agent.id === selectedId);
@@ -2502,12 +2579,17 @@ function ProbeManagePage({ liveTick, agents }) {
       return (
         <div className="grid2 probe-manage-layout">
           <Panel title="探针节点" right={<div className="actions"><button onClick={fillAllByGuess}>一键智能填充</button><button onClick={load}><RefreshCw size={15} />刷新</button></div>}>
+            <div className="settings-helper compact">
+              <div><b>{rows.length}</b><span>已注册节点</span></div>
+              <div><b>{rows.filter((row) => !row.profile.hidden).length}</b><span>当前公开显示</span></div>
+              <div><b>{rows.filter((row) => row.agent.connected).length}</b><span>在线节点</span></div>
+            </div>
             <div className="form-grid" style={{ marginBottom: 12 }}>
-              <Field label="批量地区" value={bulk.region} onChange={(value) => patchBulk("region", value)} placeholder="如 香港 / 日本 / 美国" />
-              <Field label="批量分组" value={bulk.group} onChange={(value) => patchBulk("group", value)} placeholder="如 亚洲 / 香港 / 欧洲" />
-              <Field label="批量公开" type="select" value={bulk.hidden} onChange={(value) => patchBulk("hidden", value)} options={[["", "保持不变"], ["visible", "全部显示"], ["hidden", "全部隐藏"]]} />
-              <Field label="排序起点" type="number" value={bulk.sortStart} onChange={(value) => patchBulk("sortStart", value)} />
-              <Field label="排序步长" type="number" value={bulk.sortStep} onChange={(value) => patchBulk("sortStep", value)} />
+              <Field label="批量地区" value={bulk.region} onChange={(value) => patchBulk("region", value)} placeholder="如 香港 / 日本 / 美国" hint="留空则保留原有地区" />
+              <Field label="批量分组" value={bulk.group} onChange={(value) => patchBulk("group", value)} placeholder="如 亚洲 / 香港 / 欧洲" hint="适合先粗分区，再手动微调" />
+              <Field label="批量公开" type="select" value={bulk.hidden} onChange={(value) => patchBulk("hidden", value)} options={[["", "保持不变"], ["visible", "全部显示"], ["hidden", "全部隐藏"]]} hint="不会影响探针本身，只影响公开页是否展示" />
+              <Field label="排序起点" type="number" value={bulk.sortStart} onChange={(value) => patchBulk("sortStart", value)} hint="例如从 10 开始，便于后续插队" inputMode="numeric" />
+              <Field label="排序步长" type="number" value={bulk.sortStep} onChange={(value) => patchBulk("sortStep", value)} hint="建议 10，后面插入节点更灵活" inputMode="numeric" min={1} />
             </div>
             <div className="actions" style={{ marginBottom: 12 }}>
               <button onClick={applyBulk}>批量应用到全部节点</button>
@@ -2538,7 +2620,7 @@ function ProbeManagePage({ liveTick, agents }) {
             </div>
           </Panel>
 
-          <Panel title="编辑公开探针">
+          <Panel title="编辑公开探针" right={selected ? <div className="editor-status-inline"><span className={dirty ? "status-chip warn" : "status-chip ok"}>{dirty ? "有未保存修改" : "已同步"}</span>{lastSavedAt ? <small>上次保存 {lastSavedAt}</small> : null}</div> : null}>
             {selected ? (
               <>
                 <div className="probe-editor-preview">
@@ -2564,25 +2646,26 @@ function ProbeManagePage({ liveTick, agents }) {
                   <button onClick={clearOptionalLabels}>清空账单标签</button>
                 </div>
                 <div className="form-grid">
-                  <Field label="公开名称" value={form.displayName} onChange={(value) => patch("displayName", value)} />
-                  <Field label="旗标" value={form.flag} onChange={(value) => patch("flag", normalizeFlagInput(value))} placeholder="如 🇭🇰 / US / JP" />
-                  <Field label="分组" value={form.group} onChange={(value) => patch("group", value)} placeholder="亚洲 / 欧洲 / 美洲" />
-                  <Field label="地区" value={form.region} onChange={(value) => patch("region", value)} placeholder="香港 / 日本 / SFO" />
-                  <Field label="系统显示" value={form.osLabel} onChange={(value) => patch("osLabel", value)} placeholder={selectedSystem.distro || "留空使用 Agent 上报系统"} />
-                  <Field label="排序" type="number" value={form.displayOrder} onChange={(value) => patch("displayOrder", value)} />
-                  <Field label="价格标签" value={form.price} onChange={(value) => patch("price", value)} placeholder="$60/三年" />
-                  <Field label="到期/余量标签" value={form.expireText} onChange={(value) => patch("expireText", value)} placeholder="余1075天" />
-                  <Field label="账单备注" value={form.billing} onChange={(value) => patch("billing", value)} />
-                  <Field label="总流量 GB" type="number" value={form.trafficLimitGb} onChange={(value) => patch("trafficLimitGb", value)} placeholder="留空不显示百分比" />
-                  <Field label="标签" value={form.tags} onChange={(value) => patch("tags", value)} placeholder="英文逗号分隔" />
-                  <Field label="公开显示" type="select" value={form.hidden ? "hidden" : "visible"} onChange={(value) => patch("hidden", value === "hidden")} options={[["visible", "显示"], ["hidden", "隐藏"]]} />
-                  <Field label="卡片备注" type="textarea" rows={3} value={form.note} onChange={(value) => patch("note", value)} />
+                  <Field label="公开名称" value={form.displayName} onChange={(value) => patch("displayName", value)} hint="公开页主标题；留短一点更好看" />
+                  <Field label="旗标" value={form.flag} onChange={(value) => patch("flag", normalizeFlagInput(value))} placeholder="如 🇭🇰 / US / JP" hint="支持国旗 emoji，或输入国家代码自动转换" />
+                  <Field label="分组" value={form.group} onChange={(value) => patch("group", value)} placeholder="亚洲 / 欧洲 / 美洲" hint="用于公开页顶部筛选" />
+                  <Field label="地区" value={form.region} onChange={(value) => patch("region", value)} placeholder="香港 / 日本 / SFO" hint="建议填用户更熟悉的地区名" />
+                  <Field label="系统显示" value={form.osLabel} onChange={(value) => patch("osLabel", value)} placeholder={selectedSystem.distro || "留空使用 Agent 上报系统"} hint="可手动统一成 Ubuntu 22.04 / Debian 12 这种格式" />
+                  <Field label="排序" type="number" value={form.displayOrder} onChange={(value) => patch("displayOrder", value)} hint="数值越小越靠前" inputMode="numeric" />
+                  <Field label="价格标签" value={form.price} onChange={(value) => patch("price", value)} placeholder="$60/三年" hint="会显示成蓝色价格 badge" />
+                  <Field label="到期/余量标签" value={form.expireText} onChange={(value) => patch("expireText", value)} placeholder="余1075天" hint="包含“余”时会优先用绿色样式" />
+                  <Field label="账单备注" value={form.billing} onChange={(value) => patch("billing", value)} placeholder="年付 / 月付 / 一次性" hint="仅后台记录，方便自己管理" />
+                  <Field label="总流量 GB" type="number" value={form.trafficLimitGb} onChange={(value) => patch("trafficLimitGb", value)} placeholder="留空不显示百分比" hint="填写后公开页会自动计算流量使用百分比" inputMode="decimal" min={0} step={1} />
+                  <Field label="标签" value={form.tags} onChange={(value) => patch("tags", value)} placeholder="CN2, premium, 流媒体" hint="逗号分隔，便于后续扩展筛选/标记" />
+                  <Field label="公开显示" type="select" value={form.hidden ? "hidden" : "visible"} onChange={(value) => patch("hidden", value === "hidden")} options={[["visible", "显示"], ["hidden", "隐藏"]]} hint="隐藏后不会出现在公开页" />
+                  <Field label="卡片备注" type="textarea" rows={3} value={form.note} onChange={(value) => patch("note", value)} hint="适合写“香港云服务器 / 流媒体友好 / 备用节点”等简短说明" />
                 </div>
                 <div className="panel-tip">
                   公开页不会输出服务器 IP 或主机地址。系统发行版来自 Agent 上报，国旗优先使用这里填写的旗标，留空时会按地区/名称自动推断。
                 </div>
                 <div className="actions">
-                  <button className="primary" onClick={save}><Save size={16} />保存探针</button>
+                  <button className="primary" onClick={save} disabled={saving || !dirty}><Save size={16} />{saving ? "保存中..." : "保存探针"}</button>
+                  <button onClick={() => selected && selectRow(selected)} disabled={saving || !dirty}><RotateCcw size={16} />撤销未保存修改</button>
                   <a className="button-link" href="/" target="_blank" rel="noreferrer">查看公开页</a>
                 </div>
                 {message ? <p className="panel-message">{message}</p> : null}
@@ -2630,20 +2713,35 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
   const [settings, setSettings] = useState(null);
   const [message, setMessage] = useState("");
   const [testing, setTesting] = useState(false);
-  const load = () => api("/api/admin/settings").then(setSettings);
+  const [summary, setSummary] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState("");
+  const load = () => api("/api/admin/settings").then((data) => {
+    setSettings(data);
+    setDirty(false);
+  });
   useEffect(() => {
     load().catch(() => {});
   }, [section]);
   const current = settings?.[section] || {};
-  const patch = (key, value) => setSettings((data) => ({ ...data, [section]: { ...(data?.[section] || {}), [key]: value } }));
+  const patch = (key, value) => {
+    setDirty(true);
+    setSettings((data) => ({ ...data, [section]: { ...(data?.[section] || {}), [key]: value } }));
+  };
   const save = async () => {
     try {
+      setSaving(true);
       setMessage("");
       const response = await api("/api/admin/settings", { method: "PUT", body: JSON.stringify({ [section]: current }) });
       setSettings(response);
+      setDirty(false);
+      setLastSavedAt(formatClock(new Date()));
       setMessage("设置已保存。");
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setSaving(false);
     }
   };
   const testNotification = async () => {
@@ -2668,48 +2766,86 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
   const needsWebhook = channel === "webhook" || channel === "both";
   const needsTelegram = channel === "telegram" || channel === "both";
 
+  useEffect(() => {
+    if (section !== "notifications") {
+      setSummary(null);
+      return;
+    }
+    api("/api/admin/notifications/test", { method: "POST", body: JSON.stringify({ dryRun: true }) })
+      .then((result) => setSummary(result))
+      .catch(() => setSummary(null));
+  }, [section, current.channel, current.webhookUrl, current.telegramBotToken, current.telegramChatId, current.telegramApiBase]);
+
   const fields = {
     site: [
-      ["name", "站点名称", "text", "Chiken Monitor"],
-      ["subtitle", "公开页标题", "text", "Chiken Monitor"],
-      ["description", "站点描述", "text", ""],
-      ["footer", "页脚文字", "text", ""]
+      ["name", "站点名称", "text", "Chiken Monitor", null, "公开页品牌名，建议 2-20 个字"],
+      ["subtitle", "公开页标题", "text", "Chiken Monitor", null, "显示在顶部品牌区，可与站点名称不同"],
+      ["description", "站点描述", "text", "", null, "会出现在首页 hero 区，适合一句话说明用途"],
+      ["footer", "页脚文字", "text", "", null, "可放版权、联系信息或简单备注"]
     ],
     theme: [
-      ["mode", "主题模式", "select", "", [["light", "浅色"], ["dark", "深色"], ["system", "跟随系统"]]],
-      ["cardDensity", "卡片密度", "select", "", [["compact", "紧凑"], ["standard", "标准"], ["relaxed", "宽松"]]],
-      ["accent", "强调色", "text", "green"],
-      ["showHeaderActions", "顶部按钮", "select", "", [[true, "显示"], [false, "隐藏"]]]
+      ["mode", "主题模式", "select", "", [["light", "浅色"], ["dark", "深色"], ["system", "跟随系统"]], "默认外观模式"],
+      ["cardDensity", "卡片密度", "select", "", [["compact", "紧凑"], ["standard", "标准"], ["relaxed", "宽松"]], "影响公开页卡片信息疏密"],
+      ["accent", "强调色", "text", "green", null, "先填语义色名（green/blue/violet）最稳妥"],
+      ["showHeaderActions", "顶部按钮", "select", "", [[true, "显示"], [false, "隐藏"]], "控制 GitHub / 刷新 / 管理入口按钮"]
     ],
     login: [
-      ["title", "登录标题", "text", "Chiken Monitor"],
-      ["sessionDays", "会话有效天数", "number", "7"],
-      ["allowPasswordLogin", "密码登录", "select", "", [[true, "允许"], [false, "禁用"]]]
+      ["title", "登录标题", "text", "Chiken Monitor", null, "管理员登录页显示名称"],
+      ["sessionDays", "会话有效天数", "number", "7", null, "建议 1-30 天；过长会增加风险"],
+      ["allowPasswordLogin", "密码登录", "select", "", [[true, "允许"], [false, "禁用"]], "禁用后只能走已有 Token / 会话"]
     ],
     notifications: [
-      ["offlineEnabled", "离线通知", "select", "", [[true, "启用"], [false, "关闭"]]],
-      ["loadEnabled", "负载通知", "select", "", [[true, "启用"], [false, "关闭"]]],
-      ["cpuThreshold", "CPU 阈值", "number", "90"],
-      ["memoryThreshold", "内存阈值", "number", "90"],
-      ["diskThreshold", "磁盘阈值", "number", "90"],
-      ["cooldownMinutes", "冷却分钟", "number", "10"],
-      ["channel", "通知通道", "select", "", [["webhook", "Webhook"], ["telegram", "Telegram"], ["both", "Webhook + Telegram"]]],
-      ["webhookUrl", "Webhook URL", "text", ""],
-      ["telegramBotToken", "Telegram Bot Token", "password", ""],
-      ["telegramChatId", "Telegram Chat ID", "text", ""],
-      ["telegramApiBase", "Telegram API Base", "text", "https://api.telegram.org"]
+      ["offlineEnabled", "离线通知", "select", "", [[true, "启用"], [false, "关闭"]], "节点离线时发告警"],
+      ["loadEnabled", "负载通知", "select", "", [[true, "启用"], [false, "关闭"]], "CPU / 内存 / 磁盘超阈值时告警"],
+      ["cpuThreshold", "CPU 阈值", "number", "90", null, "超过该百分比触发"],
+      ["memoryThreshold", "内存阈值", "number", "90", null, "超过该百分比触发"],
+      ["diskThreshold", "磁盘阈值", "number", "90", null, "超过该百分比触发"],
+      ["cooldownMinutes", "冷却分钟", "number", "10", null, "同一节点重复告警的最短间隔"],
+      ["channel", "通知通道", "select", "", [["webhook", "Webhook"], ["telegram", "Telegram"], ["both", "Webhook + Telegram"]], "建议先配单通道测试，再改双通道"],
+      ["webhookUrl", "Webhook URL", "text", "", null, "企业微信 / 飞书 / 自定义 webhook 地址"],
+      ["telegramBotToken", "Telegram Bot Token", "password", "", null, "来自 @BotFather"],
+      ["telegramChatId", "Telegram Chat ID", "text", "", null, "个人 / 群组 chat_id"],
+      ["telegramApiBase", "Telegram API Base", "text", "https://api.telegram.org", null, "默认不用改；自建网关时再填"]
     ],
     general: [
-      ["publicRefreshSeconds", "公开页刷新秒数", "number", "5"],
-      ["adminRefreshSeconds", "后台刷新秒数", "number", "5"],
-      ["publicHideIp", "公开隐藏 IP", "select", "", [[true, "隐藏"], [false, "显示"]]],
-      ["publicDefaultGroup", "默认分组", "text", "全部"]
+      ["publicRefreshSeconds", "公开页刷新秒数", "number", "5", null, "建议 3-15 秒；太低会增加刷新压力"],
+      ["adminRefreshSeconds", "后台刷新秒数", "number", "5", null, "后台轮询频率，建议与公开页接近"],
+      ["publicHideIp", "公开隐藏 IP", "select", "", [[true, "隐藏"], [false, "显示"]], "建议保持隐藏，降低暴露风险"],
+      ["publicDefaultGroup", "默认分组", "text", "全部", null, "公开页首次进入时选中的分组"]
     ]
   }[section] || [];
 
   return (
     <section className={embedded ? "embedded-section" : ""}>
-      <Panel title={title}>
+      <Panel title={title} right={<div className="editor-status-inline"><span className={dirty ? "status-chip warn" : "status-chip ok"}>{dirty ? "有未保存修改" : "已同步"}</span>{lastSavedAt ? <small>上次保存 {lastSavedAt}</small> : null}</div>}>
+        {section === "site" ? (
+          <div className="settings-helper">
+            <div><b>公开标题</b><span>先改站点名称和描述，首页观感提升最明显。</span></div>
+            <div><b>文案建议</b><span>描述控制在 1 句话，避免太长把 hero 区撑乱。</span></div>
+            <div><b>低风险</b><span>这页只改展示文案，不影响探针采集与后台登录。</span></div>
+          </div>
+        ) : null}
+        {section === "theme" ? (
+          <>
+            <div className="settings-helper">
+              <div><b>优先推荐</b><span>先从模式、卡片密度、顶部按钮开始调，最稳。</span></div>
+              <div><b>强调色</b><span>如果不确定，继续用 green；可读性和现有样式最匹配。</span></div>
+              <div><b>预期影响</b><span>仅影响公开页外观，不会改后台功能。</span></div>
+            </div>
+            <div className="theme-presets">
+              <button onClick={() => { setDirty(true); setSettings((data) => ({ ...data, [section]: { ...(data?.[section] || {}), mode: "light", cardDensity: "standard", accent: "green", showHeaderActions: true } })); }}>默认推荐</button>
+              <button onClick={() => { setDirty(true); setSettings((data) => ({ ...data, [section]: { ...(data?.[section] || {}), mode: "dark", cardDensity: "compact", accent: "violet", showHeaderActions: true } })); }}>深色紧凑</button>
+              <button onClick={() => { setDirty(true); setSettings((data) => ({ ...data, [section]: { ...(data?.[section] || {}), mode: "light", cardDensity: "relaxed", accent: "blue", showHeaderActions: false } })); }}>极简展示</button>
+            </div>
+          </>
+        ) : null}
+        {section === "general" ? (
+          <div className="settings-helper">
+            <div><b>刷新频率</b><span>公开页和后台都不建议低于 3 秒。</span></div>
+            <div><b>隐私策略</b><span>公开隐藏 IP 建议保持开启，除非你明确要展示。</span></div>
+            <div><b>默认分组</b><span>填“全部”最稳；也可以填常用区域提升首屏命中。</span></div>
+          </div>
+        ) : null}
         {section === "notifications" ? (
           <>
             <div className="settings-helper">
@@ -2719,16 +2855,35 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
             </div>
             <div className="guide-card flat">
               <h3>当前通道检查</h3>
-              <p>
-                {needsWebhook ? `Webhook：${current.webhookUrl ? "已填写" : "未填写"}` : "Webhook：当前未启用"}
-                <br />
-                {needsTelegram ? `Telegram：${current.telegramBotToken && current.telegramChatId ? "Bot Token / Chat ID 已填写" : "Bot Token 或 Chat ID 未填写"}` : "Telegram：当前未启用"}
-              </p>
+              <div className="settings-check-grid">
+                <div className={`settings-check-card ${needsWebhook && !current.webhookUrl ? "bad" : ""}`}>
+                  <b>Webhook</b>
+                  <span>{needsWebhook ? (current.webhookUrl ? "已启用并填写 URL" : "已选择但未填写 URL") : "当前未启用"}</span>
+                </div>
+                <div className={`settings-check-card ${needsTelegram && !(current.telegramBotToken && current.telegramChatId) ? "bad" : ""}`}>
+                  <b>Telegram</b>
+                  <span>{needsTelegram ? (current.telegramBotToken && current.telegramChatId ? "Bot Token / Chat ID 已填写" : "Bot Token 或 Chat ID 未填写") : "当前未启用"}</span>
+                </div>
+                <div className="settings-check-card">
+                  <b>发送策略</b>
+                  <span>{notificationChannelLabel(channel)} · 冷却 {Number(current.cooldownMinutes || 0)} 分钟</span>
+                </div>
+              </div>
+              {summary ? (
+                <div className="settings-summary-inline">
+                  <span className={`status-pill ${summary.results?.length ? "online" : ""}`}>
+                    <StatusDot on={summary.results?.length > 0} />
+                    可用通道 {summary.results?.length || 0}
+                  </span>
+                  {summary.results?.map((row) => <span key={row.channel} className="mini-tag">{notificationChannelLabel(row.channel)}</span>)}
+                  {summary.errors?.length ? <span className="mini-tag danger">缺失：{summary.errors.join("；")}</span> : <span className="mini-tag ok">配置项完整</span>}
+                </div>
+              ) : null}
             </div>
           </>
         ) : null}
         <div className="form-grid">
-          {fields.map(([key, label, type, placeholder, options]) => (
+          {fields.map(([key, label, type, placeholder, options, hint]) => (
             <Field
               key={key}
               label={label}
@@ -2737,13 +2892,15 @@ function MonitorSettingsPage({ section, title, embedded = false }) {
               onChange={(value) => patch(key, value === "true" ? true : value === "false" ? false : value)}
               placeholder={placeholder}
               options={(options || []).map(([value, text]) => [String(value), text])}
+              hint={hint}
+              inputMode={type === "number" ? "numeric" : undefined}
             />
           ))}
         </div>
         <div className="actions">
-          <button className="primary" onClick={save}><Save size={16} />保存</button>
-          {section === "notifications" ? <button onClick={testNotification} disabled={testing}><Bell size={16} />{testing ? "发送中..." : "发送测试通知"}</button> : null}
-          <button onClick={load}><RefreshCw size={16} />重载</button>
+          <button className="primary" onClick={save} disabled={saving || !dirty}><Save size={16} />{saving ? "保存中..." : "保存"}</button>
+          {section === "notifications" ? <button onClick={testNotification} disabled={testing || saving}><Bell size={16} />{testing ? "发送中..." : "发送测试通知"}</button> : null}
+          <button onClick={load} disabled={saving}><RefreshCw size={16} />重载</button>
         </div>
         {message ? <p className="panel-message">{message}</p> : null}
       </Panel>
@@ -2920,6 +3077,8 @@ function ProbeTasksPage({ agents, liveTick }) {
   const [form, setForm] = useState({ name: "", type: "tcp", target: "1.1.1.1", port: 443, interval: 60, timeout: 5000, agentId: "" });
   const [editingId, setEditingId] = useState("");
   const [expandedId, setExpandedId] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
 
   const load = () => api("/api/probe-tasks").then(setTasks);
@@ -2928,6 +3087,22 @@ function ProbeTasksPage({ agents, liveTick }) {
   }, [liveTick]);
 
   const patch = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+
+  const filteredTasks = tasks.filter((task) => {
+    const resultState = task.lastResult ? (task.lastResult.ok ? "ok" : "fail") : "pending";
+    const text = [task.name, task.type, describeTaskTarget(task), taskScopeLabel(task, agents), task.lastResult?.agentName, task.lastResult?.status, task.lastResult?.output]
+      .join(" ")
+      .toLowerCase();
+    const matchesFilter = filter === "all" || filter === resultState;
+    return matchesFilter && text.includes(query.toLowerCase());
+  });
+
+  const taskStats = {
+    total: tasks.length,
+    ok: tasks.filter((task) => task.lastResult?.ok).length,
+    fail: tasks.filter((task) => task.lastResult && !task.lastResult.ok).length,
+    pending: tasks.filter((task) => !task.lastResult).length
+  };
 
   const saveTask = async () => {
     try {
@@ -2978,8 +3153,17 @@ function ProbeTasksPage({ agents, liveTick }) {
           </div>
         </Panel>
       </div>
-      <Panel title="任务列表">
-        <table>
+      <Panel title="任务列表" right={<div className="toolbar-inline"><span className="muted">共 {taskStats.total} 条 · 成功 {taskStats.ok} · 失败 {taskStats.fail} · 等待 {taskStats.pending}</span><button onClick={load}><RefreshCw size={15} />刷新</button></div>}>
+        <div className="task-toolbar">
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称、目标、节点、状态输出" />
+          <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+            <option value="all">全部状态</option>
+            <option value="ok">仅成功</option>
+            <option value="fail">仅失败</option>
+            <option value="pending">仅等待结果</option>
+          </select>
+        </div>
+        {filteredTasks.length ? <table>
           <thead>
             <tr>
               <th>名称</th>
@@ -2993,16 +3177,19 @@ function ProbeTasksPage({ agents, liveTick }) {
             </tr>
           </thead>
           <tbody>
-            {tasks.map((task) => (
+            {filteredTasks.map((task) => (
               <React.Fragment key={task.id}>
                 <tr>
-                  <td>{task.name}</td>
-                  <td>{task.type}</td>
-                  <td>{task.type === "tcp" ? `${task.target}:${task.port}` : task.target}</td>
-                  <td>{task.agentId ? agents.find((agent) => agent.id === task.agentId)?.name || task.agentId : "全部在线"}</td>
-                  <td><span className={`status-pill ${task.lastResult?.ok ? "online" : ""}`}><StatusDot on={task.lastResult?.ok} />{task.lastResult ? (task.lastResult.ok ? "ok" : "fail") : "pending"}</span></td>
-                  <td>{task.lastResult?.latency ? `${task.lastResult.latency} ms` : "-"}{task.lastResult?.agentName ? <div className="muted">{task.lastResult.agentName}</div> : null}</td>
-                  <td>{task.lastResult?.at || "-"}</td>
+                  <td>
+                    <b>{task.name || "未命名任务"}</b>
+                    <div className="muted">每 {task.interval || 0}s 执行一次 · 超时 {task.timeout || 0} ms</div>
+                  </td>
+                  <td>{String(task.type || "-").toUpperCase()}</td>
+                  <td><code>{describeTaskTarget(task)}</code></td>
+                  <td>{taskScopeLabel(task, agents)}</td>
+                  <td><span className={`status-pill ${task.lastResult?.ok ? "online" : ""}`}><StatusDot on={task.lastResult?.ok} />{task.lastResult ? (task.lastResult.ok ? "ok" : "fail") : "pending"}</span>{task.lastResult?.status ? <div className="muted task-subline">{summarizeText(task.lastResult.status, 48)}</div> : null}</td>
+                  <td><span className={`latency-badge ${latencyTone(task.lastResult?.latency)}`}>{formatLatency(task.lastResult?.latency)}</span>{task.lastResult?.agentName ? <div className="muted task-subline">{task.lastResult.agentName}</div> : null}</td>
+                  <td><span>{formatTimeAgo(task.lastResult?.at)}</span><div className="muted task-subline">{formatDateTime(task.lastResult?.at)}</div></td>
                   <td className="actions-cell">
                     <button className="link" onClick={() => { setEditingId(task.id); setForm({ name: task.name || "", type: task.type || "tcp", target: task.target || "", port: task.port || 443, interval: task.interval || 60, timeout: task.timeout || 5000, agentId: task.agentId || "" }); }}>编辑</button>
                     <button className="link" onClick={() => setExpandedId((current) => current === task.id ? "" : task.id)}>{expandedId === task.id ? "收起" : "详情"}</button>
@@ -3010,11 +3197,11 @@ function ProbeTasksPage({ agents, liveTick }) {
                     <button className="link" onClick={async () => { if (!window.confirm(`删除探测任务 ${task.name}？`)) return; await api(`/api/probe-tasks/${task.id}`, { method: "DELETE" }); setMessage("任务已删除。"); await load(); }}>删除</button>
                   </td>
                 </tr>
-                {expandedId === task.id ? <tr><td colSpan={8}><div className="guide-card flat"><h3>最近结果</h3>{task.lastResults?.length ? task.lastResults.slice(0, 8).map((row, index) => <div key={index} className="audit-row"><span>{row.agentName || row.agentId || "-"}</span><span>{row.ok ? "ok" : "fail"}</span><span>{Number.isFinite(Number(row.latency)) ? `${row.latency} ms` : "-"}</span><span>{row.status || ""}</span><span>{row.output || ""}</span><span>{row.at || "-"}</span></div>) : <div className="empty">暂无明细结果。</div>}</div></td></tr> : null}
+                {expandedId === task.id ? <tr><td colSpan={8}><div className="guide-card flat"><h3>最近结果</h3>{task.lastResults?.length ? <div className="task-result-list">{task.lastResults.slice(0, 8).map((row, index) => <div key={index} className={`task-result-card ${row.ok ? "ok" : "bad"}`}><div className="task-result-head"><b>{row.agentName || row.agentId || "-"}</b><span className={`status-pill ${row.ok ? "online" : ""}`}><StatusDot on={row.ok} />{row.ok ? "ok" : "fail"}</span></div><div className="task-result-meta"><span>延迟：{formatLatency(row.latency)}</span><span>时间：{formatDateTime(row.at)}</span></div>{row.status ? <div className="task-result-text"><b>状态</b><span>{row.status}</span></div> : null}{row.output ? <div className="task-result-text"><b>输出</b><code>{summarizeText(row.output, 240)}</code></div> : null}</div>)}</div> : <EmptyState title="暂无明细结果" detail="任务运行后会在这里展示最近各节点的探测结果。" />}</div></td></tr> : null}
               </React.Fragment>
             ))}
           </tbody>
-        </table>
+        </table> : <EmptyState title="没有匹配的探测任务" detail="试试调整筛选条件，或者先创建一个 TCP / HTTP / ICMP 任务。" />}
       </Panel>
     </section>
   );
@@ -3178,13 +3365,37 @@ function ApiTokens({ tokenDraft, setTokenDraft, saveToken, clearToken, activeTok
 
 function Audit({ liveTick }) {
   const [rows, setRows] = useState([]);
+  const [query, setQuery] = useState("");
+  const [actorFilter, setActorFilter] = useState("all");
+  const [actionFilter, setActionFilter] = useState("all");
   useEffect(() => {
     api("/api/audit").then(setRows).catch(() => {});
   }, [liveTick]);
+
+  const actors = Array.from(new Set(rows.map((row) => row.actor).filter(Boolean)));
+  const actions = Array.from(new Set(rows.map((row) => row.action).filter(Boolean)));
+  const filteredRows = rows.filter((row) => {
+    const text = [row.actor, row.action, row.target, JSON.stringify(row.detail || {})].join(" ").toLowerCase();
+    const actorOk = actorFilter === "all" || row.actor === actorFilter;
+    const actionOk = actionFilter === "all" || row.action === actionFilter;
+    return actorOk && actionOk && text.includes(query.toLowerCase());
+  });
+
   return (
     <section>
-      <Panel title="审计日志">
-        <table>
+      <Panel title="审计日志" right={<div className="toolbar-inline"><span className="muted">共 {filteredRows.length} / {rows.length} 条</span></div>}>
+        <div className="task-toolbar">
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索操作者、动作、目标或详情" />
+          <select value={actorFilter} onChange={(event) => setActorFilter(event.target.value)}>
+            <option value="all">全部操作者</option>
+            {actors.map((actor) => <option key={actor} value={actor}>{actor}</option>)}
+          </select>
+          <select value={actionFilter} onChange={(event) => setActionFilter(event.target.value)}>
+            <option value="all">全部动作</option>
+            {actions.map((action) => <option key={action} value={action}>{action}</option>)}
+          </select>
+        </div>
+        {filteredRows.length ? <table>
           <thead>
             <tr>
               <th>时间</th>
@@ -3195,17 +3406,17 @@ function Audit({ liveTick }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {filteredRows.map((row) => (
               <tr key={row.id}>
-                <td>{row.at}</td>
-                <td>{row.actor}</td>
-                <td>{row.action}</td>
-                <td>{row.target}</td>
-                <td><code>{JSON.stringify(row.detail)}</code></td>
+                <td><span>{formatTimeAgo(row.at)}</span><div className="muted task-subline">{formatDateTime(row.at)}</div></td>
+                <td>{row.actor || "-"}</td>
+                <td><span className="mini-tag">{row.action || "-"}</span></td>
+                <td>{row.target || "-"}</td>
+                <td><pre className="inline-pre">{JSON.stringify(row.detail, null, 2)}</pre></td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </table> : <EmptyState title="没有匹配的审计日志" detail="可以调整关键字、操作者或动作筛选条件。" />}
       </Panel>
     </section>
   );
