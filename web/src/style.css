@@ -701,13 +701,156 @@ code {
   border-radius: 5px;
 }
 
+.card-grid,
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  padding: 20px;
+}
+
+.data-card,
+.list-card {
+  border: 1px solid #e4eaf2;
+  border-radius: 10px;
+  background: #fbfdff;
+  padding: 16px;
+}
+
+.list-card {
+  height: auto;
+  width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.list-card.active,
+.data-card:hover {
+  border-color: #348dff;
+  background: #f4f9ff;
+}
+
+.data-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.list-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+}
+
+.sub-panel {
+  margin-top: 20px;
+  border-top: 1px solid #edf2f8;
+  padding-top: 18px;
+}
+
+.sub-panel h3 {
+  margin: 0 0 12px;
+  padding: 0 20px;
+  font-size: 16px;
+}
+
+.upload-label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  border: 1px solid #d8e0eb;
+  background: #fff;
+  border-radius: 5px;
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+.upload-label input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.markdown-body {
+  padding: 20px;
+  line-height: 1.8;
+  color: #243447;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin: 0 0 12px;
+}
+
+.markdown-body p {
+  margin: 0 0 12px;
+}
+
+.markdown-body ul {
+  margin: 0 0 12px 20px;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 10px;
+}
+
+.markdown-body code {
+  background: #eef3f8;
+  color: #243447;
+}
+
+.markdown-code {
+  margin: 0 20px 20px;
+  background: #0e1722;
+  color: #e6eef7;
+  border-radius: 10px;
+  overflow: auto;
+}
+
+.markdown-code-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: #99b2c9;
+}
+
+.markdown-code code {
+  display: block;
+  padding: 14px;
+  background: transparent;
+  color: inherit;
+}
+
+.warning-list {
+  padding: 20px;
+  color: #9d4d16;
+}
+
+.warning-list p {
+  margin: 0 0 10px;
+}
+
 @media (max-width: 1080px) {
   .grid2,
   .grid-config,
   .stats,
   .probe-grid,
   .trend-grid,
-  .subscription-node-grid {
+  .subscription-node-grid,
+  .card-grid,
+  .choice-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -18,64 +18,54 @@ import {
 } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
+import {
+  TOKEN_KEY,
+  api,
+  downloadBinary,
+  ensureTokenSession,
+  fetchText,
+  getActiveApiToken,
+  loadStoredToken,
+  persistToken,
+  setActiveApiToken,
+  uploadForm
+} from "./api";
+import {
+  buildAuthUrl,
+  copyText,
+  formatBytes,
+  formatDateTime,
+  formatPercent,
+  formatSpeed,
+  formatUptime,
+  joinTags,
+  newUuid,
+  parseCommaList,
+  randPassword,
+  randPath,
+  randPort,
+  randShortId,
+  renderMarkdownHtml
+} from "./utils";
+import Layout from "./components/Layout";
+import StatusBadge, { StatusDot } from "./components/StatusBadge";
 
-const TOKEN_KEY = "chiken_api_token";
 const URL_TOKEN_PARAM = "token";
-
-let activeApiToken = "";
-
-function setActiveApiToken(token) {
-  activeApiToken = String(token || "").trim();
-}
-
-function getActiveApiToken() {
-  return activeApiToken;
-}
-
-function buildAuthUrl(url, extraParams = {}) {
-  const target = new URL(url, window.location.origin);
-  const token = getActiveApiToken();
-  if (token && !target.searchParams.has(URL_TOKEN_PARAM)) target.searchParams.set(URL_TOKEN_PARAM, token);
-  for (const [key, value] of Object.entries(extraParams)) {
-    if (value === undefined || value === null || value === "") continue;
-    target.searchParams.set(key, String(value));
-  }
-  return `${target.pathname}${target.search}`;
-}
-
-async function api(url, options = {}) {
-  const headers = new Headers(options.headers || {});
-  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  if (getActiveApiToken()) headers.set("Authorization", `Bearer ${getActiveApiToken()}`);
-
-  const response = await fetch(url, { ...options, headers });
-  if (!response.ok) {
-    let message = response.statusText;
-    try {
-      const body = await response.json();
-      message = body.error || message;
-    } catch {}
-    throw new Error(message);
-  }
-  return response.json();
-}
-
-const randHex = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n))).map((item) => item.toString(16).padStart(2, "0")).join("");
-const randPassword = () => randHex(12);
-const randShortId = () => randHex(8);
-const randPort = (base = 20000, size = 30000) => base + Math.floor(Math.random() * size);
-const randPath = () => `/${randHex(3)}`;
-const newUuid = () => crypto.randomUUID?.() || `${randHex(4)}-${randHex(2)}-${randHex(2)}-${randHex(2)}-${randHex(6)}`;
 
 const nav = [
   ["dashboard", Activity, "仪表盘"],
   ["servers", Monitor, "服务器"],
+  ["console", PlugZap, "终端 / SFTP"],
   ["nodes", Code2, "节点配置"],
+  ["node-pool", Code2, "节点池"],
   ["subscriptions", Link2, "订阅聚合"],
   ["forward", PlugZap, "端口转发"],
+  ["monitor", Activity, "监控告警"],
+  ["workspace", KeyRound, "资产 / 凭据 / 脚本"],
+  ["memos", ClipboardList, "Memos / 文件"],
   ["tokens", KeyRound, "API 令牌"],
   ["audit", ClipboardList, "审计日志"],
-  ["settings", Settings, "教程"]
+  ["settings", Settings, "设置"]
 ];
 
 const protocolDefinitions = {
@@ -249,7 +239,17 @@ function defaultSubscriptionForm() {
     template: "clash-basic",
     publicToken: "",
     localNodes: [],
-    imports: []
+    imports: [],
+    format: "clash",
+    enabled: true,
+    expiresAt: "",
+    maxAccessCount: 0,
+    onlyHealthy: false,
+    hideTags: false,
+    sortBy: "name",
+    filterTags: [],
+    filterRegions: [],
+    nodeIds: []
   };
 }
 
@@ -259,69 +259,6 @@ function defaultSubscriptionImport() {
     name: "外部原始内容",
     content: ""
   };
-}
-
-function formatBytes(value) {
-  const bytes = Number(value || 0);
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-  let size = bytes;
-  let index = 0;
-  while (size >= 1024 && index < units.length - 1) {
-    size /= 1024;
-    index += 1;
-  }
-  const digits = size >= 100 || index === 0 ? 0 : size >= 10 ? 1 : 2;
-  return `${size.toFixed(digits)} ${units[index]}`;
-}
-
-function formatSpeed(value) {
-  return `${formatBytes(value)}/s`;
-}
-
-function formatPercent(value) {
-  return `${Math.round(Number(value || 0))}%`;
-}
-
-function formatUptime(seconds) {
-  const total = Math.max(0, Math.round(Number(seconds || 0)));
-  const days = Math.floor(total / 86400);
-  const hours = Math.floor((total % 86400) / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  if (days) return `${days}d ${hours}h`;
-  if (hours) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-}
-
-function StatusDot({ on }) {
-  return <span className={`dot ${on ? "ok" : ""}`} />;
-}
-
-function Layout({ page, setPage, children, headerExtra }) {
-  const navPage = ["detail", "config", "logs", "ssh"].includes(page) ? "servers" : page;
-  return (
-    <div className="app">
-      <aside>
-        <div className="brand">ChikenEasy</div>
-        {nav.map(([id, Icon, label]) => (
-          <button key={id} className={navPage === id ? "active" : ""} onClick={() => setPage(id)}>
-            <Icon size={18} />
-            {label}
-          </button>
-        ))}
-      </aside>
-      <main>
-        <header>
-          <strong>{nav.find(([id]) => id === navPage)?.[2] || "服务器"}</strong>
-          <div className="header-tools">
-            {headerExtra}
-            <span>admin</span>
-          </div>
-        </header>
-        {children}
-      </main>
-    </div>
-  );
 }
 
 function Panel({ title, right, children }) {
@@ -644,7 +581,7 @@ function AgentTable({ agents, openAgent, openSsh }) {
   );
 }
 
-function AgentDetail({ id, back, openConfig, openLogs, openSsh }) {
+function AgentDetail({ id, back, openConfig, openLogs, openSsh, openConsole, openMemos }) {
   const [agent, setAgent] = useState(null);
   const [result, setResult] = useState("-");
 
@@ -683,6 +620,8 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh }) {
         <button onClick={openConfig}>配置</button>
         <button onClick={openLogs}>日志</button>
         <button onClick={openSsh}>SSH</button>
+        <button onClick={openConsole}>SFTP</button>
+        <button onClick={openMemos}>关联笔记</button>
         <button className="red-bg" onClick={uninstall}>
           卸载 Agent
         </button>
@@ -737,6 +676,31 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh }) {
           </div>
         </Panel>
       </div>
+
+      <Panel title="关联笔记">
+        {agent.memos?.length ? (
+          <table>
+            <thead>
+              <tr>
+                <th>标题</th>
+                <th>标签</th>
+                <th>更新时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agent.memos.map((memo) => (
+                <tr key={memo.id}>
+                  <td>{memo.title}</td>
+                  <td>{joinTags(memo.tags) || "-"}</td>
+                  <td>{formatDateTime(memo.updatedAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty">这台服务器还没有关联备忘录。</div>
+        )}
+      </Panel>
     </section>
   );
 }
@@ -754,6 +718,12 @@ function TerminalPanel({ agentId, agentName, mode, connectNonce }) {
     let cleanup = () => {};
 
     (async () => {
+      try {
+        await ensureTokenSession();
+      } catch (sessionError) {
+        setError(sessionError.message);
+        return;
+      }
       const [{ Terminal: XTerm }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
       if (disposed) return;
 
@@ -1669,9 +1639,19 @@ function LogsPage({ id, back }) {
   const [count, setCount] = useState(200);
 
   useEffect(() => {
-    const source = new EventSource(buildAuthUrl(`/api/agents/${id}/logs/stream`, { lines: count }));
-    source.onmessage = (event) => setLines((current) => [...current, JSON.parse(event.data).line].slice(-1000));
-    return () => source.close();
+    let source;
+    let closed = false;
+    ensureTokenSession()
+      .then(() => {
+        if (closed) return;
+        source = new EventSource(buildAuthUrl(`/api/agents/${id}/logs/stream`, { lines: count }));
+        source.onmessage = (event) => setLines((current) => [...current, JSON.parse(event.data).line].slice(-1000));
+      })
+      .catch((error) => setLines([`[auth] ${error.message}`]));
+    return () => {
+      closed = true;
+      if (source) source.close();
+    };
   }, [id, count]);
 
   return (
@@ -1691,6 +1671,1160 @@ function LogsPage({ id, back }) {
       <Panel title={<><StatusDot on />实时日志</>} right={<span>{lines.length} 行</span>}>
         <pre className="logs">{lines.join("\n")}</pre>
       </Panel>
+    </section>
+  );
+}
+
+function MonitorPage({ openAgent }) {
+  const [summary, setSummary] = useState(null);
+  const [probes, setProbes] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [history, setHistory] = useState({ raw: [], aggregated: [] });
+  const [message, setMessage] = useState("");
+
+  const load = async () => {
+    try {
+      const [summaryData, probesData, eventData] = await Promise.all([api("/api/monitor/summary"), api("/api/public/probes"), api("/api/public/events")]);
+      setSummary(summaryData);
+      setProbes(probesData);
+      setEvents(eventData);
+      const fallbackId = selectedAgentId || probesData[0]?.id || "";
+      if (fallbackId && fallbackId !== selectedAgentId) setSelectedAgentId(fallbackId);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(() => {});
+    const timer = setInterval(() => load().catch(() => {}), 10000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedAgentId) return;
+    api(`/api/public/probes/history?agentId=${encodeURIComponent(selectedAgentId)}`)
+      .then(setHistory)
+      .catch((error) => setMessage(error.message));
+  }, [selectedAgentId]);
+
+  return (
+    <section>
+      <div className="stats">
+        <Card label="公开探针" value={summary?.total || 0} />
+        <Card label="在线" value={summary?.online || 0} green />
+        <Card label="离线" value={summary?.offline || 0} />
+        <Card label="地区数" value={summary?.regions || 0} blue />
+        <Card label="总流量" value={formatBytes(summary?.totalTraffic || 0)} />
+        <Card label="实时下行" value={formatSpeed(summary?.totalRxSpeed || 0)} />
+        <Card label="实时上行" value={formatSpeed(summary?.totalTxSpeed || 0)} />
+      </div>
+
+      <Panel title="公开探针卡片" right={<button onClick={() => load().catch(() => {})}>刷新</button>}>
+        {probes.length ? (
+          <div className="card-grid">
+            {probes.map((probe) => (
+              <div className="data-card" key={probe.id}>
+                <div className="data-card-head">
+                  <strong>{probe.flag ? `${probe.flag} ` : ""}{probe.name}</strong>
+                  <span>{probe.online ? "online" : "offline"}</span>
+                </div>
+                <p className="muted">{probe.group || "未分组"} / {probe.region || "未标注地区"}</p>
+                <p className="muted">CPU {formatPercent(probe.metrics?.cpuUsage)} / MEM {formatPercent(probe.metrics?.memoryUsage)} / DISK {formatPercent(probe.metrics?.diskUsage)}</p>
+                <p className="muted">↓ {formatSpeed(probe.metrics?.rxSpeed)} / ↑ {formatSpeed(probe.metrics?.txSpeed)}</p>
+                <div className="actions">
+                  <button onClick={() => setSelectedAgentId(probe.id)}>看历史</button>
+                  <button onClick={() => openAgent(probe.id)}>详情</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">暂时没有公开探针数据。</div>
+        )}
+      </Panel>
+
+      <div className="grid2">
+        <Panel
+          title="历史趋势"
+          right={
+            probes.length ? (
+              <select value={selectedAgentId} onChange={(event) => setSelectedAgentId(event.target.value)}>
+                {probes.map((probe) => (
+                  <option key={probe.id} value={probe.id}>
+                    {probe.name}
+                  </option>
+                ))}
+              </select>
+            ) : null
+          }
+        >
+          <ProbeTrends history={history} />
+        </Panel>
+
+        <Panel title="最近事件">
+          {events.length ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>类型</th>
+                  <th>节点</th>
+                  <th>消息</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.slice(0, 20).map((event) => (
+                  <tr key={event.id}>
+                    <td>{formatDateTime(event.updatedAt)}</td>
+                    <td>{event.type}</td>
+                    <td>{event.agentId}</td>
+                    <td>{event.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty">还没有公开事件。</div>
+          )}
+        </Panel>
+      </div>
+      {message ? <p className="panel-message">{message}</p> : null}
+    </section>
+  );
+}
+
+function NodePoolPage() {
+  const [nodes, setNodes] = useState([]);
+  const [sources, setSources] = useState([]);
+  const [accessRows, setAccessRows] = useState([]);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [importName, setImportName] = useState("manual-import");
+  const [importContent, setImportContent] = useState("");
+  const [sourceForm, setSourceForm] = useState({ name: "", url: "", username: "", password: "", removeMissing: false });
+  const [message, setMessage] = useState("");
+  const [checks, setChecks] = useState([]);
+
+  const load = async () => {
+    try {
+      const [nodeRows, sourceRows, accessLogRows] = await Promise.all([api("/api/node-pool"), api("/api/subscription-sources"), api("/api/subscription-access")]);
+      setNodes(nodeRows);
+      setSources(sourceRows);
+      setAccessRows(accessLogRows);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(() => {});
+  }, []);
+
+  const toggleSelected = (id) => {
+    setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  };
+
+  const importNodes = async () => {
+    try {
+      const response = await api("/api/node-pool/import", {
+        method: "POST",
+        body: JSON.stringify({ source: importName || "manual", content: importContent })
+      });
+      setMessage(`导入完成，节点池当前 ${response.nodes.length} 条，变更 ${response.changed} 条。`);
+      setImportContent("");
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const createSource = async () => {
+    try {
+      await api("/api/subscription-sources", {
+        method: "POST",
+        body: JSON.stringify(sourceForm)
+      });
+      setSourceForm({ name: "", url: "", username: "", password: "", removeMissing: false });
+      setMessage("订阅源已保存。");
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const syncSource = async (id) => {
+    try {
+      const response = await api(`/api/subscription-sources/${id}/sync`, { method: "POST" });
+      setMessage(`同步完成，导入 ${response.count} 条，变更 ${response.changed} 条。`);
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const runChecks = async () => {
+    try {
+      const response = await api("/api/node-pool/check", {
+        method: "POST",
+        body: JSON.stringify({ nodeIds: selectedIds, checkedBy: "server", timeoutMs: 5000 })
+      });
+      setChecks(response.results || []);
+      setMessage(`探测完成，共 ${response.results?.length || 0} 个节点。`);
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const exportNodes = async (format) => {
+    try {
+      const body = await fetchText(`/api/node-pool/export?format=${encodeURIComponent(format)}`);
+      await copyText(body);
+      setMessage(`${format} 导出结果已复制到剪贴板。`);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const removeNode = async (id) => {
+    if (!window.confirm("确认删除这个节点吗？")) return;
+    try {
+      await api(`/api/node-pool/${id}`, { method: "DELETE" });
+      setMessage("节点已删除。");
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  return (
+    <section>
+      <div className="grid2">
+        <Panel title="节点导入">
+          <div className="form-grid">
+            <Field label="来源名称" value={importName} onChange={setImportName} />
+            <Field label="原始内容" type="textarea" rows={10} value={importContent} onChange={setImportContent} placeholder="支持 vmess/vless/trojan/ss/hysteria2 URI、Clash/Mihomo YAML、sing-box outbound JSON、base64 订阅。" />
+          </div>
+          <div className="actions">
+            <button className="primary" onClick={importNodes}>导入节点</button>
+            <button onClick={() => exportNodes("base64")}>复制 Base64</button>
+            <button onClick={() => exportNodes("clash")}>复制 Clash</button>
+            <button onClick={() => exportNodes("sing-box")}>复制 sing-box</button>
+          </div>
+        </Panel>
+
+        <Panel title="订阅源同步">
+          <div className="form-grid">
+            <Field label="名称" value={sourceForm.name} onChange={(value) => setSourceForm((current) => ({ ...current, name: value }))} />
+            <Field label="URL" value={sourceForm.url} onChange={(value) => setSourceForm((current) => ({ ...current, url: value }))} />
+            <Field label="用户名" value={sourceForm.username} onChange={(value) => setSourceForm((current) => ({ ...current, username: value }))} />
+            <Field label="密码" type="password" value={sourceForm.password} onChange={(value) => setSourceForm((current) => ({ ...current, password: value }))} />
+          </div>
+          <div className="actions">
+            <button className="primary" onClick={createSource}>保存订阅源</button>
+          </div>
+          {sources.length ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>URL</th>
+                  <th>更新时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sources.map((source) => (
+                  <tr key={source.id}>
+                    <td>{source.name}</td>
+                    <td>{source.url || "-"}</td>
+                    <td>{formatDateTime(source.updatedAt)}</td>
+                    <td><button className="link" onClick={() => syncSource(source.id)}>立即同步</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty">还没有订阅源。</div>
+          )}
+        </Panel>
+      </div>
+
+      <Panel title="节点池" right={<button onClick={runChecks} disabled={!nodes.length}>批量 Proxy Check</button>}>
+        {nodes.length ? (
+          <table>
+            <thead>
+              <tr>
+                <th></th>
+                <th>名称</th>
+                <th>协议</th>
+                <th>地址</th>
+                <th>标签</th>
+                <th>地区</th>
+                <th>健康</th>
+                <th>分数</th>
+                <th>最近检查</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nodes.map((node) => (
+                <tr key={node.id}>
+                  <td><input type="checkbox" checked={selectedIds.includes(node.id)} onChange={() => toggleSelected(node.id)} /></td>
+                  <td>{node.name}</td>
+                  <td>{node.protocol}</td>
+                  <td>{node.address}:{node.port}</td>
+                  <td>{joinTags(node.tags) || "-"}</td>
+                  <td>{node.region || "-"}</td>
+                  <td>{node.health}</td>
+                  <td>{node.score}</td>
+                  <td>{formatDateTime(node.lastCheckAt)}</td>
+                  <td><button className="link" onClick={() => removeNode(node.id)}>删除</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty">还没有节点。</div>
+        )}
+      </Panel>
+
+      <div className="grid2">
+        <Panel title="最近检查结果">
+          {checks.length ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>节点</th>
+                  <th>结果</th>
+                  <th>延迟</th>
+                  <th>检查者</th>
+                  <th>错误</th>
+                </tr>
+              </thead>
+              <tbody>
+                {checks.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.nodeId}</td>
+                    <td>{row.ok ? "ok" : "fail"}</td>
+                    <td>{row.latency} ms</td>
+                    <td>{row.checkedBy}</td>
+                    <td>{row.error || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty">还没有探测结果。</div>
+          )}
+        </Panel>
+
+        <Panel title="订阅访问日志">
+          {accessRows.length ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>订阅</th>
+                  <th>来源 IP</th>
+                  <th>User-Agent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {accessRows.slice(0, 30).map((row) => (
+                  <tr key={row.id}>
+                    <td>{formatDateTime(row.at)}</td>
+                    <td>{row.profileId}</td>
+                    <td>{row.ip}</td>
+                    <td>{row.userAgent}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty">还没有访问记录。</div>
+          )}
+        </Panel>
+      </div>
+      {message ? <p className="panel-message">{message}</p> : null}
+    </section>
+  );
+}
+
+function MemoPreview({ content }) {
+  return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdownHtml(content) }} />;
+}
+
+function MemosPage({ agents, agentFilter = "", onClearAgentFilter }) {
+  const [rows, setRows] = useState([]);
+  const [files, setFiles] = useState([]);
+  const [query, setQuery] = useState("");
+  const [tag, setTag] = useState("");
+  const [form, setForm] = useState({
+    id: "",
+    title: "",
+    content: "",
+    tags: "",
+    visibility: "private",
+    pinned: false,
+    archived: false,
+    agentId: agentFilter || "",
+    nodeId: "",
+    forwardRuleId: ""
+  });
+  const [message, setMessage] = useState("");
+  const [uploading, setUploading] = useState(false);
+
+  const load = async () => {
+    try {
+      const queryParams = new URLSearchParams();
+      if (query) queryParams.set("q", query);
+      if (tag) queryParams.set("tag", tag);
+      if (agentFilter) queryParams.set("agentId", agentFilter);
+      const memoUrl = queryParams.size ? `/api/memos?${queryParams}` : "/api/memos";
+      const [memoRows, fileRows] = await Promise.all([api(memoUrl), api("/api/files")]);
+      setRows(memoRows);
+      setFiles(fileRows);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(() => {});
+  }, [query, tag, agentFilter]);
+
+  useEffect(() => {
+    if (agentFilter) setForm((current) => ({ ...current, agentId: agentFilter }));
+  }, [agentFilter]);
+
+  const resetForm = () => {
+    setForm({
+      id: "",
+      title: "",
+      content: "",
+      tags: "",
+      visibility: "private",
+      pinned: false,
+      archived: false,
+      agentId: agentFilter || "",
+      nodeId: "",
+      forwardRuleId: ""
+    });
+  };
+
+  const openMemo = (memo) => {
+    setForm({
+      id: memo.id,
+      title: memo.title,
+      content: memo.content,
+      tags: joinTags(memo.tags),
+      visibility: memo.visibility || "private",
+      pinned: Boolean(memo.pinned),
+      archived: Boolean(memo.archived),
+      agentId: memo.agentId || agentFilter || "",
+      nodeId: memo.nodeId || "",
+      forwardRuleId: memo.forwardRuleId || ""
+    });
+  };
+
+  const saveMemo = async () => {
+    try {
+      const payload = {
+        ...form,
+        tags: parseCommaList(form.tags)
+      };
+      const url = form.id ? `/api/memos/${form.id}` : "/api/memos";
+      const method = form.id ? "PUT" : "POST";
+      await api(url, { method, body: JSON.stringify(payload) });
+      setMessage(form.id ? "备忘录已更新。" : "备忘录已创建。");
+      resetForm();
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const deleteMemo = async () => {
+    if (!form.id) return;
+    if (!window.confirm("确认删除这条备忘录吗？")) return;
+    try {
+      await api(`/api/memos/${form.id}`, { method: "DELETE" });
+      setMessage("备忘录已删除。");
+      resetForm();
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const uploadAttachment = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file || !form.id) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("memoId", form.id);
+    formData.append("visibility", form.visibility);
+    formData.append("tags", form.tags);
+    try {
+      setUploading(true);
+      await uploadForm("/api/files/upload", formData);
+      setMessage("附件已上传。");
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setUploading(false);
+      event.target.value = "";
+    }
+  };
+
+  const downloadAttachment = async (file) => {
+    try {
+      await ensureTokenSession();
+      await downloadBinary(`/api/files/${file.id}/download`, file.name);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const removeAttachment = async (fileId) => {
+    if (!window.confirm("确认删除附件吗？")) return;
+    try {
+      await api(`/api/files/${fileId}`, { method: "DELETE" });
+      setMessage("附件已删除。");
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  return (
+    <section>
+      <div className="toolbar">
+        <input placeholder="搜索标题 / 正文 / 标签" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <input placeholder="按标签筛选" value={tag} onChange={(event) => setTag(event.target.value)} />
+        {agentFilter ? <button onClick={onClearAgentFilter}>清除服务器筛选</button> : null}
+        <button onClick={resetForm}>新建备忘录</button>
+      </div>
+
+      <div className="grid2">
+        <Panel title="备忘录列表">
+          {rows.length ? (
+            <div className="list-stack">
+              {rows.map((memo) => (
+                <button className={`list-card ${form.id === memo.id ? "active" : ""}`} key={memo.id} onClick={() => openMemo(memo)}>
+                  <strong>{memo.pinned ? "置顶 · " : ""}{memo.title}</strong>
+                  <span>{joinTags(memo.tags) || "无标签"} / {memo.visibility}</span>
+                  <span>{formatDateTime(memo.updatedAt)}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty">还没有备忘录。</div>
+          )}
+        </Panel>
+
+        <Panel title="编辑备忘录">
+          <div className="form-grid">
+            <Field label="标题" value={form.title} onChange={(value) => setForm((current) => ({ ...current, title: value }))} />
+            <Field label="标签" value={form.tags} onChange={(value) => setForm((current) => ({ ...current, tags: value }))} placeholder="ops, server, renewal" />
+            <Field label="可见性" type="select" value={form.visibility} onChange={(value) => setForm((current) => ({ ...current, visibility: value }))} options={[["private", "私有"], ["public", "公开"], ["link", "仅链接可见"]]} />
+            <Field label="关联服务器" type="select" value={form.agentId} onChange={(value) => setForm((current) => ({ ...current, agentId: value }))} options={[["", "未关联"], ...agents.map((agent) => [agent.id, agent.name])]} />
+            <label>
+              <span>置顶</span>
+              <input type="checkbox" checked={form.pinned} onChange={(event) => setForm((current) => ({ ...current, pinned: event.target.checked }))} />
+            </label>
+            <label>
+              <span>归档</span>
+              <input type="checkbox" checked={form.archived} onChange={(event) => setForm((current) => ({ ...current, archived: event.target.checked }))} />
+            </label>
+          </div>
+          <div className="subscription-editor">
+            <label>
+              Markdown
+              <textarea className="inline-textarea" rows={14} value={form.content} onChange={(event) => setForm((current) => ({ ...current, content: event.target.value }))} />
+            </label>
+          </div>
+          <div className="actions">
+            <button className="primary" onClick={saveMemo}>保存</button>
+            <button className="red-bg" onClick={deleteMemo} disabled={!form.id}>删除</button>
+            <label className="upload-label">
+              <input type="file" onChange={uploadAttachment} disabled={!form.id || uploading} />
+              {uploading ? "上传中..." : "上传附件"}
+            </label>
+          </div>
+          {message ? <p className="panel-message">{message}</p> : null}
+        </Panel>
+      </div>
+
+      <div className="grid2">
+        <Panel title="Markdown 预览">
+          <MemoPreview content={form.content} />
+        </Panel>
+
+        <Panel title="附件与文件">
+          {form.id ? (
+            form.id && rows.find((memo) => memo.id === form.id)?.attachments?.length ? (
+              <table>
+                <thead>
+                  <tr>
+                    <th>名称</th>
+                    <th>类型</th>
+                    <th>大小</th>
+                    <th>时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.find((memo) => memo.id === form.id)?.attachments?.map((file) => (
+                    <tr key={file.id}>
+                      <td>{file.name}</td>
+                      <td>{file.mimeType}</td>
+                      <td>{formatBytes(file.size)}</td>
+                      <td>{formatDateTime(file.uploadedAt)}</td>
+                      <td className="actions-cell">
+                        <button className="link" onClick={() => downloadAttachment(file)}>下载</button>
+                        <button className="link" onClick={() => removeAttachment(file.id)}>删除</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="empty">当前备忘录还没有附件。</div>
+            )
+          ) : (
+            <div className="empty">先保存一条备忘录，才能上传附件。</div>
+          )}
+
+          <div className="sub-panel">
+            <h3>全部文件</h3>
+            {files.length ? (
+              <table>
+                <thead>
+                  <tr>
+                    <th>名称</th>
+                    <th>关联 Memo</th>
+                    <th>标签</th>
+                    <th>引用</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {files.slice(0, 20).map((file) => (
+                    <tr key={file.id}>
+                      <td>{file.name}</td>
+                      <td>{file.memoId || "-"}</td>
+                      <td>{joinTags(file.tags) || "-"}</td>
+                      <td>{file.refCount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="empty">还没有文件。</div>
+            )}
+          </div>
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
+function WorkspacePage({ agents, openSsh, openConsole }) {
+  const [assets, setAssets] = useState([]);
+  const [credentials, setCredentials] = useState([]);
+  const [scripts, setScripts] = useState([]);
+  const [runs, setRuns] = useState([]);
+  const [assetForm, setAssetForm] = useState({ id: "", agentId: "", displayName: "", host: "", ip: "", port: 22, username: "root", group: "", tags: "", provider: "", region: "", note: "", public: true, publicName: "", publicGroup: "", publicRegion: "", publicFlag: "" });
+  const [credentialForm, setCredentialForm] = useState({ name: "", host: "", port: 22, username: "root", mode: "password", password: "", privateKey: "", note: "" });
+  const [scriptForm, setScriptForm] = useState({ id: "", name: "uptime", content: "uptime", category: "ops", tags: "uptime", timeoutMs: 30000 });
+  const [batchAgentIds, setBatchAgentIds] = useState([]);
+  const [message, setMessage] = useState("");
+
+  const load = async () => {
+    try {
+      const [assetRows, credentialRows, scriptRows, runRows] = await Promise.all([api("/api/assets"), api("/api/credentials"), api("/api/scripts"), api("/api/command-runs")]);
+      setAssets(assetRows);
+      setCredentials(credentialRows);
+      setScripts(scriptRows);
+      setRuns(runRows);
+      if (!batchAgentIds.length) setBatchAgentIds(agents.map((agent) => agent.id));
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(() => {});
+  }, [agents.length]);
+
+  const saveAsset = async () => {
+    try {
+      const payload = { ...assetForm, tags: parseCommaList(assetForm.tags) };
+      const url = assetForm.id ? `/api/assets/${assetForm.id}` : "/api/assets";
+      const method = assetForm.id ? "PUT" : "POST";
+      await api(url, { method, body: JSON.stringify(payload) });
+      setMessage("服务器资产已保存。");
+      setAssetForm({ id: "", agentId: "", displayName: "", host: "", ip: "", port: 22, username: "root", group: "", tags: "", provider: "", region: "", note: "", public: true, publicName: "", publicGroup: "", publicRegion: "", publicFlag: "" });
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const saveCredential = async () => {
+    try {
+      await api("/api/credentials", { method: "POST", body: JSON.stringify(credentialForm) });
+      setMessage("凭据已保存。");
+      setCredentialForm({ name: "", host: "", port: 22, username: "root", mode: "password", password: "", privateKey: "", note: "" });
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const testCredential = async (id) => {
+    try {
+      const response = await api(`/api/credentials/${id}/test`, { method: "POST" });
+      setMessage(response.output || "凭据测试通过。");
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const revokeCredential = async (id) => {
+    if (!window.confirm("确认撤销这份凭据吗？")) return;
+    try {
+      await api(`/api/credentials/${id}`, { method: "DELETE" });
+      setMessage("凭据已撤销。");
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const saveScript = async () => {
+    try {
+      const payload = { ...scriptForm, tags: parseCommaList(scriptForm.tags) };
+      const url = scriptForm.id ? `/api/scripts/${scriptForm.id}` : "/api/scripts";
+      const method = scriptForm.id ? "PUT" : "POST";
+      await api(url, { method, body: JSON.stringify(payload) });
+      setMessage("脚本已保存。");
+      setScriptForm({ id: "", name: "uptime", content: "uptime", category: "ops", tags: "uptime", timeoutMs: 30000 });
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const runBatch = async () => {
+    try {
+      const script = scripts.find((item) => item.name === scriptForm.name) || scripts.find((item) => item.id === scriptForm.id);
+      const response = await api("/api/scripts/run-batch", {
+        method: "POST",
+        body: JSON.stringify({
+          scriptId: script?.id || "",
+          command: script ? "" : scriptForm.content,
+          agentIds: batchAgentIds,
+          concurrency: 2,
+          timeoutMs: Number(scriptForm.timeoutMs || 30000)
+        })
+      });
+      setMessage(`批量命令已执行，共 ${response.results?.length || 0} 台。`);
+      load().catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  return (
+    <section>
+      <div className="grid2">
+        <Panel title="服务器资产">
+          <div className="form-grid">
+            <Field label="关联 Agent" type="select" value={assetForm.agentId} onChange={(value) => setAssetForm((current) => ({ ...current, agentId: value }))} options={[["", "不关联"], ...agents.map((agent) => [agent.id, agent.name])]} />
+            <Field label="显示名称" value={assetForm.displayName} onChange={(value) => setAssetForm((current) => ({ ...current, displayName: value }))} />
+            <Field label="Host" value={assetForm.host} onChange={(value) => setAssetForm((current) => ({ ...current, host: value }))} />
+            <Field label="IP" value={assetForm.ip} onChange={(value) => setAssetForm((current) => ({ ...current, ip: value }))} />
+            <Field label="用户名" value={assetForm.username} onChange={(value) => setAssetForm((current) => ({ ...current, username: value }))} />
+            <Field label="标签" value={assetForm.tags} onChange={(value) => setAssetForm((current) => ({ ...current, tags: value }))} />
+          </div>
+          <div className="actions">
+            <button className="primary" onClick={saveAsset}>保存资产</button>
+          </div>
+          {assets.length ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>Agent</th>
+                  <th>地址</th>
+                  <th>标签</th>
+                </tr>
+              </thead>
+              <tbody>
+                {assets.map((asset) => (
+                  <tr key={asset.id}>
+                    <td>{asset.displayName}</td>
+                    <td>{asset.agentId || "-"}</td>
+                    <td>{asset.host || asset.ip || "-"}</td>
+                    <td>{joinTags(asset.tags) || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty">还没有服务器资产。</div>
+          )}
+        </Panel>
+
+        <Panel title="凭据托管">
+          <div className="form-grid">
+            <Field label="名称" value={credentialForm.name} onChange={(value) => setCredentialForm((current) => ({ ...current, name: value }))} />
+            <Field label="Host" value={credentialForm.host} onChange={(value) => setCredentialForm((current) => ({ ...current, host: value }))} />
+            <Field label="用户名" value={credentialForm.username} onChange={(value) => setCredentialForm((current) => ({ ...current, username: value }))} />
+            <Field label="认证方式" type="select" value={credentialForm.mode} onChange={(value) => setCredentialForm((current) => ({ ...current, mode: value }))} options={[["password", "密码"], ["privateKey", "私钥"]]} />
+            {credentialForm.mode === "password" ? <Field label="密码" type="password" value={credentialForm.password} onChange={(value) => setCredentialForm((current) => ({ ...current, password: value }))} /> : null}
+            {credentialForm.mode === "privateKey" ? <Field label="私钥" type="textarea" rows={6} value={credentialForm.privateKey} onChange={(value) => setCredentialForm((current) => ({ ...current, privateKey: value }))} /> : null}
+          </div>
+          <div className="actions">
+            <button className="primary" onClick={saveCredential}>保存凭据</button>
+          </div>
+          {credentials.length ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>Host</th>
+                  <th>认证</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {credentials.map((credential) => (
+                  <tr key={credential.id}>
+                    <td>{credential.name}</td>
+                    <td>{credential.host}:{credential.port}</td>
+                    <td>{credential.mode}</td>
+                    <td>{credential.revokedAt ? "revoked" : "active"}</td>
+                    <td className="actions-cell">
+                      <button className="link" onClick={() => testCredential(credential.id)}>测试</button>
+                      <button className="link" onClick={() => revokeCredential(credential.id)}>撤销</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty">还没有凭据。</div>
+          )}
+        </Panel>
+      </div>
+
+      <div className="grid2">
+        <Panel title="脚本库与批量命令">
+          <div className="form-grid">
+            <Field label="脚本名称" value={scriptForm.name} onChange={(value) => setScriptForm((current) => ({ ...current, name: value }))} />
+            <Field label="分类" value={scriptForm.category} onChange={(value) => setScriptForm((current) => ({ ...current, category: value }))} />
+            <Field label="标签" value={scriptForm.tags} onChange={(value) => setScriptForm((current) => ({ ...current, tags: value }))} />
+            <Field label="超时毫秒" type="number" value={scriptForm.timeoutMs} onChange={(value) => setScriptForm((current) => ({ ...current, timeoutMs: value }))} />
+            <Field label="命令内容" type="textarea" rows={10} value={scriptForm.content} onChange={(value) => setScriptForm((current) => ({ ...current, content: value }))} />
+          </div>
+          <div className="actions">
+            <button className="primary" onClick={saveScript}>保存脚本</button>
+            <button onClick={runBatch}>对选中服务器批量执行</button>
+          </div>
+          <div className="choice-grid">
+            {agents.map((agent) => (
+              <label key={agent.id} className="subscription-node">
+                <input type="checkbox" checked={batchAgentIds.includes(agent.id)} onChange={() => setBatchAgentIds((current) => (current.includes(agent.id) ? current.filter((item) => item !== agent.id) : [...current, agent.id]))} />
+                <div>
+                  <strong>{agent.name}</strong>
+                  <span>{agent.host || agent.ip}</span>
+                </div>
+              </label>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel title="脚本结果与快捷入口">
+          <div className="actions">
+            {agents.map((agent) => (
+              <React.Fragment key={agent.id}>
+                <button onClick={() => openSsh(agent.id)}>SSH {agent.name}</button>
+                <button onClick={() => openConsole(agent.id)}>SFTP {agent.name}</button>
+              </React.Fragment>
+            ))}
+          </div>
+          {runs.length ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>脚本 / 命令</th>
+                  <th>目标</th>
+                  <th>结果</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.slice(0, 20).map((run) => (
+                  <tr key={run.id}>
+                    <td>{formatDateTime(run.createdAt || run.at)}</td>
+                    <td>{run.scriptId || run.command}</td>
+                    <td>{joinTags(run.agentIds || (run.agentId ? [run.agentId] : []))}</td>
+                    <td><code>{JSON.stringify(run.results || run.output).slice(0, 240)}</code></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty">还没有执行记录。</div>
+          )}
+        </Panel>
+      </div>
+      {message ? <p className="panel-message">{message}</p> : null}
+    </section>
+  );
+}
+
+function ConsolePage({ agents, agentId, setAgentId }) {
+  const [pathValue, setPathValue] = useState("/");
+  const [rows, setRows] = useState([]);
+  const [message, setMessage] = useState("");
+  const [renameForm, setRenameForm] = useState({ oldPath: "", newPath: "" });
+
+  const currentAgentId = agentId || agents[0]?.id || "";
+
+  const load = async (nextPath = pathValue) => {
+    if (!currentAgentId) return;
+    try {
+      const response = await api(`/api/agents/${currentAgentId}/sftp?path=${encodeURIComponent(nextPath)}`);
+      setRows(response.entries || []);
+      setPathValue(response.path || nextPath);
+      setMessage("");
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  useEffect(() => {
+    if (!agentId && agents[0]) setAgentId(agents[0].id);
+  }, [agentId, agents]);
+
+  useEffect(() => {
+    if (currentAgentId) load("/").catch(() => {});
+  }, [currentAgentId]);
+
+  const goTo = (entry) => {
+    if (!entry.isDirectory) return;
+    const next = pathValue === "/" ? `/${entry.name}` : `${pathValue}/${entry.name}`;
+    load(next).catch(() => {});
+  };
+
+  const uploadRemote = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file || !currentAgentId) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("directory", pathValue);
+    try {
+      await uploadForm(`/api/agents/${currentAgentId}/sftp/upload`, formData);
+      setMessage("远程上传完成。");
+      load(pathValue).catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const downloadRemote = async (entry) => {
+    try {
+      await ensureTokenSession();
+      const fullPath = pathValue === "/" ? `/${entry.name}` : `${pathValue}/${entry.name}`;
+      await downloadBinary(`/api/agents/${currentAgentId}/sftp/download?path=${encodeURIComponent(fullPath)}`, entry.name);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const deleteRemote = async (entry) => {
+    if (!window.confirm(`确认删除 ${entry.name} 吗？`)) return;
+    try {
+      const fullPath = pathValue === "/" ? `/${entry.name}` : `${pathValue}/${entry.name}`;
+      await api(`/api/agents/${currentAgentId}/sftp?path=${encodeURIComponent(fullPath)}`, { method: "DELETE" });
+      setMessage("远程文件已删除。");
+      load(pathValue).catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const mkdirRemote = async () => {
+    const name = window.prompt("请输入目录名");
+    if (!name) return;
+    try {
+      const nextPath = pathValue === "/" ? `/${name}` : `${pathValue}/${name}`;
+      await api(`/api/agents/${currentAgentId}/sftp/mkdir`, { method: "POST", body: JSON.stringify({ path: nextPath }) });
+      setMessage("目录已创建。");
+      load(pathValue).catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const renameRemote = async () => {
+    if (!renameForm.oldPath || !renameForm.newPath) return;
+    try {
+      await api(`/api/agents/${currentAgentId}/sftp/rename`, { method: "POST", body: JSON.stringify(renameForm) });
+      setMessage("重命名完成。");
+      setRenameForm({ oldPath: "", newPath: "" });
+      load(pathValue).catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  return (
+    <section>
+      <div className="toolbar">
+        <select value={currentAgentId} onChange={(event) => setAgentId(event.target.value)}>
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+        </select>
+        <input value={pathValue} onChange={(event) => setPathValue(event.target.value)} />
+        <button onClick={() => load(pathValue).catch(() => {})}>列目录</button>
+        <button onClick={mkdirRemote}>新建目录</button>
+        <label className="upload-label">
+          <input type="file" onChange={uploadRemote} />
+          上传文件
+        </label>
+      </div>
+
+      <div className="grid2">
+        <Panel title="SFTP 文件管理">
+          {rows.length ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>大小</th>
+                  <th>修改时间</th>
+                  <th>类型</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((entry) => (
+                  <tr key={`${entry.name}-${entry.modifiedAt}`}>
+                    <td>{entry.name}</td>
+                    <td>{entry.isDirectory ? "-" : formatBytes(entry.size)}</td>
+                    <td>{formatDateTime(entry.modifiedAt)}</td>
+                    <td>{entry.isDirectory ? "dir" : "file"}</td>
+                    <td className="actions-cell">
+                      {entry.isDirectory ? <button className="link" onClick={() => goTo(entry)}>进入</button> : <button className="link" onClick={() => downloadRemote(entry)}>下载</button>}
+                      {!entry.isDirectory ? <button className="link" onClick={() => deleteRemote(entry)}>删除</button> : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty">目录为空或尚未读取。</div>
+          )}
+        </Panel>
+
+        <Panel title="重命名与快捷命令">
+          <div className="form-grid">
+            <Field label="旧路径" value={renameForm.oldPath} onChange={(value) => setRenameForm((current) => ({ ...current, oldPath: value }))} placeholder="/tmp/a.txt" />
+            <Field label="新路径" value={renameForm.newPath} onChange={(value) => setRenameForm((current) => ({ ...current, newPath: value }))} placeholder="/tmp/b.txt" />
+          </div>
+          <div className="actions">
+            <button className="primary" onClick={renameRemote}>执行重命名</button>
+          </div>
+          <div className="panel-tip">远程文件操作全部写入审计日志，路径会经过标准化处理，避免目录穿越。</div>
+          {message ? <pre>{message}</pre> : null}
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
+function SettingsPage() {
+  const [settings, setSettings] = useState(null);
+  const [message, setMessage] = useState("");
+
+  const load = () => api("/api/settings").then(setSettings).catch((error) => setMessage(error.message));
+
+  useEffect(() => {
+    load().catch(() => {});
+  }, []);
+
+  const save = async () => {
+    try {
+      const response = await api("/api/settings", { method: "PUT", body: JSON.stringify(settings) });
+      setSettings(response);
+      setMessage("设置已保存。");
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const testNotification = async () => {
+    try {
+      await api("/api/settings/notifications/test", { method: "POST" });
+      setMessage("测试通知已发送。");
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  if (!settings) return null;
+
+  return (
+    <section>
+      <div className="grid2">
+        <Panel title="监控与告警设置">
+          <div className="form-grid">
+            <Field label="公开页刷新秒数" type="number" value={settings.publicProbeRefreshSec} onChange={(value) => setSettings((current) => ({ ...current, publicProbeRefreshSec: Number(value || 10) }))} />
+            <Field label="CPU 阈值" type="number" value={settings.alerts?.cpuThreshold || 90} onChange={(value) => setSettings((current) => ({ ...current, alerts: { ...current.alerts, cpuThreshold: Number(value || 90) } }))} />
+            <Field label="内存阈值" type="number" value={settings.alerts?.memoryThreshold || 90} onChange={(value) => setSettings((current) => ({ ...current, alerts: { ...current.alerts, memoryThreshold: Number(value || 90) } }))} />
+            <Field label="磁盘阈值" type="number" value={settings.alerts?.diskThreshold || 90} onChange={(value) => setSettings((current) => ({ ...current, alerts: { ...current.alerts, diskThreshold: Number(value || 90) } }))} />
+            <Field label="冷却分钟" type="number" value={settings.alerts?.cooldownMinutes || 30} onChange={(value) => setSettings((current) => ({ ...current, alerts: { ...current.alerts, cooldownMinutes: Number(value || 30) } }))} />
+            <Field label="Telegram Chat ID" value={settings.telegramChatId || ""} onChange={(value) => setSettings((current) => ({ ...current, telegramChatId: value }))} />
+          </div>
+          <div className="actions">
+            <button className="primary" onClick={save}>保存设置</button>
+            <button onClick={testNotification}>测试通知</button>
+          </div>
+        </Panel>
+
+        <Panel title="安全状态">
+          <div className="panel-stack">
+            <p className="muted">Query token: {settings.queryTokenEnabled ? "enabled" : "disabled"}</p>
+            <p className="muted">Master key: {settings.masterKeySet ? "set" : "missing"}</p>
+            <p className="muted">Storage mode: {settings.storageMode}</p>
+            {settings.hasTelegramToken ? <p className="muted">Telegram token 已配置</p> : <p className="muted">Telegram token 未配置</p>}
+            {settings.hasWebhookUrl ? <p className="muted">Webhook 已配置</p> : <p className="muted">Webhook 未配置</p>}
+          </div>
+          {settings.warnings?.length ? (
+            <div className="warning-list">
+              {settings.warnings.map((warning) => (
+                <p key={warning}>{warning}</p>
+              ))}
+            </div>
+          ) : (
+            <div className="empty">当前没有额外警告。</div>
+          )}
+        </Panel>
+      </div>
+      {message ? <p className="panel-message">{message}</p> : null}
     </section>
   );
 }
@@ -1865,17 +2999,18 @@ function App() {
   const [agents, setAgents] = useState([]);
   const [tokenDraft, setTokenDraft] = useState("");
   const [tokenReady, setTokenReady] = useState(false);
+  const [memoAgentFilter, setMemoAgentFilter] = useState("");
 
   useEffect(() => {
     const url = new URL(window.location.href);
     const urlToken = String(url.searchParams.get(URL_TOKEN_PARAM) || "").trim();
-    const storedToken = String(window.localStorage.getItem(TOKEN_KEY) || "").trim();
+    const storedToken = String(loadStoredToken() || "").trim();
     const nextToken = urlToken || storedToken;
 
     if (urlToken) {
       url.searchParams.delete(URL_TOKEN_PARAM);
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-      window.localStorage.setItem(TOKEN_KEY, urlToken);
+      persistToken(urlToken);
     }
 
     setActiveApiToken(nextToken);
@@ -1895,15 +3030,15 @@ function App() {
   const saveToken = () => {
     const token = tokenDraft.trim();
     setActiveApiToken(token);
-    if (token) window.localStorage.setItem(TOKEN_KEY, token);
-    else window.localStorage.removeItem(TOKEN_KEY);
+    persistToken(token);
+    ensureTokenSession(token).catch(() => {});
     loadAgents().catch(() => {});
   };
 
   const clearToken = () => {
     setTokenDraft("");
     setActiveApiToken("");
-    window.localStorage.removeItem(TOKEN_KEY);
+    persistToken("");
   };
 
   const openAgent = (id) => {
@@ -1916,12 +3051,28 @@ function App() {
     setPage("ssh");
   };
 
+  const openConsole = (id) => {
+    setAgentId(id);
+    setPage("console");
+  };
+
+  const openAgentMemos = (id) => {
+    setAgentId(id);
+    setMemoAgentFilter(id);
+    setPage("memos");
+  };
+
   const content = useMemo(() => {
     if (page === "dashboard") return <Dashboard openAgent={openAgent} openSsh={openSsh} />;
     if (page === "servers") return <Servers openAgent={openAgent} openSsh={openSsh} />;
+    if (page === "console") return <ConsolePage agents={agents} agentId={agentId} setAgentId={setAgentId} />;
     if (page === "nodes") return <NodeWizard agents={agents} />;
+    if (page === "node-pool") return <NodePoolPage />;
     if (page === "subscriptions") return <SubscriptionsPage />;
     if (page === "forward") return <ForwardWizard agents={agents} />;
+    if (page === "monitor") return <MonitorPage openAgent={openAgent} />;
+    if (page === "workspace") return <WorkspacePage agents={agents} openSsh={openSsh} openConsole={openConsole} />;
+    if (page === "memos") return <MemosPage agents={agents} agentFilter={memoAgentFilter} onClearAgentFilter={() => setMemoAgentFilter("")} />;
     if (page === "detail") {
       return (
         <AgentDetail
@@ -1930,6 +3081,8 @@ function App() {
           openConfig={() => setPage("config")}
           openLogs={() => setPage("logs")}
           openSsh={() => setPage("ssh")}
+          openConsole={() => openConsole(agentId)}
+          openMemos={() => openAgentMemos(agentId)}
         />
       );
     }
@@ -1940,8 +3093,9 @@ function App() {
       return <ApiTokens tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} saveToken={saveToken} clearToken={clearToken} activeToken={getActiveApiToken()} />;
     }
     if (page === "audit") return <Audit />;
+    if (page === "settings") return <SettingsPage />;
     return <Tutorial />;
-  }, [page, agentId, agents, tokenDraft]);
+  }, [page, agentId, agents, tokenDraft, memoAgentFilter]);
 
   return (
     <Layout

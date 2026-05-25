@@ -3,6 +3,10 @@ import os from "os";
 import fs from "fs";
 import path from "path";
 import { exec, execFile } from "child_process";
+import http from "http";
+import https from "https";
+import net from "net";
+import tls from "tls";
 import { nanoid } from "nanoid";
 import { buildForwardPlan } from "../shared/configFactory.js";
 import { createProbeCollector } from "./systemProbe.js";
@@ -20,11 +24,14 @@ const singboxImage = process.env.SINGBOX_IMAGE || "ghcr.io/sagernet/sing-box:lat
 const singboxConfigVolume = process.env.SINGBOX_CONFIG_VOLUME || "chiken-singbox-config";
 const realmImage = process.env.CHIKEN_REALM_IMAGE || "4points/realm:latest";
 const gostImage = process.env.CHIKEN_GOST_IMAGE || "gogost/gost:latest";
+const proxyCheckUrl = process.env.CHIKEN_PROXY_CHECK_URL || "https://www.gstatic.com/generate_204";
 const probeIntervalMs = Math.max(3000, Math.min(30000, (Number(process.env.CHIKEN_PROBE_INTERVAL || 5) || 5) * 1000));
 const collectProbe = createProbeCollector({ hostRoot });
+const proxyCheckStateDir = path.join(stateDir, "proxy-check");
 
 fs.mkdirSync(stateDir, { recursive: true });
 fs.mkdirSync(forwardDir, { recursive: true });
+fs.mkdirSync(proxyCheckStateDir, { recursive: true });
 
 function readState() {
   if (fs.existsSync(stateFile)) return JSON.parse(fs.readFileSync(stateFile, "utf8"));
@@ -51,6 +58,213 @@ function runShell(command, options = {}) {
 
 async function runDocker(args, options = {}) {
   return run("docker", args, { timeout: 60000, ...options });
+}
+
+async function ensureDockerImage(image) {
+  const inspect = await runDocker(["image", "inspect", image], { timeout: 30000 });
+  if (inspect.ok) return { ok: true, image, present: true, pulled: false, output: "image present locally" };
+
+  const pull = await runDocker(["pull", image], { timeout: 180000 });
+  if (pull.ok) return { ok: true, image, present: true, pulled: true, output: "image pulled successfully" };
+
+  return {
+    ok: false,
+    image,
+    present: false,
+    pulled: false,
+    output: pull.output || inspect.output || `failed to pull ${image}`
+  };
+}
+
+async function probeForwardImage(engine) {
+  const image = engine === "realm" ? realmImage : engine === "gost" ? gostImage : singboxImage;
+  const result = await ensureDockerImage(image);
+  return {
+    ok: result.ok,
+    engine,
+    image,
+    present: Boolean(result.present),
+    pulled: Boolean(result.pulled),
+    output: result.output
+  };
+}
+
+function splitAuth(auth) {
+  const raw = String(auth || "");
+  const index = raw.indexOf(":");
+  if (index < 0) return { username: raw, password: "" };
+  return {
+    username: raw.slice(0, index),
+    password: raw.slice(index + 1)
+  };
+}
+
+function randomLocalPort() {
+  return 20000 + Math.floor(Math.random() * 20000);
+}
+
+function buildProxyCheckOutbound(node) {
+  const protocol = String(node.protocol || "").trim().toLowerCase();
+  if (protocol === "ss" || protocol === "shadowsocks") {
+    return {
+      type: "shadowsocks",
+      tag: "proxy",
+      server: node.address,
+      server_port: Number(node.port),
+      method: node.ss?.method || node.method || "aes-256-gcm",
+      password: node.password
+    };
+  }
+  if (protocol === "http") {
+    const auth = splitAuth(node.auth);
+    return {
+      type: "http",
+      tag: "proxy",
+      server: node.address,
+      server_port: Number(node.port),
+      username: auth.username || undefined,
+      password: auth.password || undefined
+    };
+  }
+  if (protocol === "socks" || protocol === "mixed") {
+    const auth = splitAuth(node.auth);
+    return {
+      type: "socks",
+      tag: "proxy",
+      server: node.address,
+      server_port: Number(node.port),
+      version: "5",
+      username: auth.username || undefined,
+      password: auth.password || undefined
+    };
+  }
+  return null;
+}
+
+function buildProxyCheckConfig(node, listenPort) {
+  const outbound = buildProxyCheckOutbound(node);
+  if (!outbound) return null;
+  return {
+    log: { level: "warn" },
+    inbounds: [
+      {
+        type: "mixed",
+        tag: "mixed-in",
+        listen: "127.0.0.1",
+        listen_port: listenPort
+      }
+    ],
+    outbounds: [
+      outbound,
+      { type: "direct", tag: "direct" }
+    ],
+    route: {
+      final: "proxy"
+    }
+  };
+}
+
+async function waitForLocalPort(port, timeoutMs = 10000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const result = await new Promise((resolve) => {
+      const socket = new net.Socket();
+      let settled = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        resolve(ok);
+      };
+      socket.setTimeout(800);
+      socket.once("connect", () => finish(true));
+      socket.once("timeout", () => finish(false));
+      socket.once("error", () => finish(false));
+      socket.connect(port, "127.0.0.1");
+    });
+    if (result) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+async function startTemporaryProxy(node) {
+  const config = buildProxyCheckConfig(node, randomLocalPort());
+  if (!config) return { ok: false, error: "unsupported protocol", unsupported: true };
+  const imageReady = await ensureDockerImage(singboxImage);
+  if (!imageReady.ok) return { ok: false, error: imageReady.output || "failed to ensure sing-box image" };
+
+  const listenPort = config.inbounds[0].listen_port;
+  const runId = `${cleanProxyName(node.id || node.name || nanoid(6))}-${listenPort}`;
+  const containerName = `chiken-proxy-check-${runId}`.slice(0, 63);
+  const dir = path.join(proxyCheckStateDir, runId);
+  fs.mkdirSync(dir, { recursive: true });
+  const configBase64 = Buffer.from(JSON.stringify(config, null, 2)).toString("base64");
+  const networkMode =
+    serviceMode === "docker"
+      ? process.env.HOSTNAME
+        ? `container:${process.env.HOSTNAME}`
+        : "host"
+      : "host";
+
+  await runDocker(["rm", "-f", containerName], { timeout: 15000 });
+  const result = await runDocker(
+    [
+      "run",
+      "-d",
+      "--name",
+      containerName,
+      "--network",
+      networkMode,
+      "--entrypoint",
+      "sh",
+      "-e",
+      `CHIKEN_PROXY_CONFIG_B64=${configBase64}`,
+      singboxImage,
+      "-lc",
+      'echo "$CHIKEN_PROXY_CONFIG_B64" | base64 -d >/tmp/config.json && sing-box run -c /tmp/config.json'
+    ],
+    { timeout: 120000 }
+  );
+
+  if (!result.ok) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    return { ok: false, error: result.output || "failed to start temporary sing-box proxy" };
+  }
+
+  const ready = await waitForLocalPort(listenPort, 12000);
+  if (!ready) {
+    const logs = await runDocker(["logs", "--tail", "100", containerName], { timeout: 30000 });
+    const inspect = await runDocker(["inspect", "-f", "{{.State.Status}}", containerName], { timeout: 15000 });
+    await runDocker(["rm", "-f", containerName], { timeout: 30000 });
+    fs.rmSync(dir, { recursive: true, force: true });
+    return {
+      ok: false,
+      error: [logs.output, inspect.output ? `state=${inspect.output}` : "", "temporary proxy did not become ready"].filter(Boolean).join("; ")
+    };
+  }
+
+  return {
+    ok: true,
+    listenPort,
+    containerName,
+    dir,
+    protocol: String(node.protocol || "").trim().toLowerCase()
+  };
+}
+
+async function stopTemporaryProxy(temp) {
+  if (!temp) return;
+  await runDocker(["rm", "-f", temp.containerName], { timeout: 30000 });
+  fs.rmSync(temp.dir, { recursive: true, force: true });
+}
+
+function cleanProxyName(value) {
+  return String(value || "node")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24) || "node";
 }
 
 async function service(action) {
@@ -172,6 +386,324 @@ async function tailLogs(lines = 200) {
   return run("journalctl", ["-u", process.env.SINGBOX_SERVICE || "sing-box", "-n", String(lines), "--no-pager"]);
 }
 
+function buildProxyRequestOptions(url, proxyNode) {
+  const target = new URL(url);
+  const timeoutMs = Math.max(1000, Number(proxyNode.timeoutMs || 15000) || 15000);
+  const headers = {
+    Host: target.host,
+    Connection: "close",
+    "User-Agent": "chiken-easy-proxy-check/1.0"
+  };
+
+  if (proxyNode.protocol === "http") {
+    if (proxyNode.auth) headers["Proxy-Authorization"] = `Basic ${Buffer.from(proxyNode.auth).toString("base64")}`;
+    return {
+      transport: target.protocol === "https:" ? https : http,
+      options: {
+        host: proxyNode.address,
+        port: Number(proxyNode.port),
+        method: "GET",
+        path: url,
+        headers,
+        timeout: timeoutMs
+      }
+    };
+  }
+
+  return null;
+}
+
+function readResponseText(response) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    response.on("error", reject);
+  });
+}
+
+function checkHttpProxy(proxyNode, url) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const target = new URL(url);
+    const socket = net.createConnection({ host: proxyNode.address, port: Number(proxyNode.port) || 0 });
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({
+        ok: Boolean(result.ok),
+        latencyMs: Date.now() - startedAt,
+        statusCode: result.statusCode || 0,
+        exitIp: result.exitIp || "",
+        exitCountry: result.exitCountry || "",
+        error: result.error || "",
+        body: result.body || ""
+      });
+    };
+    socket.setTimeout(Math.max(1000, Number(proxyNode.timeoutMs || 15000) || 15000));
+    socket.once("timeout", () => finish({ ok: false, error: "timeout" }));
+    socket.once("error", (error) => finish({ ok: false, error: error.message || "socket error" }));
+    socket.once("connect", async () => {
+      try {
+        const headers = [`CONNECT ${target.hostname}:${Number(target.port || 443)} HTTP/1.1`, `Host: ${target.host}`, "Connection: close"];
+        if (proxyNode.auth) headers.push(`Proxy-Authorization: Basic ${Buffer.from(proxyNode.auth).toString("base64")}`);
+        socket.write(`${headers.join("\r\n")}\r\n\r\n`);
+        const head = await readSocketUntil(socket, "\r\n\r\n", Number(proxyNode.timeoutMs || 15000) || 15000);
+        const statusLine = head.split("\r\n")[0] || "";
+        const statusCode = Number(statusLine.split(" ")[1] || 0);
+        if (statusCode < 200 || statusCode >= 300) throw new Error(`HTTP CONNECT failed (${statusCode || "unknown"})`);
+
+        const secureSocket = tls.connect({
+          socket,
+          servername: target.hostname,
+          rejectUnauthorized: false
+        });
+        const request = [
+          `GET ${target.pathname || "/"}${target.search || ""} HTTP/1.1`,
+          `Host: ${target.host}`,
+          "Connection: close",
+          "User-Agent: chiken-easy-proxy-check/1.0",
+          "",
+          ""
+        ].join("\r\n");
+        secureSocket.write(request);
+        const responseText = await readTlsSocket(secureSocket, Number(proxyNode.timeoutMs || 15000) || 15000);
+        const match = responseText.match(/^HTTP\/1\.[01]\s+(\d+)/);
+        finish({
+          ok: Boolean(match && Number(match[1]) >= 200 && Number(match[1]) < 500),
+          statusCode: match ? Number(match[1]) : 0,
+          body: responseText
+        });
+      } catch (error) {
+        finish({ ok: false, error: error.message || "HTTP proxy check failed" });
+      }
+    });
+  });
+}
+
+function writeSocks5Address(bufferParts, host, port) {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    bufferParts.push(Buffer.from([0x01, ...host.split(".").map((part) => Number(part))]));
+  } else {
+    const hostBuffer = Buffer.from(host);
+    bufferParts.push(Buffer.from([0x03, hostBuffer.length]));
+    bufferParts.push(hostBuffer);
+  }
+  bufferParts.push(Buffer.from([Math.floor(port / 256), port % 256]));
+}
+
+function readSocketOnce(socket, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const onData = (chunk) => cleanup(() => resolve(Buffer.from(chunk)));
+    const onError = (error) => cleanup(() => reject(error));
+    const onClose = () => cleanup(() => reject(new Error("socket closed")));
+    const timer = setTimeout(() => cleanup(() => reject(new Error("timeout"))), timeoutMs);
+    const cleanup = (finish) => {
+      clearTimeout(timer);
+      socket.off("data", onData);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+      finish();
+    };
+    socket.once("data", onData);
+    socket.once("error", onError);
+    socket.once("close", onClose);
+  });
+}
+
+function readSocketUntil(socket, delimiter, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let text = "";
+    const onData = (chunk) => {
+      text += chunk.toString("utf8");
+      if (text.includes(delimiter)) cleanup(() => resolve(text));
+    };
+    const onError = (error) => cleanup(() => reject(error));
+    const onClose = () => cleanup(() => reject(new Error("socket closed")));
+    const timer = setTimeout(() => cleanup(() => reject(new Error("timeout"))), timeoutMs);
+    const cleanup = (finish) => {
+      clearTimeout(timer);
+      socket.off("data", onData);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+      finish();
+    };
+    socket.on("data", onData);
+    socket.once("error", onError);
+    socket.once("close", onClose);
+  });
+}
+
+function readTlsSocket(socket, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const timer = setTimeout(() => {
+      socket.destroy(new Error("timeout"));
+    }, timeoutMs);
+    socket.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    socket.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    socket.on("close", () => {
+      clearTimeout(timer);
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+  });
+}
+
+async function checkSocksProxy(proxyNode, url) {
+  const target = new URL(url);
+  const timeoutMs = Math.max(1000, Number(proxyNode.timeoutMs || 15000) || 15000);
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({
+        latencyMs: Date.now() - startedAt,
+        statusCode: result.statusCode || 0,
+        ok: Boolean(result.ok),
+        exitIp: result.exitIp || "",
+        exitCountry: result.exitCountry || "",
+        error: result.error || "",
+        body: result.body || ""
+      });
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once("timeout", () => finish({ ok: false, error: "timeout" }));
+    socket.once("error", (error) => finish({ ok: false, error: error.message || "socket error" }));
+
+    socket.connect(Number(proxyNode.port), proxyNode.address, async () => {
+      try {
+        const methods = [0x00];
+        if (proxyNode.auth) methods.push(0x02);
+        socket.write(Buffer.from([0x05, methods.length, ...methods]));
+        const greeting = await readSocketOnce(socket, timeoutMs);
+        if (greeting[1] === 0xff) throw new Error("SOCKS auth method rejected");
+
+        if (greeting[1] === 0x02) {
+          const [user = "", pass = ""] = String(proxyNode.auth || "").split(":");
+          const userBuffer = Buffer.from(user);
+          const passBuffer = Buffer.from(pass);
+          socket.write(Buffer.concat([Buffer.from([0x01, userBuffer.length]), userBuffer, Buffer.from([passBuffer.length]), passBuffer]));
+          const authReply = await readSocketOnce(socket, timeoutMs);
+          if (authReply[1] !== 0x00) throw new Error("SOCKS auth failed");
+        }
+
+        const connectParts = [Buffer.from([0x05, 0x01, 0x00])];
+        writeSocks5Address(connectParts, target.hostname, Number(target.port || (target.protocol === "https:" ? 443 : 80)));
+        socket.write(Buffer.concat(connectParts));
+        const connectReply = await readSocketOnce(socket, timeoutMs);
+        if (connectReply[1] !== 0x00) throw new Error(`SOCKS connect failed (${connectReply[1]})`);
+        const stream =
+          target.protocol === "https:"
+            ? tls.connect({
+                socket,
+                servername: target.hostname,
+                rejectUnauthorized: false
+              })
+            : socket;
+
+        const request = `GET ${target.pathname || "/"}${target.search || ""} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\nUser-Agent: chiken-easy-proxy-check/1.0\r\n\r\n`;
+        stream.write(request);
+        const responseText = await readTlsSocket(stream, timeoutMs);
+        const statusMatch = responseText.match(/^HTTP\/1\.[01]\s+(\d+)/);
+        finish({
+          ok: Boolean(statusMatch && Number(statusMatch[1]) >= 200 && Number(statusMatch[1]) < 500),
+          statusCode: statusMatch ? Number(statusMatch[1]) : 0,
+          body: responseText
+        });
+      } catch (error) {
+        finish({ ok: false, error: error.message || "SOCKS check failed" });
+      }
+    });
+  });
+}
+
+async function checkShadowsocksLikeProxy(proxyNode) {
+  const temp = await startTemporaryProxy(proxyNode);
+  if (!temp.ok) return { ok: false, statusCode: 0, error: temp.error || "temporary proxy start failed" };
+  try {
+    return await checkSocksProxy({ address: "127.0.0.1", port: temp.listenPort, timeoutMs: proxyNode.timeoutMs }, proxyNode.url || proxyCheckUrl);
+  } finally {
+    await stopTemporaryProxy(temp);
+  }
+}
+
+async function resolveExitMetadataThroughProxy(proxyNode, url) {
+  const target = String(url || "https://api.ip.sb/geoip").trim();
+  const result = proxyNode.kind === "http" ? await checkHttpProxy(proxyNode, target) : await checkSocksProxy(proxyNode, target);
+  if (!result.ok || !result.body) return { exitIp: "", exitCountry: "" };
+  try {
+    const json = JSON.parse(result.body.split("\r\n\r\n").pop() || "{}");
+    return {
+      exitIp: String(json.ip || json.query || ""),
+      exitCountry: String(json.country || json.country_name || json.countryCode || "")
+    };
+  } catch {
+    return { exitIp: "", exitCountry: "" };
+  }
+}
+
+async function runProxyCheck(payload = {}) {
+  const node = payload.node || {};
+  const protocol = String(node.protocol || "").trim().toLowerCase();
+  const targetUrl = String(payload.url || proxyCheckUrl || "https://www.gstatic.com/generate_204").trim();
+  const timeoutMs = Math.max(1000, Number(payload.timeoutMs || 15000) || 15000);
+  const base = {
+    ok: false,
+    protocol,
+    latencyMs: 0,
+    exitIp: "",
+    exitCountry: "",
+    statusCode: 0,
+    error: "",
+    checkedAt: new Date().toISOString(),
+    agentId: readState().id,
+    nodeId: String(payload.nodeId || node.id || "")
+  };
+
+  if (!node.address || !node.port) {
+    return { ...base, error: "node address or port missing" };
+  }
+
+  if (protocol === "http") {
+    const proxy = { ...node, timeoutMs, kind: "http" };
+    const result = await checkHttpProxy(proxy, targetUrl);
+    const geo = result.ok ? await resolveExitMetadataThroughProxy(proxy, "https://api.ip.sb/geoip") : { exitIp: "", exitCountry: "" };
+    return { ...base, ...result, ...geo, unsupported: false };
+  }
+  if (protocol === "socks" || protocol === "mixed") {
+    const proxy = { ...node, timeoutMs, kind: "socks" };
+    const result = await checkSocksProxy(proxy, targetUrl);
+    const geo = result.ok ? await resolveExitMetadataThroughProxy(proxy, "https://api.ip.sb/geoip") : { exitIp: "", exitCountry: "" };
+    return { ...base, ...result, ...geo, unsupported: false };
+  }
+  if (protocol === "ss" || protocol === "shadowsocks") {
+    const temp = await startTemporaryProxy({ ...node, timeoutMs });
+    if (!temp.ok) return { ...base, error: temp.error || "temporary proxy start failed" };
+    try {
+      const proxy = { address: "127.0.0.1", port: temp.listenPort, timeoutMs, kind: "socks" };
+      const result = await checkSocksProxy(proxy, targetUrl);
+      const geo = result.ok ? await resolveExitMetadataThroughProxy(proxy, "https://api.ip.sb/geoip") : { exitIp: "", exitCountry: "" };
+      return { ...base, ...result, ...geo, unsupported: false };
+    } finally {
+      await stopTemporaryProxy(temp);
+    }
+  }
+  if (["trojan", "vless", "vmess", "hysteria2"].includes(protocol)) {
+    return { ...base, error: "protocol-level proxy-check not_implemented", notImplemented: true, unsupported: true };
+  }
+  return { ...base, error: "unsupported protocol", unsupported: true };
+}
+
 function writeForwardFiles(plan) {
   for (const file of plan.files || []) {
     const localPath = path.join(forwardDir, ...file.relativePath.split("/"));
@@ -194,6 +726,16 @@ async function applyForwardRule(rule) {
 
   writeForwardFiles(plan);
   await runDocker(["rm", "-f", plan.container.name]);
+
+  const imageReady = await ensureDockerImage(plan.container.image);
+  if (!imageReady.ok) {
+    return {
+      ok: false,
+      output: `image preflight failed for ${plan.rule.engine}: ${imageReady.output}`,
+      errorType: "image_pull_failed",
+      image: plan.container.image
+    };
+  }
 
   const args = ["run", "-d", "--name", plan.container.name, "--restart", "unless-stopped", "--network", plan.container.networkMode];
   for (const mount of plan.container.mounts || []) {
@@ -229,6 +771,8 @@ async function handle(ws, msg) {
   if (msg.command === "apply_config") return { commandId: msg.id, ...(await writeConfig(msg.payload.config, msg.payload.restart)) };
   if (msg.command === "apply_forward_rule") return { commandId: msg.id, ...(await applyForwardRule(msg.payload.rule || msg.payload)) };
   if (msg.command === "remove_forward_rule") return { commandId: msg.id, ...(await removeForwardRule(msg.payload.rule || msg.payload)) };
+  if (msg.command === "forward_image_probe") return { commandId: msg.id, ...(await probeForwardImage(msg.payload.engine)) };
+  if (msg.command === "proxy_check") return { commandId: msg.id, ...(await runProxyCheck(msg.payload || {})) };
   if (msg.command === "exec") return { commandId: msg.id, ...(await runShell(msg.payload.command)) };
   if (msg.command === "uninstall_agent") {
     if (serviceMode === "docker") {
