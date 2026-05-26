@@ -1,295 +1,117 @@
-# chiken-easy 开发文档
+# Development
 
-本文档面向继续开发、二次部署和线上排障。
+## Scope
 
-## 1. 项目定位
+This branch upgrades `chiken-easy` from a sing-box helper panel into a broader operations console while keeping the existing codebase and runtime model:
 
-`chiken-easy` 是一个以 `sing-box` 为核心的多服务器控制面板：
+- Express HTTP API
+- WebSocket agent bus
+- React single-page admin UI
+- JSON state in `data/state.json`
+- append-only audit log in `data/audit.jsonl`
 
-- 主控 `server` 提供 Web 面板、HTTP API、Agent WebSocket、SSH/WebSocket 终端与审计日志
-- 每台目标服务器部署一个 `agent`
-- `agent` 负责：
-  - 下发并回滚 `sing-box` 配置
-  - 控制 `sing-box` 服务
-  - 读取日志
-  - 创建与删除独立转发容器
-  - 上报 Komari 风格系统探针指标
-  - 通过主控保存的 SSH 凭据建立真实 SSH 会话
+The current implementation does not fork into separate services or copy external projects wholesale. It extends the original app in place.
 
-## 2. 技术栈
+## Main Modules
 
-- Server: Node.js, Express, ws, ssh2
-- Agent: Node.js, ws, Docker CLI
-- Web: React 19, Vite, lucide-react
-- Runtime: Docker Compose
-- 状态文件: `data/state.json`
-- 审计日志: `data/audit.jsonl`
+- `server/index.js`: control plane, auth, API, public probe endpoints, SSH/SFTP, node pool, memos, scripts, subscriptions
+- `server/storage.js`: storage abstraction, JSON migration, atomic writes, backups, audit helpers
+- `server/security.js`: hashing, secret encryption, masking, redaction
+- `server/nodePool.js`: import/export, parsing, scoring, de-duplication
+- `agent/index.js`: remote agent websocket loop, service control, config apply, forward apply
+- `agent/systemProbe.js`: machine metrics collection
+- `web/src/App.jsx`: admin UI pages and API client behavior
 
-## 3. 目录结构
+## Data Model
 
-```text
-server/
-  index.js
-  configFactory.js
+Primary state keys:
 
-agent/
-  index.js
+- `agents`
+- `assets`
+- `credentials`
+- `sshProfiles`
+- `configVersions`
+- `forwardRules`
+- `nodeProfiles`
+- `subscriptionProfiles`
+- `subscriptionSources`
+- `subscriptionAccessLogs`
+- `nodePool`
+- `proxyChecks`
+- `monitorHistory`
+- `monitorAgg`
+- `monitorEvents`
+- `memos`
+- `files`
+- `scriptLibrary`
+- `commandRuns`
+- `apiTokens`
+- `tokens`
+- `settings`
+- `auth`
 
-web/src/
-  App.jsx
-  style.css
+## Auth Model
 
-docs/
-  development.md
-  node-config-guide.md
+- Health and public probe endpoints remain unauthenticated
+- Protected APIs require either:
+  - session cookie, or
+  - `Authorization: Bearer ck_xxx`
+- Query token mode is off by default and only allowed when `CHIKEN_ALLOW_QUERY_TOKEN=1`
+- Browser session cookies are now used so WebSocket terminal, SSE logs, and downloads still work when query token mode is disabled
 
-docker-compose.server.yml
-docker-compose.agent.yml
-Dockerfile
-```
+## Storage
 
-## 4. 本地开发
+- Default mode is `CHIKEN_STORAGE=json`
+- `saveState()` uses atomic replace
+- recent `state.json` backups are rotated under `data/backups/`
+- corrupt or empty state files fall back safely instead of crashing startup
+- SQLite mode is reserved behind the storage abstraction but not fully implemented yet
+
+## Local Validation
+
+Standard validation pipeline:
 
 ```bash
 npm install
-npm run dev
+npm run check
 ```
 
-常用命令：
+`npm run check` currently runs:
 
-```bash
-npm run dev:server
-npm run dev:web
-npm run dev:agent
-npm run build
-npm run lint
-```
+- `npm run lint`
+- `npm run build`
+- `npm run smoke`
 
-Windows PowerShell 如果执行策略拦截：
+## Smoke Coverage
 
-```powershell
-npm.cmd run lint
-npm.cmd run build
-```
+`scripts/smoke.mjs` verifies:
 
-## 5. Docker 部署
+- required files exist
+- JSON templates parse
+- server starts
+- `/api/health` returns `ok`
+- public probes do not leak host, IP, passwords, keys, or tokens
+- public events route loads
+- build output exists
 
-主控机：
+## Deployment Layout
 
-```bash
-docker compose -f docker-compose.server.yml up -d --build
-```
+Main host:
 
-Agent 机：
+- `docker-compose.server.yml`
+- control plane
+- local sing-box
+- local agent
 
-```bash
-docker compose -f docker-compose.agent.yml up -d --build
-```
+Remote hosts:
 
-关键挂载：
+- `docker-compose.agent.yml`
+- remote sing-box
+- remote agent
 
-- `./data/sing-box:/etc/sing-box`
-- `./data/forwarders:/app/forwarders`
+## Current Limits
 
-关键环境变量：
-
-- `CHIKEN_FORWARDER_DIR=/app/forwarders`
-- `CHIKEN_FORWARDER_HOST_DIR=${PWD}/data/forwarders`
-- `SINGBOX_CONFIG=/etc/sing-box/config.json`
-- `SINGBOX_CONFIG_VOLUME=${PWD}/data/sing-box`
-
-## 6. API 概览
-
-所有接口默认在 `http://host:7788/api` 下。
-
-### 基础
-
-- `GET /api/health`
-- `GET /api/dashboard`
-- `GET /api/audit`
-
-### Agent
-
-- `GET /api/agents`
-- `GET /api/agents/:id`
-- `POST /api/tokens`
-- `POST /api/agents/:id/service/:action`
-- `GET /api/agents/:id/config`
-- `POST /api/agents/:id/config`
-- `GET /api/agents/:id/config/versions`
-- `POST /api/agents/:id/config/rollback/:versionId`
-- `GET /api/agents/:id/logs/stream`
-
-`GET /api/agents` 与 `GET /api/agents/:id` 会返回 `probe` 字段，包含：
-
-- `cpu.usage / cpu.cores`
-- `memory.total / memory.used / memory.usage`
-- `swap.total / swap.used / swap.usage`
-- `disk.total / disk.used / disk.usage`
-- `network.rxSpeed / network.txSpeed / network.rxBytes / network.txBytes`
-- `load / uptime / process.count / updatedAt`
-
-### SSH
-
-- `GET /api/agents/:id/ssh-profile`
-- `PUT /api/agents/:id/ssh-profile`
-- `POST /api/agents/:id/ssh-profile/test`
-- `POST /api/agents/:id/ssh`
-- `WebSocket /terminal?agentId=...&mode=ssh`
-
-说明：
-
-- `mode=ssh`：真实 SSH shell
-- `mode=agent`：通过 Agent 执行单条命令的兼容模式
-
-### 节点配置
-
-- `GET /api/protocols`
-- `POST /api/config/render`
-- `POST /api/agents/:id/config/wizard`
-
-### 端口转发
-
-- `GET /api/forwards`
-- `POST /api/forward/render`
-- `GET /api/agents/:id/forwards`
-- `POST /api/agents/:id/forward/wizard`
-- `DELETE /api/agents/:id/forwards/:ruleId`
-
-### API Token
-
-- `GET /api/api-tokens`
-- `POST /api/api-tokens`
-- `DELETE /api/api-tokens/:id`
-
-## 7. API Token 设计
-
-API Token 的定位就是：
-
-> 有这个 token，就可以直接进入主控并修改配置。
-
-当前支持两种使用方式：
-
-- Header
-
-```http
-Authorization: Bearer ck_xxx
-```
-
-- Query
-
-```text
-http://panel:7788/?token=ck_xxx
-```
-
-前端拿到 token 后会自动注入：
-
-- 普通 API 请求
-- 日志 SSE
-- SSH / Agent 终端 WebSocket
-
-如果开启强制校验：
-
-```bash
-CHIKEN_REQUIRE_API_TOKEN=1
-CHIKEN_API_TOKEN=ck_bootstrap_token
-```
-
-则除了 `/api/health` 外，其余 API 与终端入口都需要合法 token。
-
-## 8. 节点协议
-
-当前面板向导支持：
-
-- `vmess-ws`
-- `vless-reality`
-- `trojan`
-- `hysteria2`
-- `shadowsocks`
-- `mixed`
-
-注意点：
-
-- 切换协议时，前端会自动替换为该协议的字段和默认值
-- `Trojan` / `Hysteria2` 会自动补齐自签名证书
-- `VLESS + Reality` 客户端必须带 `public key + short_id + uTLS`
-- `Shadowsocks` 默认方法为 `aes-256-gcm`
-
-## 9. 端口转发实现
-
-端口转发不再覆盖主 `sing-box` 配置，而是使用独立容器：
-
-- `sing-box`
-- `Realm`
-- `GOST`
-
-每条规则都会以独立容器运行，容器名格式：
-
-```text
-chiken-forward-<rule-id>
-```
-
-对应关系：
-
-- `sing-box`: 使用单独配置文件和 `sing-box run -c`
-- `Realm`: 使用 `4points/realm:latest`
-- `GOST`: 使用 `gogost/gost:latest`
-
-## 10. Agent 关键行为
-
-### 配置下发
-
-- 写入前先备份旧配置
-- 校验失败时自动恢复旧配置
-- 成功后按需重启 `sing-box`
-
-### TLS 自动生成
-
-当 inbound 启用了 TLS 且指定的证书文件不存在时：
-
-- Agent 会调用 `openssl`
-- 自动生成一对自签名证书
-- 写入到配置指定路径
-
-### 转发器生命周期
-
-- `apply_forward_rule`
-- `remove_forward_rule`
-
-仅 Docker 模式支持独立转发器。
-
-## 11. 测试清单
-
-2026-05-14 已完成的真实联调：
-
-- SSH：
-  - 3 台测试机都能通过 `ssh-profile/test`
-  - WebSocket 终端可直连并执行 `pwd`
-- API Token：
-  - Header 模式通过
-  - Query 模式通过
-  - Token 透传到终端 WebSocket 通过
-- 节点协议：
-  - `VMess + WS`
-  - `VLESS + Reality`
-  - `Trojan + TLS`
-  - `Hysteria2`
-  - `Shadowsocks`
-  - `Mixed`
-- 转发引擎：
-  - `sing-box` TCP/UDP
-  - `Realm` TCP/UDP
-  - `GOST` TCP/UDP
-
-测试方式不是只看端口监听，而是：
-
-- 节点协议：另一台服务器作为客户端，通过该节点访问公网并拿到 HTTP 200 级别响应
-- UDP 转发：向转发端口发送真实 DNS 查询并验证有响应
-
-## 12. 安全注意事项
-
-- 生产环境必须放在 HTTPS 反代后
-- SSH 凭据保存在主控 `state.json`，请限制主控访问范围
-- `Mixed` 协议不适合长时间暴露在公网
-- API Token 支持直接接管主控，务必按需撤销和轮换
-- Agent 挂载了 Docker Socket，等于拥有宿主机级别的容器控制能力
+- UI is now broader, but still intentionally compact and single-file heavy
+- SQLite storage mode is reserved, not production-ready
+- Proxy checks currently validate TCP reachability and latency; they are not full protocol-specific end-to-end probes for every node type
+- `realm` and `gost` forwarding depend on pulling upstream images, so offline or restricted registries can block those engines even when sing-box forwarding works

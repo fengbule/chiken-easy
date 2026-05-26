@@ -1,685 +1,884 @@
 import { nanoid } from "nanoid";
 
-const shareProtocols = ["vmess", "vless", "trojan", "ss", "ssr", "hysteria2", "hy2", "hy", "tuic", "socks", "socks5", "http", "https", "anytls"];
-const sharePattern = /^(vmess|vless|trojan|ss|ssr|hysteria2|hy2|hy|tuic|socks|socks5|http|https|anytls):\/\//i;
+export const defaultSubscriptionTemplateId = "clash-basic";
 
-export const routeTemplates = {
-  minimal: {
-    id: "minimal",
-    name: "Minimal",
-    description: "Only a selector and MATCH rule.",
-    rules: ["MATCH,Auto"],
-    ruleProviders: {}
+export const subscriptionTemplateCatalog = [
+  {
+    id: "clash-basic",
+    name: "Clash Rule Basic",
+    description: "Rule mode with auto test and manual selector."
   },
-  mainland: {
-    id: "mainland",
-    name: "Mainland Smart",
-    description: "DIRECT for LAN/CN/private, reject ads, proxy the rest.",
-    rules: ["RULE-SET,reject,REJECT", "RULE-SET,private,DIRECT", "RULE-SET,cn,DIRECT", "GEOIP,CN,DIRECT", "MATCH,Auto"],
-    ruleProviders: {
-      reject: { type: "http", behavior: "domain", url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/reject.txt", path: "./ruleset/reject.yaml", interval: 86400 },
-      private: { type: "http", behavior: "domain", url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/private.txt", path: "./ruleset/private.yaml", interval: 86400 },
-      cn: { type: "http", behavior: "domain", url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/cncidr.txt", path: "./ruleset/cn.yaml", interval: 86400 }
-    }
+  {
+    id: "clash-global",
+    name: "Clash Global",
+    description: "Global mode with a simple select group."
   },
-  streaming: {
-    id: "streaming",
-    name: "Streaming",
-    description: "Add media and AI selectors for daily use.",
-    rules: ["DOMAIN-SUFFIX,openai.com,Auto", "DOMAIN-SUFFIX,chatgpt.com,Auto", "DOMAIN-SUFFIX,netflix.com,Auto", "DOMAIN-SUFFIX,youtube.com,Auto", "RULE-SET,private,DIRECT", "GEOIP,CN,DIRECT", "MATCH,Auto"],
-    ruleProviders: {
-      private: { type: "http", behavior: "domain", url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/private.txt", path: "./ruleset/private.yaml", interval: 86400 }
-    }
+  {
+    id: "clash-fallback",
+    name: "Clash Fallback",
+    description: "Rule mode with fallback group for unstable nodes."
   }
+];
+
+const templateIds = new Set(subscriptionTemplateCatalog.map((item) => item.id));
+const protocolLabels = {
+  "vmess-ws": "VMess WS",
+  "vless-reality": "VLESS Reality",
+  trojan: "Trojan",
+  hysteria2: "Hysteria2",
+  shadowsocks: "Shadowsocks",
+  mixed: "Mixed"
 };
 
-function base64Encode(text) {
-  return Buffer.from(String(text || ""), "utf8").toString("base64");
+function cleanText(value) {
+  return String(value ?? "").trim();
 }
 
-function base64Decode(text) {
-  const normalized = String(text || "").trim().replace(/-/g, "+").replace(/_/g, "/");
-  if (!normalized) return "";
-  return Buffer.from(normalized, "base64").toString("utf8");
+function cleanArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => cleanText(item)).filter(Boolean);
 }
 
-function safeDecodeURIComponent(value) {
-  try {
-    return decodeURIComponent(String(value || ""));
-  } catch {
-    return String(value || "");
-  }
+function cleanPort(value) {
+  const port = Number(value);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 0;
 }
 
-function toUrl(raw) {
-  try {
-    return new URL(raw);
-  } catch {
-    return null;
-  }
+function dedupe(values = []) {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
-function firstNonEmpty(...values) {
-  return values.map((item) => String(item || "").trim()).find(Boolean) || "";
+function isScalar(value) {
+  return value === null || ["string", "number", "boolean"].includes(typeof value);
 }
 
-function normalizeHost(host) {
-  return String(host || "").trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+function yamlScalar(value) {
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === null) return "null";
+  const text = String(value ?? "");
+  if (text === "") return '""';
+  if (/^[A-Za-z0-9._/:,+@%*=-]+$/.test(text) && !/^(true|false|null|yes|no|on|off|-?\d+(\.\d+)?)$/i.test(text)) return text;
+  return JSON.stringify(text);
 }
 
-function splitImportLines(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return [];
-  let lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.some((line) => sharePattern.test(line))) return lines;
-  try {
-    const decoded = base64Decode(raw);
-    const decodedLines = decoded.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    if (decodedLines.some((line) => sharePattern.test(line))) lines = decodedLines;
-  } catch {}
-  return lines;
-}
-
-function cleanYamlValue(value) {
-  return String(value || "")
-    .trim()
-    .replace(/^['"]|['"]$/g, "");
-}
-
-function parseSimpleClashProxies(text) {
-  const lines = String(text || "").split(/\r?\n/);
-  const blocks = [];
-  let inProxies = false;
-  let current = null;
-
-  for (const line of lines) {
-    if (/^\s*proxies\s*:\s*$/i.test(line)) {
-      inProxies = true;
-      continue;
+function appendYamlEntry(lines, key, value, indent = 0) {
+  if (value === undefined || value === null) return;
+  const pad = " ".repeat(indent);
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      lines.push(`${pad}${key}: []`);
+      return;
     }
-    if (!inProxies) continue;
-    if (/^\s*(proxy-groups|rules|rule-providers|proxy-providers)\s*:/i.test(line)) break;
+    lines.push(`${pad}${key}:`);
+    for (const item of value) appendYamlArrayItem(lines, item, indent + 2);
+    return;
+  }
+  if (value && typeof value === "object") {
+    lines.push(`${pad}${key}:`);
+    appendYamlObject(lines, value, indent + 2);
+    return;
+  }
+  lines.push(`${pad}${key}: ${yamlScalar(value)}`);
+}
 
-    const start = line.match(/^\s*-\s+name\s*:\s*(.+)\s*$/i);
-    if (start) {
-      if (current) blocks.push(current);
-      current = { name: cleanYamlValue(start[1]) };
-      continue;
+function appendYamlArrayItem(lines, value, indent = 0) {
+  const pad = " ".repeat(indent);
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      lines.push(`${pad}- []`);
+      return;
     }
-    if (!current) continue;
-    const pair = line.match(/^\s+([A-Za-z0-9_-]+)\s*:\s*(.+)\s*$/);
-    if (pair) current[pair[1]] = cleanYamlValue(pair[2]);
+    lines.push(`${pad}-`);
+    for (const item of value) appendYamlArrayItem(lines, item, indent + 2);
+    return;
   }
-  if (current) blocks.push(current);
-  return blocks;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value).filter(([, item]) => item !== undefined && item !== null);
+    if (!entries.length) {
+      lines.push(`${pad}- {}`);
+      return;
+    }
+    const [firstKey, firstValue] = entries[0];
+    if (Array.isArray(firstValue)) {
+      if (!firstValue.length) {
+        lines.push(`${pad}- ${firstKey}: []`);
+      } else {
+        lines.push(`${pad}- ${firstKey}:`);
+        for (const item of firstValue) appendYamlArrayItem(lines, item, indent + 4);
+      }
+    } else if (firstValue && typeof firstValue === "object") {
+      lines.push(`${pad}- ${firstKey}:`);
+      appendYamlObject(lines, firstValue, indent + 4);
+    } else {
+      lines.push(`${pad}- ${firstKey}: ${yamlScalar(firstValue)}`);
+    }
+    for (const [key, item] of entries.slice(1)) appendYamlEntry(lines, key, item, indent + 2);
+    return;
+  }
+  lines.push(`${pad}- ${yamlScalar(value)}`);
 }
 
-function rawFromClashProxy(proxy) {
-  const type = String(proxy.type || "").toLowerCase();
-  const name = encodeURIComponent(proxy.name || type.toUpperCase());
-  const server = proxy.server || "";
-  const port = Number(proxy.port || 0) || 0;
-  if (!type || !server || !port) return "";
-  if (type === "ss") return `ss://${base64Encode(`${proxy.cipher || "auto"}:${proxy.password || ""}`)}@${server}:${port}#${name}`;
-  if (type === "trojan") return `trojan://${encodeURIComponent(proxy.password || "")}@${server}:${port}?sni=${encodeURIComponent(proxy.sni || proxy.servername || server)}#${name}`;
-  if (type === "vless") {
-    const params = new URLSearchParams({
-      encryption: proxy.encryption || "none",
-      type: proxy.network || "tcp",
-      security: proxy.tls === "true" || proxy.tls === true ? "tls" : proxy.security || "none"
-    });
-    if (proxy.servername || proxy.sni) params.set("sni", proxy.servername || proxy.sni);
-    if (proxy.flow) params.set("flow", proxy.flow);
-    return `vless://${proxy.uuid || ""}@${server}:${port}?${params.toString()}#${name}`;
-  }
-  if (type === "vmess") {
-    const payload = {
-      v: "2",
-      ps: proxy.name || "VMess",
-      add: server,
-      port: String(port),
-      id: proxy.uuid || "",
-      aid: String(proxy.alterId || proxy.alterid || 0),
-      scy: proxy.cipher || "auto",
-      net: proxy.network || "tcp",
-      type: "none",
-      host: proxy.servername || proxy.sni || "",
-      path: proxy["ws-path"] || proxy.path || "",
-      tls: proxy.tls === "true" || proxy.tls === true ? "tls" : ""
-    };
-    return `vmess://${base64Encode(JSON.stringify(payload))}`;
-  }
-  if (type === "hysteria2" || type === "hy2" || type === "hy") return `hysteria2://${encodeURIComponent(proxy.password || proxy.auth || "")}@${server}:${port}?sni=${encodeURIComponent(proxy.sni || server)}#${name}`;
-  if (type === "tuic") return `tuic://${proxy.uuid || ""}:${encodeURIComponent(proxy.password || "")}@${server}:${port}?sni=${encodeURIComponent(proxy.sni || server)}#${name}`;
-  if (type === "socks5" || type === "socks" || type === "http" || type === "https") {
-    const auth = proxy.username || proxy.password ? `${encodeURIComponent(proxy.username || "")}:${encodeURIComponent(proxy.password || "")}@` : "";
-    return `${type}://${auth}${server}:${port}#${name}`;
-  }
-  return "";
+function appendYamlObject(lines, value, indent = 0) {
+  for (const [key, item] of Object.entries(value)) appendYamlEntry(lines, key, item, indent);
 }
 
-function parseClashImport(text, sourceName = "import") {
-  return parseSimpleClashProxies(text)
-    .map((proxy) => rawFromClashProxy(proxy))
-    .filter(Boolean)
-    .map(parseNodeLine)
-    .filter(Boolean)
-    .map((node) => ({ ...node, sourceName: String(sourceName || "import").trim() || "import" }));
+function safeBase64Decode(value) {
+  const raw = cleanText(value).replace(/\s+/g, "");
+  if (!raw) return "";
+  const normalized = raw.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = normalized.length % 4;
+  const padded = normalized + (padding ? "=".repeat(4 - padding) : "");
+  return Buffer.from(padded, "base64").toString("utf8");
 }
 
-function parseVmess(raw) {
+function decodeFragment(value) {
   try {
-    const body = raw.replace(/^vmess:\/\//i, "");
-    const json = JSON.parse(base64Decode(body));
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function buildNodeDisplayName(profile) {
+  return cleanText(profile.name) || `${profile.agentName || profile.agentId || "Node"} ${protocolLabels[profile.protocol] || profile.protocol || ""}`.trim();
+}
+
+function ensureUniqueName(name, usedNames) {
+  const base = cleanText(name) || "Proxy";
+  if (!usedNames.has(base)) {
+    usedNames.add(base);
+    return base;
+  }
+  let index = 2;
+  while (usedNames.has(`${base} (${index})`)) index += 1;
+  const unique = `${base} (${index})`;
+  usedNames.add(unique);
+  return unique;
+}
+
+function buildWsOptions(path, host) {
+  const wsPath = cleanText(path) || "/";
+  const wsHost = cleanText(host);
+  return wsHost ? { path: wsPath, headers: { Host: wsHost } } : { path: wsPath };
+}
+
+function formatBandwidth(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number <= 0) return "100 Mbps";
+  return `${number} Mbps`;
+}
+
+function normalizeImportedName(value, fallback) {
+  return cleanText(value) || fallback;
+}
+
+function validateNodeProfile(profile) {
+  if (!profile) return { ok: false, reason: "node profile not found" };
+  if (!cleanText(profile.server)) return { ok: false, reason: "export host is required" };
+  if (!cleanPort(profile.port)) return { ok: false, reason: "export port is invalid" };
+
+  if (profile.protocol === "vmess-ws" && !cleanText(profile.uuid)) {
+    return { ok: false, reason: "vmess uuid is required" };
+  }
+  if (profile.protocol === "vless-reality") {
+    if (!cleanText(profile.uuid)) return { ok: false, reason: "vless uuid is required" };
+    if (!cleanText(profile.publicKey)) return { ok: false, reason: "reality public key is required for subscription export" };
+    if (!cleanText(profile.shortId)) return { ok: false, reason: "reality short id is required for subscription export" };
+    if (!cleanText(profile.serverName)) return { ok: false, reason: "reality server name is required for subscription export" };
+  }
+  if (profile.protocol === "trojan" && !cleanText(profile.password)) {
+    return { ok: false, reason: "trojan password is required" };
+  }
+  if (profile.protocol === "hysteria2" && !cleanText(profile.password)) {
+    return { ok: false, reason: "hysteria2 password is required" };
+  }
+  if (profile.protocol === "shadowsocks") {
+    if (!cleanText(profile.method)) return { ok: false, reason: "shadowsocks method is required" };
+    if (!cleanText(profile.password)) return { ok: false, reason: "shadowsocks password is required" };
+  }
+  return { ok: true, reason: "" };
+}
+
+function clashProxyFromNodeProfile(profile, name) {
+  const server = cleanText(profile.server);
+  const port = cleanPort(profile.port);
+
+  if (profile.protocol === "vmess-ws") {
     return {
-      protocol: "vmess",
-      name: firstNonEmpty(json.ps, json.name, "VMess"),
-      server: String(json.add || json.host || ""),
-      port: Number(json.port || 0) || null,
-      meta: {
-        uuid: json.id || "",
-        alterId: Number(json.aid || 0) || 0,
-        cipher: json.scy || "auto",
-        network: json.net || "",
-        tls: json.tls || "",
-        path: json.path || "",
-        sni: json.sni || json.host || ""
-      }
+      name,
+      type: "vmess",
+      server,
+      port,
+      udp: true,
+      uuid: cleanText(profile.uuid),
+      alterId: 0,
+      cipher: "auto",
+      network: "ws",
+      "ws-opts": buildWsOptions(profile.path)
     };
-  } catch {
-    return { protocol: "vmess", name: "VMess" };
   }
-}
 
-function parseStandardUrl(raw) {
-  const url = toUrl(raw);
-  if (!url) return null;
-  const protocol = url.protocol.replace(":", "").toLowerCase();
-  const name = safeDecodeURIComponent(url.hash.replace(/^#/, "")) || protocol.toUpperCase();
-  return {
-    protocol,
-    name,
-    server: url.hostname,
-    port: Number(url.port || 0) || null,
-    meta: {
-      ...Object.fromEntries(url.searchParams.entries()),
-      username: safeDecodeURIComponent(url.username || ""),
-      password: safeDecodeURIComponent(url.password || "")
-    }
-  };
-}
-
-function parseSs(raw) {
-  const parsed = parseStandardUrl(raw);
-  if (!parsed) return { protocol: "ss", name: "Shadowsocks" };
-  let method = "";
-  let password = "";
-  try {
-    const userInfo = base64Decode(parsed.meta?.username || "");
-    const splitAt = userInfo.indexOf(":");
-    if (splitAt > 0) {
-      method = userInfo.slice(0, splitAt);
-      password = userInfo.slice(splitAt + 1);
-    }
-  } catch {}
-  if (!parsed.server) {
-    try {
-      const noScheme = raw.replace(/^ss:\/\//i, "");
-      const [left, hash = ""] = noScheme.split("#");
-      const decoded = base64Decode(left.split("@")[0]);
-      const splitAt = decoded.indexOf(":");
-      method = splitAt > 0 ? decoded.slice(0, splitAt) : method;
-      password = splitAt > 0 ? decoded.slice(splitAt + 1) : password;
-      const serverPart = left.includes("@") ? left.split("@").slice(1).join("@") : "";
-      const [server, port] = serverPart.split(":");
-      parsed.server = server || parsed.server;
-      parsed.port = Number(port || 0) || parsed.port;
-      parsed.name = safeDecodeURIComponent(hash) || parsed.name;
-    } catch {}
-  }
-  return { ...parsed, protocol: "ss", meta: { ...(parsed.meta || {}), method, password } };
-}
-
-export function parseNodeLine(raw) {
-  const line = String(raw || "").trim();
-  if (!sharePattern.test(line)) return null;
-  const scheme = line.slice(0, line.indexOf("://")).toLowerCase();
-  const parsed = scheme === "vmess" ? parseVmess(line) : scheme === "ss" ? parseSs(line) : parseStandardUrl(line);
-  if (!parsed) return null;
-  return {
-    id: nanoid(10),
-    name: parsed.name || scheme.toUpperCase(),
-    source: "import",
-    protocol: ["hy", "hy2"].includes(scheme) ? "hysteria2" : parsed.protocol || scheme,
-    server: parsed.server || "",
-    port: parsed.port || null,
-    raw: line,
-    enabled: true,
-    tags: [],
-    meta: parsed.meta || {},
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-}
-
-export function parseNodeImport(text, sourceName = "import") {
-  const seen = new Set();
-  return [...splitImportLines(text).map(parseNodeLine).filter(Boolean), ...parseClashImport(text, sourceName)]
-    .filter((node) => {
-      if (seen.has(node.raw)) return false;
-      seen.add(node.raw);
-      node.sourceName = String(sourceName || "import").trim() || "import";
-      return true;
-    });
-}
-
-function arrayFromValue(value) {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
-  return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
-}
-
-function rulesFromValue(value) {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
-  return String(value || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
-}
-
-export function publicNode(node) {
-  return {
-    id: node.id,
-    name: node.name,
-    source: node.source || "import",
-    sourceName: node.sourceName || "",
-    protocol: node.protocol || "",
-    server: node.server || "",
-    port: node.port || null,
-    enabled: node.enabled !== false,
-    tags: node.tags || [],
-    groupIds: node.groupIds || [],
-    sourceId: node.sourceId || "",
-    raw: node.raw || "",
-    agentId: node.agentId || "",
-    createdAt: node.createdAt,
-    updatedAt: node.updatedAt
-  };
-}
-
-export function upsertNode(nodes, patch) {
-  const list = Array.isArray(nodes) ? nodes : [];
-  const raw = String(patch.raw || "").trim();
-  const index = list.findIndex((node) => node.id === patch.id || (raw && node.raw === raw));
-  const current = index >= 0 ? list[index] : null;
-  const next = {
-    ...current,
-    ...patch,
-    id: current?.id || patch.id || nanoid(10),
-    enabled: patch.enabled !== false,
-    tags: Array.isArray(patch.tags) ? patch.tags : current?.tags || [],
-    groupIds: Array.isArray(patch.groupIds) ? patch.groupIds : current?.groupIds || [],
-    createdAt: current?.createdAt || patch.createdAt || new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-  if (index >= 0) list[index] = next;
-  else list.unshift(next);
-  return next;
-}
-
-export function createSubscriptionToken(name = "default") {
-  return {
-    id: nanoid(10),
-    name: String(name || "default").trim() || "default",
-    token: `sub_${nanoid(32)}`,
-    createdAt: new Date().toISOString(),
-    enabled: true,
-    format: "base64",
-    profile: { protocols: [], tags: [], sources: [], groupIds: [], keyword: "", limit: 0, sort: "name" },
-    accessCount: 0,
-    lastAccessAt: null
-  };
-}
-
-export function publicSubscriptionToken(token, req) {
-  const origin = `${req.protocol}://${req.get("host")}`;
-  return {
-    id: token.id,
-    name: token.name,
-    token: token.token,
-    enabled: token.enabled !== false,
-    format: token.format || "base64",
-    profile: token.profile || { protocols: [], tags: [], sources: [], groupIds: [], keyword: "", limit: 0, sort: "name" },
-    expiresAt: token.expiresAt || "",
-    maxAccess: Number(token.maxAccess || 0),
-    accessCount: Number(token.accessCount || 0),
-    lastAccessAt: token.lastAccessAt || null,
-    createdAt: token.createdAt,
-    links: {
-      base64: `${origin}/sub/${token.token}`,
-      v2rayn: `${origin}/sub/${token.token}?format=v2rayn`,
-      raw: `${origin}/sub/${token.token}?format=raw`,
-      clash: `${origin}/sub/${token.token}?format=clash`,
-      mihomo: `${origin}/sub/${token.token}?format=mihomo`,
-      singbox: `${origin}/sub/${token.token}?format=sing-box`
-    }
-  };
-}
-
-export function normalizeSubscriptionToken(input = {}, current = {}) {
-  const profile = input.profile || current.profile || {};
-  return {
-    ...current,
-    id: current.id || input.id || nanoid(10),
-    name: String(input.name ?? current.name ?? "Subscription").trim() || "Subscription",
-    token: current.token || input.token || `sub_${nanoid(32)}`,
-    enabled: input.enabled ?? current.enabled ?? true,
-    format: String(input.format ?? current.format ?? "base64").trim() || "base64",
-    profile: {
-      protocols: arrayFromValue(profile.protocols),
-      tags: arrayFromValue(profile.tags),
-      sources: arrayFromValue(profile.sources),
-      groupIds: arrayFromValue(profile.groupIds),
-      keyword: String(profile.keyword ?? "").trim(),
-      limit: Math.max(0, Number(profile.limit || 0) || 0),
-      sort: String(profile.sort || "name").trim() || "name",
-      routeTemplate: String(profile.routeTemplate || current.profile?.routeTemplate || "mainland").trim() || "mainland",
-      customRules: rulesFromValue(profile.customRules),
-      prependRules: rulesFromValue(profile.prependRules)
-    },
-    expiresAt: String(input.expiresAt ?? current.expiresAt ?? "").trim(),
-    maxAccess: Math.max(0, Number(input.maxAccess ?? current.maxAccess ?? 0) || 0),
-    createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    accessCount: Number(current.accessCount || 0),
-    lastAccessAt: current.lastAccessAt || null
-  };
-}
-
-export function normalizeSubscriptionSource(input = {}, current = {}) {
-  return {
-    ...current,
-    id: current.id || input.id || nanoid(10),
-    name: String(input.name ?? current.name ?? "Subscription Source").trim() || "Subscription Source",
-    url: String(input.url ?? current.url ?? "").trim(),
-    text: String(input.text ?? current.text ?? ""),
-    tags: arrayFromValue(input.tags ?? current.tags),
-    intervalHours: Math.max(0, Number(input.intervalHours ?? current.intervalHours ?? 24) || 0),
-    replaceExisting: input.replaceExisting ?? current.replaceExisting ?? true,
-    enabled: input.enabled ?? current.enabled ?? true,
-    createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    lastSyncAt: current.lastSyncAt || null,
-    lastImportCount: Number(current.lastImportCount || 0),
-    lastError: current.lastError || ""
-  };
-}
-
-export function normalizeSubscriptionGroup(input = {}, current = {}) {
-  return {
-    ...current,
-    id: current.id || input.id || nanoid(10),
-    name: String(input.name ?? current.name ?? "Default Group").trim() || "Default Group",
-    protocols: arrayFromValue(input.protocols ?? current.protocols),
-    tags: arrayFromValue(input.tags ?? current.tags),
-    sources: arrayFromValue(input.sources ?? current.sources),
-    keyword: String(input.keyword ?? current.keyword ?? "").trim(),
-    sort: String(input.sort ?? current.sort ?? "name").trim() || "name",
-    enabled: input.enabled ?? current.enabled ?? true,
-    createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-}
-
-function matchesEveryFilter(node, filters = {}) {
-  const protocols = arrayFromValue(filters.protocols);
-  const tags = arrayFromValue(filters.tags);
-  const sources = arrayFromValue(filters.sources);
-  const groupIds = arrayFromValue(filters.groupIds);
-  const keyword = String(filters.keyword || "").trim().toLowerCase();
-  if (protocols.length && !protocols.includes(node.protocol)) return false;
-  if (tags.length && !tags.some((tag) => (node.tags || []).includes(tag))) return false;
-  if (sources.length && !sources.includes(node.sourceName || node.source || "")) return false;
-  if (groupIds.length && !groupIds.some((id) => (node.groupIds || []).includes(id))) return false;
-  if (keyword && ![node.name, node.protocol, node.server, node.sourceName, ...(node.tags || [])].join(" ").toLowerCase().includes(keyword)) return false;
-  return true;
-}
-
-export function selectSubscriptionNodes(nodes = [], token = {}, groups = []) {
-  let selected = nodes.filter((node) => node.enabled !== false && node.raw);
-  const tokenProfile = token.profile || {};
-  const tokenGroupIds = arrayFromValue(tokenProfile.groupIds);
-  const directTokenFilters = { ...tokenProfile, groupIds: [], limit: 0, sort: "" };
-  if (Object.values(directTokenFilters).some((value) => arrayFromValue(value).length)) {
-    selected = selected.filter((node) => matchesEveryFilter(node, directTokenFilters));
-  }
-  const activeGroups = groups.filter((group) => group.enabled !== false && (!tokenGroupIds.length || tokenGroupIds.includes(group.id)));
-  if (activeGroups.length) {
-    selected = selected.filter((node) => activeGroups.some((group) => matchesEveryFilter(node, group)));
-  }
-  const sort = String(tokenProfile.sort || "name");
-  selected = selected.sort((a, b) => {
-    if (sort === "protocol") return String(a.protocol).localeCompare(String(b.protocol)) || String(a.name).localeCompare(String(b.name));
-    if (sort === "source") return String(a.sourceName || a.source).localeCompare(String(b.sourceName || b.source)) || String(a.name).localeCompare(String(b.name));
-    if (sort === "updated") return Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || "");
-    return String(a.name).localeCompare(String(b.name));
-  });
-  const limit = Math.max(0, Number(tokenProfile.limit || 0) || 0);
-  return limit ? selected.slice(0, limit) : selected;
-}
-
-function countBy(nodes, getter) {
-  const result = {};
-  for (const node of nodes) {
-    const values = arrayFromValue(getter(node));
-    for (const value of values.length ? values : ["-"]) result[value] = (result[value] || 0) + 1;
-  }
-  return result;
-}
-
-export function summarizeSubscriptionNodes(nodes = []) {
-  const enabled = nodes.filter((node) => node.enabled !== false && node.raw);
-  return {
-    total: nodes.length,
-    enabled: enabled.length,
-    protocols: countBy(enabled, (node) => node.protocol || "-"),
-    sources: countBy(enabled, (node) => node.sourceName || node.source || "-"),
-    tags: countBy(enabled, (node) => node.tags || [])
-  };
-}
-
-export function validateSubscriptionOutputs(nodes = [], token = {}) {
-  const formats = ["v2rayn", "raw", "clash", "mihomo", "sing-box"];
-  const results = {};
-  for (const format of formats) {
-    try {
-      const rendered = renderSubscription(nodes, format, token.profile || {});
-      const checks = [];
-      if (format === "v2rayn") {
-        const decoded = base64Decode(rendered.body).split(/\r?\n/).filter(Boolean);
-        checks.push({ name: "base64-decodes", ok: decoded.length > 0 });
-        checks.push({ name: "share-links", ok: decoded.every((line) => sharePattern.test(line)) });
-      }
-      if (format === "raw") {
-        const rows = rendered.body.split(/\r?\n/).filter(Boolean);
-        checks.push({ name: "raw-links", ok: rows.length > 0 && rows.every((line) => sharePattern.test(line)) });
-      }
-      if (format === "clash" || format === "mihomo") {
-        checks.push({ name: "has-proxies", ok: /proxies:\n\s+- name:/m.test(rendered.body) });
-        checks.push({ name: "has-groups", ok: /proxy-groups:/m.test(rendered.body) });
-        checks.push({ name: "has-rules", ok: /rules:\n\s+- /m.test(rendered.body) });
-      }
-      if (format === "sing-box") {
-        const parsed = JSON.parse(rendered.body);
-        checks.push({ name: "json", ok: Boolean(parsed?.outbounds) });
-      }
-      results[format] = {
-        ok: checks.every((check) => check.ok),
-        contentType: rendered.contentType,
-        bytes: Buffer.byteLength(rendered.body),
-        checks
-      };
-    } catch (error) {
-      results[format] = { ok: false, error: error.message, checks: [] };
-    }
-  }
-  return {
-    ok: Object.values(results).every((row) => row.ok),
-    formats: results,
-    summary: summarizeSubscriptionNodes(nodes)
-  };
-}
-
-export function buildPanelNode(agent, input = {}) {
-  const protocol = String(input.protocol || "").trim();
-  const host = normalizeHost(firstNonEmpty(input.publicHost, agent?.ip, agent?.host));
-  const port = Number(input.port || input.listen_port || 0) || null;
-  const name = firstNonEmpty(input.nodeName, input.tag, `${agent?.name || "server"}-${protocol}`);
-  if (!protocol || !host || !port || protocol === "mixed") return null;
-
-  const common = {
-    id: firstNonEmpty(input.nodeId, `panel-${agent?.id || "agent"}-${protocol}-${port}`),
-    name,
-    source: "panel",
-    sourceName: agent?.name || "panel",
-    protocol: protocol.replace("-ws", "").replace("-reality", ""),
-    server: host,
-    port,
-    agentId: agent?.id || "",
-    enabled: true,
-    tags: [agent?.name, protocol].filter(Boolean),
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-
-  if (protocol === "vmess-ws") {
-    const payload = {
-      v: "2",
-      ps: name,
-      add: host,
-      port: String(port),
-      id: String(input.uuid || input.userId || ""),
-      aid: "0",
-      scy: "auto",
-      net: "ws",
-      type: "none",
-      host: String(input.host || input.serverName || ""),
-      path: String(input.path || "/ws"),
-      tls: input.tls ? "tls" : ""
+  if (profile.protocol === "vless-reality") {
+    return {
+      name,
+      type: "vless",
+      server,
+      port,
+      udp: true,
+      uuid: cleanText(profile.uuid),
+      flow: cleanText(profile.flow) || "xtls-rprx-vision",
+      "packet-encoding": "xudp",
+      tls: true,
+      servername: cleanText(profile.serverName),
+      "skip-cert-verify": false,
+      "client-fingerprint": cleanText(profile.clientFingerprint) || "chrome",
+      "reality-opts": {
+        "public-key": cleanText(profile.publicKey),
+        "short-id": cleanText(profile.shortId)
+      },
+      encryption: ""
     };
-    return { ...common, protocol: "vmess", meta: { uuid: payload.id, alterId: 0, cipher: "auto", network: "ws", path: payload.path, sni: payload.host }, raw: `vmess://${base64Encode(JSON.stringify(payload))}` };
   }
 
-  if (protocol === "vless-reality") {
-    const params = new URLSearchParams({
-      encryption: "none",
-      security: "reality",
-      type: "tcp",
-      flow: String(input.flow || "xtls-rprx-vision"),
-      sni: String(input.serverName || "www.cloudflare.com"),
-      fp: String(input.fingerprint || "chrome")
-    });
-    if (input.publicKey) params.set("pbk", String(input.publicKey));
-    if (input.shortId) params.set("sid", String(input.shortId));
-    return { ...common, protocol: "vless", meta: { username: String(input.uuid || input.userId || ""), ...Object.fromEntries(params.entries()) }, raw: `vless://${input.uuid || input.userId || ""}@${host}:${port}?${params.toString()}#${encodeURIComponent(name)}` };
+  if (profile.protocol === "trojan") {
+    return {
+      name,
+      type: "trojan",
+      server,
+      port,
+      udp: true,
+      password: cleanText(profile.password),
+      sni: cleanText(profile.serverName) || server,
+      "skip-cert-verify": true
+    };
   }
 
-  if (protocol === "trojan") {
-    const params = new URLSearchParams({ sni: String(input.serverName || host) });
-    return { ...common, protocol: "trojan", meta: { password: String(input.password || ""), ...Object.fromEntries(params.entries()) }, raw: `trojan://${encodeURIComponent(String(input.password || ""))}@${host}:${port}?${params.toString()}#${encodeURIComponent(name)}` };
+  if (profile.protocol === "hysteria2") {
+    return {
+      name,
+      type: "hysteria2",
+      server,
+      port,
+      udp: true,
+      password: cleanText(profile.password),
+      up: formatBandwidth(profile.upMbps),
+      down: formatBandwidth(profile.downMbps),
+      sni: cleanText(profile.serverName) || server,
+      "skip-cert-verify": true,
+      alpn: ["h3"]
+    };
   }
 
-  if (protocol === "hysteria2") {
-    const params = new URLSearchParams({ sni: String(input.serverName || host) });
-    return { ...common, protocol: "hysteria2", meta: { password: String(input.password || ""), ...Object.fromEntries(params.entries()) }, raw: `hysteria2://${encodeURIComponent(String(input.password || ""))}@${host}:${port}?${params.toString()}#${encodeURIComponent(name)}` };
+  if (profile.protocol === "shadowsocks") {
+    return {
+      name,
+      type: "ss",
+      server,
+      port,
+      udp: true,
+      cipher: cleanText(profile.method) || "aes-256-gcm",
+      password: cleanText(profile.password)
+    };
   }
 
-  if (protocol === "shadowsocks") {
-    const method = String(input.method || "aes-256-gcm");
-    const password = String(input.password || "");
-    return { ...common, protocol: "ss", meta: { method, password }, raw: `ss://${base64Encode(`${method}:${password}`)}@${host}:${port}#${encodeURIComponent(name)}` };
+  if (profile.protocol === "mixed") {
+    return {
+      name,
+      type: "http",
+      server,
+      port
+    };
   }
 
   return null;
 }
 
-function yamlString(value) {
-  const text = String(value ?? "");
-  return JSON.stringify(text);
-}
+function uriFromNodeProfile(profile, name) {
+  const server = cleanText(profile.server);
+  const port = cleanPort(profile.port);
+  const encodedName = encodeURIComponent(name);
 
-function proxyFromNode(node) {
-  if (!node.raw) return null;
-  const name = node.name || `${node.protocol}-${node.server || node.id}`;
-  const protocol = String(node.protocol || "").toLowerCase();
-  if (protocol === "ss") return `  - name: ${yamlString(name)}\n    type: ss\n    server: ${yamlString(node.server)}\n    port: ${Number(node.port || 0)}\n    cipher: ${yamlString(node.meta?.method || "auto")}\n    password: ${yamlString(node.meta?.password || "")}`;
-  if (protocol === "vmess") {
-    const ws = node.meta?.network === "ws" ? `\n    network: ws\n    ws-opts:\n      path: ${yamlString(node.meta?.path || "/")}${node.meta?.sni ? `\n      headers:\n        Host: ${yamlString(node.meta.sni)}` : ""}` : "";
-    return `  - name: ${yamlString(name)}\n    type: vmess\n    server: ${yamlString(node.server)}\n    port: ${Number(node.port || 0)}\n    uuid: ${yamlString(node.meta?.uuid || "")}\n    alterId: ${Number(node.meta?.alterId || 0)}\n    cipher: ${yamlString(node.meta?.cipher || "auto")}${ws}`;
+  if (profile.protocol === "vmess-ws") {
+    const payload = {
+      v: "2",
+      ps: name,
+      add: server,
+      port: String(port),
+      id: cleanText(profile.uuid),
+      aid: "0",
+      scy: "auto",
+      net: "ws",
+      type: "none",
+      host: "",
+      path: cleanText(profile.path) || "/",
+      tls: ""
+    };
+    return `vmess://${Buffer.from(JSON.stringify(payload)).toString("base64")}`;
   }
-  if (protocol === "trojan") return `  - name: ${yamlString(name)}\n    type: trojan\n    server: ${yamlString(node.server)}\n    port: ${Number(node.port || 0)}\n    password: ${yamlString(node.meta?.password || node.meta?.username || "")}\n    sni: ${yamlString(node.meta?.sni || node.server || "")}`;
-  if (protocol === "vless") return `  - name: ${yamlString(name)}\n    type: vless\n    server: ${yamlString(node.server)}\n    port: ${Number(node.port || 0)}\n    uuid: ${yamlString(node.meta?.username || "")}\n    flow: ${yamlString(node.meta?.flow || "")}\n    servername: ${yamlString(node.meta?.sni || node.server || "")}\n    client-fingerprint: ${yamlString(node.meta?.fp || "chrome")}\n    reality-opts:\n      public-key: ${yamlString(node.meta?.pbk || "")}\n      short-id: ${yamlString(node.meta?.sid || "")}`;
-  if (protocol === "hysteria2") return `  - name: ${yamlString(name)}\n    type: hysteria2\n    server: ${yamlString(node.server)}\n    port: ${Number(node.port || 0)}\n    password: ${yamlString(node.meta?.password || node.meta?.username || "")}\n    sni: ${yamlString(node.meta?.sni || node.server || "")}`;
-  return `  - name: ${yamlString(name)}\n    type: ${yamlString(protocol || "unknown")}\n    server: ${yamlString(node.server)}\n    port: ${Number(node.port || 0)}`;
-}
 
-function yamlBlock(value, indent = 0) {
-  const pad = " ".repeat(indent);
-  if (Array.isArray(value)) return value.map((item) => `${pad}- ${typeof item === "object" ? `\n${yamlBlock(item, indent + 2)}` : yamlString(item)}`).join("\n");
-  if (value && typeof value === "object") {
-    return Object.entries(value)
-      .map(([key, item]) => {
-        if (Array.isArray(item)) return `${pad}${key}:\n${yamlBlock(item, indent + 2)}`;
-        if (item && typeof item === "object") return `${pad}${key}:\n${yamlBlock(item, indent + 2)}`;
-        return `${pad}${key}: ${typeof item === "number" || typeof item === "boolean" ? item : yamlString(item)}`;
-      })
-      .join("\n");
+  if (profile.protocol === "vless-reality") {
+    const url = new URL(`vless://${encodeURIComponent(cleanText(profile.uuid))}@${server}:${port}`);
+    url.searchParams.set("encryption", "none");
+    url.searchParams.set("security", "reality");
+    url.searchParams.set("sni", cleanText(profile.serverName));
+    url.searchParams.set("fp", cleanText(profile.clientFingerprint) || "chrome");
+    url.searchParams.set("pbk", cleanText(profile.publicKey));
+    url.searchParams.set("sid", cleanText(profile.shortId));
+    url.searchParams.set("type", "tcp");
+    if (cleanText(profile.flow)) url.searchParams.set("flow", cleanText(profile.flow));
+    return `${url.toString()}#${encodedName}`;
   }
-  return `${pad}${yamlString(value)}`;
+
+  if (profile.protocol === "trojan") {
+    const url = new URL(`trojan://${encodeURIComponent(cleanText(profile.password))}@${server}:${port}`);
+    url.searchParams.set("sni", cleanText(profile.serverName) || server);
+    url.searchParams.set("allowInsecure", "1");
+    return `${url.toString()}#${encodedName}`;
+  }
+
+  if (profile.protocol === "hysteria2") {
+    const url = new URL(`hysteria2://${encodeURIComponent(cleanText(profile.password))}@${server}:${port}`);
+    url.searchParams.set("sni", cleanText(profile.serverName) || server);
+    url.searchParams.set("insecure", "1");
+    url.searchParams.set("upmbps", String(Number(profile.upMbps || 100) || 100));
+    url.searchParams.set("downmbps", String(Number(profile.downMbps || 100) || 100));
+    return `${url.toString()}#${encodedName}`;
+  }
+
+  if (profile.protocol === "shadowsocks") {
+    const auth = Buffer.from(`${cleanText(profile.method)}:${cleanText(profile.password)}`).toString("base64");
+    return `ss://${auth}@${server}:${port}#${encodedName}`;
+  }
+
+  if (profile.protocol === "mixed") {
+    return `http://${server}:${port}#${encodedName}`;
+  }
+
+  return "";
 }
 
-function normalizeRouteTemplate(options = {}) {
-  const id = String(options.routeTemplate || options.template || "mainland").trim() || "mainland";
-  const base = routeTemplates[id] || routeTemplates.mainland;
+function parseHostPort(value) {
+  const raw = cleanText(value);
+  if (!raw) return { host: "", port: 0 };
+  if (raw.startsWith("[")) {
+    const index = raw.lastIndexOf("]:");
+    if (index > -1) return { host: raw.slice(1, index), port: cleanPort(raw.slice(index + 2)) };
+  }
+  const index = raw.lastIndexOf(":");
+  if (index < 0) return { host: raw, port: 0 };
+  return { host: raw.slice(0, index), port: cleanPort(raw.slice(index + 1)) };
+}
+
+function parseVmessUri(uri) {
+  const payload = cleanText(uri).slice("vmess://".length).split("#")[0];
+  const decoded = safeBase64Decode(payload);
+  const data = JSON.parse(decoded);
+  const name = decodeFragment(cleanText(uri).split("#")[1] || data.ps || data.name || `VMess ${data.add}:${data.port}`);
+  const proxy = {
+    name,
+    type: "vmess",
+    server: cleanText(data.add || data.server || data.host),
+    port: cleanPort(data.port),
+    udp: true,
+    uuid: cleanText(data.id),
+    alterId: Number(data.aid || 0) || 0,
+    cipher: cleanText(data.scy || data.cipher) || "auto"
+  };
+  const network = cleanText(data.net).toLowerCase() || "tcp";
+  if (network === "ws") {
+    proxy.network = "ws";
+    proxy["ws-opts"] = buildWsOptions(data.path, data.host);
+  }
+  if (cleanText(data.tls).toLowerCase() && cleanText(data.tls).toLowerCase() !== "none") {
+    proxy.tls = true;
+    if (cleanText(data.sni || data.host)) proxy.servername = cleanText(data.sni || data.host);
+    if (String(data.allowInsecure || "") === "1") proxy["skip-cert-verify"] = true;
+  }
+  return { name, uri, proxy };
+}
+
+function parseVlessUri(uri) {
+  const parsed = new URL(uri);
+  const params = parsed.searchParams;
+  const name = decodeFragment(parsed.hash.slice(1) || `VLESS ${parsed.hostname}:${parsed.port}`);
+  const proxy = {
+    name,
+    type: "vless",
+    server: parsed.hostname,
+    port: cleanPort(parsed.port),
+    udp: true,
+    uuid: decodeURIComponent(parsed.username || ""),
+    encryption: ""
+  };
+  if (cleanText(params.get("flow"))) proxy.flow = cleanText(params.get("flow"));
+  const security = cleanText(params.get("security")).toLowerCase();
+  if (security && security !== "none") {
+    proxy.tls = true;
+    proxy.servername = cleanText(params.get("sni") || params.get("host")) || parsed.hostname;
+    if (params.get("allowInsecure") === "1" || params.get("insecure") === "1") proxy["skip-cert-verify"] = true;
+  }
+  if (security === "reality") {
+    proxy["client-fingerprint"] = cleanText(params.get("fp")) || "chrome";
+    proxy["reality-opts"] = {
+      "public-key": cleanText(params.get("pbk")),
+      "short-id": cleanText(params.get("sid"))
+    };
+    proxy["packet-encoding"] = "xudp";
+  }
+  const network = cleanText(params.get("type")).toLowerCase();
+  if (network === "ws") {
+    proxy.network = "ws";
+    proxy["ws-opts"] = buildWsOptions(params.get("path"), params.get("host"));
+  }
+  return { name, uri, proxy };
+}
+
+function parseTrojanUri(uri) {
+  const parsed = new URL(uri);
+  const params = parsed.searchParams;
+  const name = decodeFragment(parsed.hash.slice(1) || `Trojan ${parsed.hostname}:${parsed.port}`);
+  const proxy = {
+    name,
+    type: "trojan",
+    server: parsed.hostname,
+    port: cleanPort(parsed.port),
+    udp: true,
+    password: decodeURIComponent(parsed.username || "")
+  };
+  const sni = cleanText(params.get("sni") || params.get("peer"));
+  if (sni) proxy.sni = sni;
+  if (params.get("allowInsecure") === "1" || params.get("insecure") === "1") proxy["skip-cert-verify"] = true;
+  if (cleanText(params.get("fp"))) proxy["client-fingerprint"] = cleanText(params.get("fp"));
+  const network = cleanText(params.get("type")).toLowerCase();
+  if (network === "ws") {
+    proxy.network = "ws";
+    proxy["ws-opts"] = buildWsOptions(params.get("path"), params.get("host"));
+  }
+  return { name, uri, proxy };
+}
+
+function parseHysteria2Uri(uri) {
+  const parsed = new URL(uri);
+  const params = parsed.searchParams;
+  const name = decodeFragment(parsed.hash.slice(1) || `Hysteria2 ${parsed.hostname}:${parsed.port}`);
+  const password = decodeURIComponent(parsed.username || parsed.password || params.get("password") || "");
+  const proxy = {
+    name,
+    type: "hysteria2",
+    server: parsed.hostname,
+    port: cleanPort(parsed.port),
+    udp: true,
+    password
+  };
+  const sni = cleanText(params.get("sni"));
+  if (sni) proxy.sni = sni;
+  if (params.get("insecure") === "1" || params.get("allowInsecure") === "1") proxy["skip-cert-verify"] = true;
+  if (cleanText(params.get("up"))) proxy.up = formatBandwidth(params.get("up"));
+  if (cleanText(params.get("down"))) proxy.down = formatBandwidth(params.get("down"));
+  if (cleanText(params.get("upmbps"))) proxy.up = formatBandwidth(params.get("upmbps"));
+  if (cleanText(params.get("downmbps"))) proxy.down = formatBandwidth(params.get("downmbps"));
+  if (cleanText(params.get("obfs"))) proxy.obfs = cleanText(params.get("obfs"));
+  if (cleanText(params.get("obfs-password"))) proxy["obfs-password"] = cleanText(params.get("obfs-password"));
+  const alpn = cleanArray(cleanText(params.get("alpn")).split(","));
+  if (alpn.length) proxy.alpn = alpn;
+  return { name, uri, proxy };
+}
+
+function parseShadowsocksUri(uri) {
+  const raw = cleanText(uri).slice("ss://".length);
+  const hashIndex = raw.indexOf("#");
+  const fragment = hashIndex > -1 ? raw.slice(hashIndex + 1) : "";
+  const base = hashIndex > -1 ? raw.slice(0, hashIndex) : raw;
+  const queryIndex = base.indexOf("?");
+  const content = queryIndex > -1 ? base.slice(0, queryIndex) : base;
+
+  let auth = "";
+  let hostPort = "";
+
+  if (content.includes("@")) {
+    const index = content.lastIndexOf("@");
+    auth = content.slice(0, index);
+    hostPort = content.slice(index + 1);
+    if (!auth.includes(":")) auth = safeBase64Decode(auth);
+  } else {
+    const decoded = safeBase64Decode(content);
+    const index = decoded.lastIndexOf("@");
+    if (index < 0) throw new Error("invalid shadowsocks uri");
+    auth = decoded.slice(0, index);
+    hostPort = decoded.slice(index + 1);
+  }
+
+  const authIndex = auth.indexOf(":");
+  if (authIndex < 0) throw new Error("invalid shadowsocks auth");
+  const method = auth.slice(0, authIndex);
+  const password = auth.slice(authIndex + 1);
+  const { host, port } = parseHostPort(hostPort);
+  const name = decodeFragment(fragment || `SS ${host}:${port}`);
   return {
-    ...base,
-    ruleProviders: { ...(base.ruleProviders || {}) },
-    rules: [...rulesFromValue(options.prependRules), ...(base.rules || []), ...rulesFromValue(options.customRules)]
+    name,
+    uri,
+    proxy: {
+      name,
+      type: "ss",
+      server: host,
+      port,
+      udp: true,
+      cipher: method,
+      password
+    }
   };
 }
 
-function renderClashSubscription(enabled, options = {}) {
-  const names = enabled.map((node) => yamlString(node.name || node.id));
-  const proxies = enabled.map(proxyFromNode).filter(Boolean).join("\n");
-  const template = normalizeRouteTemplate(options);
-  const providers = Object.keys(template.ruleProviders || {}).length ? `rule-providers:\n${yamlBlock(template.ruleProviders, 2)}\n` : "";
-  return {
-    contentType: "text/yaml; charset=utf-8",
-    body: `mixed-port: 7890\nallow-lan: false\nmode: rule\nlog-level: info\nexternal-controller: 127.0.0.1:9090\nprofile:\n  store-selected: true\n  store-fake-ip: true\ndns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n  fallback:\n    - https://1.1.1.1/dns-query\n    - https://8.8.8.8/dns-query\nproxies:\n${proxies || "[]"}\nproxy-groups:\n  - name: Auto\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies:\n${names.map((name) => `      - ${name}`).join("\n") || "      - DIRECT"}\n  - name: Manual\n    type: select\n    proxies:\n${names.map((name) => `      - ${name}`).join("\n") || "      - DIRECT"}\n${providers}rules:\n${template.rules.map((rule) => `  - ${rule}`).join("\n")}\n`
+function parseHttpLikeUri(uri) {
+  const parsed = new URL(uri);
+  const scheme = parsed.protocol.replace(":", "").toLowerCase();
+  const name = decodeFragment(parsed.hash.slice(1) || `${scheme.toUpperCase()} ${parsed.hostname}:${parsed.port}`);
+  const proxy = {
+    name,
+    type: scheme.startsWith("socks") ? "socks5" : "http",
+    server: parsed.hostname,
+    port: cleanPort(parsed.port || (scheme === "https" ? 443 : 80))
   };
+  if (parsed.username) proxy.username = decodeURIComponent(parsed.username);
+  if (parsed.password) proxy.password = decodeURIComponent(parsed.password);
+  if (scheme === "https") proxy.tls = true;
+  return { name, uri, proxy };
 }
 
-export function renderSubscription(nodes = [], format = "base64", options = {}) {
-  const enabled = nodes.filter((node) => node.enabled !== false && node.raw);
-  const raw = enabled.map((node) => node.raw).join("\n");
-  const normalized = String(format || "base64").toLowerCase();
+function parseProxyUri(uri) {
+  const text = cleanText(uri);
+  if (text.startsWith("vmess://")) return parseVmessUri(text);
+  if (text.startsWith("vless://")) return parseVlessUri(text);
+  if (text.startsWith("trojan://")) return parseTrojanUri(text);
+  if (text.startsWith("hysteria2://") || text.startsWith("hy2://")) return parseHysteria2Uri(text.replace("hy2://", "hysteria2://"));
+  if (text.startsWith("ss://")) return parseShadowsocksUri(text);
+  if (text.startsWith("http://") || text.startsWith("https://") || text.startsWith("socks5://") || text.startsWith("socks://")) return parseHttpLikeUri(text);
+  throw new Error("unsupported proxy uri");
+}
 
-  if (normalized === "raw" || normalized === "plain") return { contentType: "text/plain; charset=utf-8", body: `${raw}\n` };
-  if (["v2rayn", "v2ray", "base64"].includes(normalized)) return { contentType: "text/plain; charset=utf-8", body: base64Encode(raw) };
-  if (normalized === "sing-box" || normalized === "singbox") {
-    return {
-      contentType: "application/json; charset=utf-8",
-      body: JSON.stringify(
+function decodeImportedContent(content) {
+  const raw = String(content || "").replace(/\r\n/g, "\n").trim();
+  if (!raw) return "";
+  if (/proxies\s*:/m.test(raw) || raw.includes("://")) return raw;
+  try {
+    const decoded = safeBase64Decode(raw);
+    if (/proxies\s*:/m.test(decoded) || decoded.includes("://")) return decoded;
+  } catch {}
+  return raw;
+}
+
+function extractClashProxies(content) {
+  const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
+  const start = lines.findIndex((line) => /^\s*proxies\s*:\s*$/.test(line));
+  if (start < 0) return null;
+
+  const block = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim() && /^\S.*:/.test(line) && !line.trimStart().startsWith("-")) break;
+    block.push(line);
+  }
+
+  const nonEmpty = block.filter((line) => line.trim());
+  if (!nonEmpty.length) return { block: "", names: [] };
+  const baseIndent = Math.min(...nonEmpty.map((line) => line.match(/^\s*/)?.[0]?.length || 0));
+  const normalized = block.map((line) => (line.trim() ? `  ${line.slice(baseIndent)}` : "")).join("\n").trimEnd();
+  const names = [];
+  for (const line of normalized.split("\n")) {
+    const match = line.match(/^\s*-\s*name\s*:\s*(.+)\s*$/) || line.match(/^\s+name\s*:\s*(.+)\s*$/);
+    if (!match) continue;
+    const value = match[1].trim().replace(/^['"]|['"]$/g, "");
+    if (value) names.push(value);
+  }
+  return { block: normalized, names };
+}
+
+function renderClashTemplate(templateId, generatedProxies, rawBlocks, proxyNames) {
+  const pool = dedupe(proxyNames);
+  const hasNodes = pool.length > 0;
+
+  const groupsByTemplate = {
+    "clash-basic": {
+      mode: "rule",
+      groups: [
+        ...(hasNodes
+          ? [
+              {
+                name: "Auto",
+                type: "url-test",
+                url: "https://www.gstatic.com/generate_204",
+                interval: 300,
+                lazy: true,
+                proxies: pool
+              }
+            ]
+          : []),
         {
-          log: { level: "info" },
-          outbounds: enabled.map((node) => ({ type: "selector", tag: node.name, raw: node.raw })),
-          route: { final: enabled[0]?.name || "direct" }
-        },
-        null,
-        2
-      )
+          name: "Proxy",
+          type: "select",
+          proxies: hasNodes ? ["Auto", ...pool, "DIRECT"] : ["DIRECT"]
+        }
+      ],
+      rules: [
+        "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
+        "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+        "IP-CIDR,100.64.0.0/10,DIRECT,no-resolve",
+        "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
+        "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+        "IP-CIDR,224.0.0.0/4,DIRECT,no-resolve",
+        "IP-CIDR6,::1/128,DIRECT,no-resolve",
+        "MATCH,Proxy"
+      ]
+    },
+    "clash-global": {
+      mode: "global",
+      groups: [
+        ...(hasNodes
+          ? [
+              {
+                name: "Auto",
+                type: "url-test",
+                url: "https://www.gstatic.com/generate_204",
+                interval: 300,
+                lazy: true,
+                proxies: pool
+              }
+            ]
+          : []),
+        {
+          name: "Global",
+          type: "select",
+          proxies: hasNodes ? ["Auto", ...pool, "DIRECT"] : ["DIRECT"]
+        }
+      ],
+      rules: ["MATCH,Global"]
+    },
+    "clash-fallback": {
+      mode: "rule",
+      groups: [
+        ...(hasNodes
+          ? [
+              {
+                name: "Fallback",
+                type: "fallback",
+                url: "https://www.gstatic.com/generate_204",
+                interval: 300,
+                lazy: true,
+                proxies: pool
+              }
+            ]
+          : []),
+        {
+          name: "Proxy",
+          type: "select",
+          proxies: hasNodes ? ["Fallback", ...pool, "DIRECT"] : ["DIRECT"]
+        }
+      ],
+      rules: [
+        "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
+        "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+        "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
+        "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+        "MATCH,Proxy"
+      ]
+    }
+  };
+
+  const template = groupsByTemplate[templateId] || groupsByTemplate[defaultSubscriptionTemplateId];
+  const preamble = {
+    "mixed-port": 7890,
+    "allow-lan": true,
+    mode: template.mode,
+    "log-level": "info",
+    "unified-delay": true,
+    ipv6: true,
+    dns: {
+      enable: true,
+      "enhanced-mode": "fake-ip",
+      nameserver: ["1.1.1.1", "8.8.8.8"],
+      fallback: ["https://1.1.1.1/dns-query", "https://dns.google/dns-query"]
+    }
+  };
+  const trailer = {
+    "proxy-groups": template.groups,
+    rules: template.rules
+  };
+
+  const lines = [
+    `# Generated by ChikenEasy at ${new Date().toISOString()}`,
+    `# Template: ${templateId}`
+  ];
+  appendYamlObject(lines, preamble, 0);
+  if (!generatedProxies.length && !rawBlocks.length) {
+    lines.push("proxies: []");
+  } else {
+    lines.push("proxies:");
+    for (const proxy of generatedProxies) appendYamlArrayItem(lines, proxy, 2);
+    for (const block of rawBlocks) {
+      if (!block) continue;
+      lines.push(...block.split("\n"));
+    }
+  }
+  appendYamlObject(lines, trailer, 0);
+  return `${lines.join("\n")}\n`;
+}
+
+function parseImportedSubscription(importItem) {
+  const warnings = [];
+  const decoded = decodeImportedContent(importItem.content);
+  const clash = extractClashProxies(decoded);
+  if (clash) {
+    if (!clash.names.length) warnings.push(`Import "${importItem.name}" contains a Clash proxies block without readable proxy names.`);
+    return {
+      rawBlocks: clash.block ? [clash.block] : [],
+      rawNames: clash.names,
+      generated: [],
+      uris: [],
+      warnings
     };
   }
-  if (["clash", "mihomo", "yaml", "yml"].includes(normalized)) return renderClashSubscription(enabled, options);
-  return { contentType: "text/plain; charset=utf-8", body: base64Encode(raw) };
+
+  const generated = [];
+  const uris = [];
+  const lines = decoded
+    .split("\n")
+    .map((line) => cleanText(line))
+    .filter((line) => line && !line.startsWith("#"));
+
+  for (const line of lines) {
+    try {
+      const parsed = parseProxyUri(line);
+      generated.push(parsed.proxy);
+      uris.push(parsed.uri);
+    } catch (error) {
+      warnings.push(`Import "${importItem.name}" skipped one entry: ${error.message}.`);
+    }
+  }
+
+  if (!generated.length && !warnings.length) warnings.push(`Import "${importItem.name}" did not contain any supported nodes.`);
+  return { rawBlocks: [], rawNames: [], generated, uris, warnings };
 }
 
-export function isShareProtocol(raw) {
-  return sharePattern.test(String(raw || "")) && shareProtocols.some((protocol) => String(raw || "").toLowerCase().startsWith(`${protocol}://`));
+export function buildNodeProfile(agent, input, versionId) {
+  const protocol = cleanText(input.protocol) || "vmess-ws";
+  return {
+    agentId: agent.id,
+    agentName: cleanText(agent.name) || agent.id,
+    protocol,
+    name: cleanText(input.exportName) || `${cleanText(agent.name) || agent.id} ${protocolLabels[protocol] || protocol}`,
+    server: cleanText(input.exportHost || input.server) || cleanText(agent.ip || agent.host),
+    port: cleanPort(input.port || input.listen_port),
+    path: cleanText(input.path) || "/ws",
+    uuid: cleanText(input.uuid || input.userId),
+    password: cleanText(input.password),
+    method: cleanText(input.method) || "aes-256-gcm",
+    serverName: cleanText(input.serverName || input.sni),
+    publicKey: cleanText(input.publicKey),
+    shortId: cleanText(input.shortId),
+    flow: cleanText(input.flow) || "xtls-rprx-vision",
+    clientFingerprint: cleanText(input.clientFingerprint) || "chrome",
+    upMbps: Number(input.upMbps || 100) || 100,
+    downMbps: Number(input.downMbps || 100) || 100,
+    versionId,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+export function listSubscriptionNodes(state) {
+  return Object.values(state.nodeProfiles || {})
+    .map((profile) => {
+      const validation = validateNodeProfile(profile);
+      return {
+        agentId: profile.agentId,
+        agentName: profile.agentName,
+        protocol: profile.protocol,
+        protocolLabel: protocolLabels[profile.protocol] || profile.protocol,
+        name: buildNodeDisplayName(profile),
+        server: profile.server,
+        port: profile.port,
+        updatedAt: profile.updatedAt,
+        ready: validation.ok,
+        reason: validation.reason
+      };
+    })
+    .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+}
+
+export function buildSubscriptionProfile(input, current = {}) {
+  const now = new Date().toISOString();
+  return {
+    id: current.id || cleanText(input.id) || nanoid(10),
+    name: cleanText(input.name) || current.name || `subscription-${nanoid(6)}`,
+    template: templateIds.has(cleanText(input.template)) ? cleanText(input.template) : current.template || defaultSubscriptionTemplateId,
+    publicToken: cleanText(input.publicToken) || current.publicToken || nanoid(18),
+    localNodes: dedupe(cleanArray(input.localNodes ?? current.localNodes ?? [])),
+    imports: (Array.isArray(input.imports) ? input.imports : current.imports || [])
+      .map((item, index) => ({
+        id: cleanText(item?.id) || nanoid(8),
+        name: normalizeImportedName(item?.name, `Import ${index + 1}`),
+        content: String(item?.content || "").trim(),
+        updatedAt: now
+      }))
+      .filter((item) => item.content),
+    createdAt: current.createdAt || now,
+    updatedAt: now
+  };
+}
+
+export function renderSubscription(profile, state, options = {}) {
+  const warnings = [];
+  const usedNames = new Set();
+  const rawBlocks = [];
+  const rawNames = [];
+  const generated = [];
+  const uris = [];
+
+  for (const importItem of profile.imports || []) {
+    const result = parseImportedSubscription(importItem);
+    warnings.push(...result.warnings);
+    for (const name of result.rawNames) {
+      if (usedNames.has(name)) warnings.push(`Duplicate proxy name detected: ${name}. Imported Clash blocks keep their original names.`);
+      usedNames.add(name);
+      rawNames.push(name);
+    }
+    rawBlocks.push(...result.rawBlocks);
+    for (const proxy of result.generated) {
+      const uniqueName = ensureUniqueName(proxy.name, usedNames);
+      generated.push({ ...proxy, name: uniqueName });
+    }
+    uris.push(...result.uris);
+  }
+
+  for (const agentId of profile.localNodes || []) {
+    const nodeProfile = state.nodeProfiles?.[agentId];
+    const validation = validateNodeProfile(nodeProfile);
+    if (!validation.ok) {
+      warnings.push(`Local node ${agentId} skipped: ${validation.reason}.`);
+      continue;
+    }
+    const name = ensureUniqueName(buildNodeDisplayName(nodeProfile), usedNames);
+    const proxy = clashProxyFromNodeProfile(nodeProfile, name);
+    const uri = uriFromNodeProfile(nodeProfile, name);
+    if (!proxy || !uri) {
+      warnings.push(`Local node ${agentId} skipped: unsupported export protocol ${nodeProfile.protocol}.`);
+      continue;
+    }
+    generated.push(proxy);
+    uris.push(uri);
+  }
+
+  const templateId = templateIds.has(cleanText(options.template || profile.template)) ? cleanText(options.template || profile.template) : defaultSubscriptionTemplateId;
+  const proxyNames = [...generated.map((item) => item.name), ...rawNames];
+  const body = renderClashTemplate(templateId, generated, rawBlocks, proxyNames);
+  const uriContent = uris.join("\n");
+  return {
+    templateId,
+    body,
+    uriContent,
+    uriBase64: uriContent ? Buffer.from(uriContent).toString("base64") : "",
+    warnings: dedupe(warnings),
+    proxyCount: proxyNames.length,
+    importCount: (profile.imports || []).length,
+    localNodeCount: (profile.localNodes || []).length
+  };
 }

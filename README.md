@@ -1,137 +1,171 @@
 # chiken-easy
 
-一个面向 `sing-box` 多服务器场景的轻量主控面板。
+`chiken-easy` is a sing-box centered integrated operations panel built on the original Node.js + Express + WebSocket + React architecture of this repository. It keeps the existing control-plane shape and hardens it into a deployable stack that combines:
 
-它由三部分组成：
+- Komari-style public probes, monitor summaries, history, and alerts
+- Memos-style Markdown notes, attachments, and lightweight file workspace
+- sublinkPro-style node pool, subscription output, and proxy quality scoring
+- EasyNode-style assets, credentials, SSH, SFTP, scripts, and batch commands
 
-- `server/`：主控 API、Web 面板、Agent WebSocket、SSH/WebSocket 终端、审计日志
-- `agent/`：部署在每台服务器上的 Agent，负责配置下发、服务控制、日志读取、独立转发容器管理
-- `web/`：React + Vite 面板
+## Positioning
 
-## 当前能力
+This project is still one application:
 
-- 服务器列表、详情、实时状态
-- Komari 风格探针面板
-  - CPU 使用率、核心数、负载
-  - 内存、Swap、根分区硬盘占用
-  - 网络上下行速率、累计流量、网卡数
-  - 运行时间、进程数、最近探针更新时间
-- 节点配置向导
-  - `VMess + WebSocket`
-  - `VLESS + Reality`
-  - `Trojan + TLS`
-  - `Hysteria2`
-  - `Shadowsocks`
-  - `Mixed HTTP/SOCKS`
-- 配置版本记录与回滚
-- 真实 SSH 终端
-  - 服务器列表右侧直接有 `SSH` 入口
-  - 先保存目标服务器的 `host / port / username / password` 或私钥
-  - 之后点击即可进入对应机器的 SSH 会话
-- 端口转发
-  - 使用独立容器运行，不再覆盖当前节点配置
-  - 支持 `sing-box`、`Realm`、`GOST`
-  - 支持 `TCP`、`UDP`、`TCP + UDP`
-- API Token
-  - 支持 `Authorization: Bearer ck_xxx`
-  - 也支持通过 `?token=ck_xxx` 直接进入主控
-  - 前端会自动把 token 注入 API、SSE 和终端 WebSocket，方便脚本或 AI 接管
+- `server/index.js` is the control plane
+- `agent/index.js` is the remote agent
+- `web/src/App.jsx` remains the admin SPA entry
+- JSON state is still the compatibility-first main storage path
+- SQLite is now available as a minimal event/history backend
 
-## 重要实现说明
+## Feature Overview
 
-- `Trojan` 和 `Hysteria2` 首次下发时，如果配置里引用的证书文件不存在，Agent 会自动生成自签名证书。
-- `VLESS + Reality` 客户端测试时需要 `public key + short_id + uTLS`。
-- `Shadowsocks` 默认方法已改成更通用的 `aes-256-gcm`，避免 2022 系列密码格式问题。
-- `Realm` 默认镜像使用 `4points/realm:latest`，因为测试环境对 `ghcr.io` 拉取不稳定。
+- dashboard and server inventory
+- sing-box protocol wizard for `vmess-ws`, `vless-reality`, `trojan`, `hysteria2`, `shadowsocks`, `mixed`
+- config versioning and rollback
+- forward rules with `sing-box`, `realm`, and `gost`
+- monitor summaries, public probes, history, and alert settings
+- memos, files, attachments, and object linking
+- node pool import/export and subscription tokens
+- protocol-aware proxy-check MVP for `ss`, `http`, `socks`, `mixed`
+- SSH terminal, SFTP, credentials, scripts, and batch runs
+- API token, session-cookie auth, audit logging, and secret redaction
 
-## 本地开发
+## Quick Start
 
 ```bash
 npm install
-npm run dev
+npm run check
 ```
 
-单独启动主控：
+On Windows PowerShell:
 
-```bash
-npm run dev:server
+```powershell
+npm.cmd run check
 ```
 
-单独启动 Web：
+## Docker Deployment
 
-```bash
-npm run dev:web
-```
-
-单独启动 Agent：
-
-```bash
-CHIKEN_SERVER=ws://127.0.0.1:7788/agent \
-CHIKEN_TOKEN=ce_xxx \
-CHIKEN_AGENT_NAME=local-agent \
-npm run dev:agent
-```
-
-构建：
-
-```bash
-npm run build
-```
-
-检查：
-
-```bash
-npm run lint
-```
-
-## Docker 部署
-
-先准备环境变量：
-
-```bash
-cp .env.example .env
-# 修改 .env 中的 token、管理员账号密码、以及远程 Agent 的 CHIKEN_SERVER
-```
-
-> 隐私提醒：这是开源仓库，不要把真实服务器地址、密码、私钥、token、订阅内容或其他敏感信息提交进仓库。
-
-主控机：
+Server host:
 
 ```bash
 docker compose -f docker-compose.server.yml up -d --build
 ```
 
-仅 Agent：
+Agent host:
 
 ```bash
 docker compose -f docker-compose.agent.yml up -d --build
 ```
 
-### 默认管理员说明
-
-- 建议显式设置 `CHIKEN_ADMIN_PASSWORD`
-- 如果未设置，服务首次启动时会自动生成一个随机初始密码，并打印到容器日志里
-- 可用下面命令查看：
+Compose validation commands:
 
 ```bash
-docker logs chiken-server | grep bootstrap-admin
+docker compose -f docker-compose.server.yml config
+docker compose -f docker-compose.agent.yml config
 ```
 
-### 安全建议
+## Server And Agent Runtime
 
-- 不要开启 `CHIKEN_ALLOW_OPEN_REGISTER=1`，除非你非常明确知道自己在做什么
-- 管理后台建议始终设置 `CHIKEN_API_TOKEN`
-- 连续登录失败过多时，系统会临时限流，降低暴力尝试风险
-- 开源仓库不要提交 `.env`、密码、token、私钥、服务器清单
+Server compose runs:
 
-现在默认会额外挂载：
+- control plane
+- local agent
+- local sing-box
 
-- `./data/sing-box`：主 `sing-box` 配置
-- `./data/forwarders`：独立转发器运行数据
+Agent compose runs:
 
-## 文档
+- remote agent
+- remote sing-box
 
-- 开发文档：`docs/development.md`
-- 开发报告：`docs/development-report-2026-05-20.md`
-- 测试记录：`docs/test-report-2026-05-20.md`
-- 节点配置与转发说明：`docs/node-config-guide.md`
+## Environment
+
+Start from `.env.example`.
+
+Important variables:
+
+- `CHIKEN_REQUIRE_API_TOKEN=1`
+- `CHIKEN_ALLOW_QUERY_TOKEN=0`
+- `CHIKEN_MASTER_KEY=<long-random-secret>`
+- `CHIKEN_STORAGE=json|sqlite`
+- `CHIKEN_SQLITE_PATH=data/chiken.db`
+- `CHIKEN_REALM_IMAGE=4points/realm:latest`
+- `CHIKEN_GOST_IMAGE=gogost/gost:latest`
+- `CHIKEN_PROXY_CHECK_URL=https://www.gstatic.com/generate_204`
+- `CHIKEN_MONITOR_RAW_HOURS=24`
+- `CHIKEN_MONITOR_AGG_DAYS=7`
+
+## Security Guidance
+
+- keep query token auth disabled unless strictly needed
+- set `CHIKEN_MASTER_KEY` in production so secrets are encrypted at rest
+- keep `.local/`, `mima.txt`, `.env*`, `*.pem`, `*.key`, `data/`, `node_modules/`, and `dist/` out of git
+- rotate bootstrap and API tokens after provisioning
+- terminate TLS in front of the panel if exposing it publicly
+
+## Storage
+
+- `CHIKEN_STORAGE=json` keeps `data/state.json` as the source of truth
+- `CHIKEN_STORAGE=sqlite` keeps `state.json` for config state and adds SQLite for:
+  - audit logs
+  - probe samples
+  - subscription access logs
+  - node quality history
+
+See [docs/storage.md](./docs/storage.md).
+
+## Realm / GOST Images
+
+Forwarding engines use configurable images:
+
+- `CHIKEN_REALM_IMAGE`
+- `CHIKEN_GOST_IMAGE`
+
+The agent now performs image preflight checks before create/apply. If pull fails, the API returns a readable error instead of a generic failure.
+
+## Proxy Check
+
+Current protocol-aware MVP supports:
+
+- Shadowsocks via temporary local sing-box bridge
+- HTTP proxy
+- SOCKS proxy
+- Mixed proxy
+
+Protocols not yet fully implemented for authenticated end-to-end proxy-check return explicit unsupported/not-implemented results and do not fake success.
+
+## Local Test Credentials
+
+`mima.txt` is only for local operator testing and must never be committed. Parsed credentials are written to `.local/test-servers.json`, which is also ignored.
+
+## Known Limits
+
+- `state.json` is still the primary state store even in SQLite mode
+- `trojan`, `vless`, `vmess`, and `hysteria2` proxy-check are not yet full protocol-level checks
+- remote `Realm`/`GOST` validation still depends on registry reachability from the target host
+- `web/src/App.jsx` has been reduced via shared extractions, but the page layer is still intentionally compact
+
+## Release Checklist
+
+- `npm install`
+- `npm run check`
+- `CHIKEN_STORAGE=json npm run smoke`
+- `CHIKEN_STORAGE=sqlite npm run smoke`
+- `docker compose -f docker-compose.server.yml config`
+- `docker compose -f docker-compose.agent.yml config`
+- `node scripts/parse-mima.mjs`
+- `node scripts/remote-verify.mjs`
+- verify no sensitive files are staged before commit or push
+
+## Documentation
+
+- [Capability Baseline](./docs/capability-baseline.md)
+- [Development](./docs/development.md)
+- [Security Hardening](./docs/security-hardening.md)
+- [Monitor](./docs/monitor.md)
+- [Memos](./docs/memos.md)
+- [Subscription](./docs/subscription.md)
+- [Server Workspace](./docs/server-workspace.md)
+- [Storage](./docs/storage.md)
+- [Node Config Guide](./docs/node-config-guide.md)
+- [Release Hardening Plan](./docs/release-hardening-plan.md)
+- [Final Test Report](./docs/test-report-final.md)

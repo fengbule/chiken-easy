@@ -7,3 +7,9 @@ forwarders/
 .env
 certs/
 agent-state/
+.local/
+mima.txt
+*.pem
+*.key
+.env.*
+!.env.example

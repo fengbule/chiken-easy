@@ -6,7 +6,7 @@ SERVER=${CHIKEN_SERVER:?set CHIKEN_SERVER, for example wss://panel.example.com/a
 TOKEN=${CHIKEN_TOKEN:?set CHIKEN_TOKEN from panel}
 
 mkdir -p "$APP_DIR"
-cp -r agent package.json package-lock.json "$APP_DIR" 2>/dev/null || cp -r agent package.json "$APP_DIR"
+cp -r agent shared package.json package-lock.json "$APP_DIR" 2>/dev/null || cp -r agent shared package.json "$APP_DIR"
 cd "$APP_DIR"
 npm install --omit=dev
 
@@ -21,6 +21,8 @@ Type=simple
 WorkingDirectory=$APP_DIR
 Environment=CHIKEN_SERVER=$SERVER
 Environment=CHIKEN_TOKEN=$TOKEN
+Environment=CHIKEN_PROBE_INTERVAL=${CHIKEN_PROBE_INTERVAL:-5}
+Environment=CHIKEN_HOST_ROOT=/
 Environment=SINGBOX_CONFIG=/etc/sing-box/config.json
 ExecStart=$(command -v node) agent/index.js
 Restart=always
