@@ -5,7 +5,7 @@ services:
     container_name: chiken-server
     restart: unless-stopped
     environment:
-      PORT: "7788"
+      PORT: "${PORT:-7788}"
       CHIKEN_BOOTSTRAP_TOKEN: "${CHIKEN_BOOTSTRAP_TOKEN}"
       CHIKEN_API_TOKEN: "${CHIKEN_API_TOKEN:-}"
       CHIKEN_MASTER_KEY: "${CHIKEN_MASTER_KEY:-}"
@@ -53,6 +53,9 @@ services:
       CHIKEN_FORWARDER_HOST_DIR: ${PWD}/data/forwarders
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /proc:/host/proc:ro
+      - /etc:/host/etc:ro
+      - /usr/lib/os-release:/host/usr-lib/os-release:ro
       - chiken-agent-state:/app/agent-state
       - ./data/sing-box:/etc/sing-box
       - ./data/forwarders:/app/forwarders

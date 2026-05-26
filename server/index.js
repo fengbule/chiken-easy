@@ -141,6 +141,7 @@ function flushScheduledStateSave() {
   if (!stateSavePending) return;
   stateSavePending = false;
   saveState();
+  emitEvent("config-version", { agentId, versionId, patch });
 }
 
 function scheduleStateSave(delayMs = stateFlushMs) {
@@ -332,6 +333,10 @@ function requestAccess(req) {
   };
 }
 
+function isPublicApiPath(pathname) {
+  return pathname === "/api/health" || pathname === "/api/auth/login" || pathname === "/api/public/probes" || pathname === "/api/public/events";
+}
+
 function requireApiAccess(req, res, next) {
   if (!req.path.startsWith("/api/")) return next();
   if (req.path === "/api/health") return next();
@@ -516,9 +521,78 @@ function execSshCommand(connectConfig, command, options = {}) {
             stderr += data.toString();
           });
         });
-      })
-      .on("error", reject)
-      .connect(connectConfig);
+        stream.on("data", (data) => {
+          stdout += data.toString();
+        });
+        stream.stderr.on("data", (data) => {
+          stderr += data.toString();
+        });
+      });
+    });
+  } finally {
+    conn.end();
+  }
+}
+
+async function withSftp(connectConfig, handler) {
+  const conn = await connectSsh(connectConfig);
+  try {
+    const sftp = await new Promise((resolve, reject) => {
+      conn.sftp((error, stream) => {
+        if (error) return reject(error);
+        resolve(stream);
+      });
+    });
+    return await handler(sftp, conn);
+  } finally {
+    conn.end();
+  }
+}
+
+function normalizeRemotePath(inputPath = ".") {
+  const value = String(inputPath || ".").trim();
+  if (!value) return ".";
+  if (value === "/") return "/";
+  if (value.startsWith("/")) return path.posix.normalize(value);
+  return path.posix.normalize(value);
+}
+
+function resolveRemotePath(basePath, name) {
+  const target = normalizeRemotePath(basePath || ".");
+  if (!name) return target;
+  return target === "/" ? `/${name}` : path.posix.join(target, name);
+}
+
+function formatFileMode(item) {
+  const longname = String(item.longname || "");
+  return longname.startsWith("d") ? "dir" : "file";
+}
+
+async function listRemoteDirectory(connectConfig, dirPath) {
+  return withSftp(connectConfig, async (sftp) => {
+    const cwd = normalizeRemotePath(dirPath || ".");
+    const rows = await new Promise((resolve, reject) => {
+      sftp.readdir(cwd, (error, list) => {
+        if (error) return reject(error);
+        resolve(list || []);
+      });
+    });
+    const parent = cwd === "/" || cwd === "." ? null : path.posix.dirname(cwd);
+    return {
+      path: cwd,
+      parent: parent === "." ? "/" : parent,
+      items: rows
+        .filter((item) => item.filename !== "." && item.filename !== "..")
+        .map((item) => ({
+          name: item.filename,
+          path: resolveRemotePath(cwd, item.filename),
+          type: formatFileMode(item),
+          size: Number(item.attrs?.size || 0),
+          mtime: item.attrs?.mtime ? new Date(item.attrs.mtime * 1000).toISOString() : null,
+          mode: item.longname || ""
+        }))
+        .sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1))
+    };
   });
 }
 
@@ -1863,6 +1937,290 @@ app.delete("/api/credentials/:id", (req, res) => {
   res.json({ ok: true });
 });
 
+app.put("/api/agents/:id", (req, res) => {
+  const agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: "agent not found" });
+  const name = String(req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ error: "name is required" });
+  agent.name = name.slice(0, 80);
+  agent.updatedAt = new Date().toISOString();
+  saveState();
+  emitEvent("agent", { action: "renamed", agent: publicAgent(agent) });
+  emitPublicProbeEvent();
+  audit("admin", "rename_agent", req.params.id, { name: agent.name });
+  res.json(publicAgent(agent));
+});
+
+app.get("/api/probe-settings", (_, res) => {
+  const rows = Object.values(state.agents).map((agent) => ({
+    agent: publicAgent(agent),
+    profile: publicProbeProfile(agent.id, agent)
+  }));
+  res.json(rows.sort((a, b) => (Number(a.profile.displayOrder || 0) - Number(b.profile.displayOrder || 0)) || String(a.profile.displayName).localeCompare(String(b.profile.displayName))));
+});
+
+app.put("/api/probe-settings/:id", (req, res) => {
+  const agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: "agent not found" });
+  state.probeProfiles ||= {};
+  const profile = normalizeProbeProfile(req.body || {}, state.probeProfiles[req.params.id] || {});
+  state.probeProfiles[req.params.id] = { ...profile, updatedAt: new Date().toISOString() };
+  saveState();
+  emitEvent("probe-profile", { agentId: req.params.id, profile: publicProbeProfile(req.params.id, agent) });
+  emitPublicProbeEvent();
+  audit("admin", "update_probe_profile", req.params.id, { displayName: profile.displayName, region: profile.region, hidden: profile.hidden });
+  res.json({ agent: publicAgent(agent), profile: publicProbeProfile(req.params.id, agent) });
+});
+
+app.get("/api/node-pool", (req, res) => {
+  ensureDefaultSubscriptionToken();
+  res.json({
+    nodes: (state.nodePool || []).map(publicNode),
+    subscriptions: (state.subscriptionTokens || []).map((token) => publicSubscriptionWithStats(token, req)),
+    sources: state.subscriptionSources || [],
+    groups: state.subscriptionGroups || [],
+    routeTemplates: Object.values(routeTemplates),
+    summary: summarizeSubscriptionNodes(state.nodePool || []),
+    accessLog: (state.subscriptionAccessLog || []).slice(0, 100)
+  });
+});
+
+app.post("/api/node-pool/import", async (req, res) => {
+  try {
+    let text = String(req.body?.text || "");
+    const url = String(req.body?.url || "").trim();
+    const sourceName = String(req.body?.sourceName || (url ? new URL(url).hostname : "manual")).trim() || "manual";
+    if (url) {
+      const response = await fetch(url, { redirect: "follow" });
+      if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
+      text += `\n${await response.text()}`;
+    }
+    const imported = parseNodeImport(text, sourceName);
+    state.nodePool ||= [];
+    const saved = imported.map((node) => upsertNode(state.nodePool, node));
+    saveState();
+    audit("admin", "import_nodes", "-", { sourceName, count: saved.length, url: url ? new URL(url).hostname : "" });
+    res.json({ imported: saved.length, nodes: saved.map(publicNode) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.put("/api/node-pool/:id", (req, res) => {
+  const node = (state.nodePool || []).find((row) => row.id === req.params.id);
+  if (!node) return res.status(404).json({ error: "node not found" });
+  if ("name" in (req.body || {})) node.name = String(req.body.name || node.name).trim() || node.name;
+  if ("enabled" in (req.body || {})) node.enabled = req.body.enabled !== false;
+  if ("sourceName" in (req.body || {})) node.sourceName = String(req.body.sourceName || node.sourceName || "").trim();
+  if ("tags" in (req.body || {})) {
+    node.tags = Array.isArray(req.body.tags)
+      ? req.body.tags.map((item) => String(item).trim()).filter(Boolean)
+      : String(req.body.tags || "").split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  if ("groupIds" in (req.body || {})) {
+    node.groupIds = Array.isArray(req.body.groupIds)
+      ? req.body.groupIds.map((item) => String(item).trim()).filter(Boolean)
+      : String(req.body.groupIds || "").split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  node.updatedAt = new Date().toISOString();
+  saveState();
+  audit("admin", "update_node", node.id, { name: node.name, enabled: node.enabled !== false });
+  res.json(publicNode(node));
+});
+
+app.delete("/api/node-pool/:id", (req, res) => {
+  const before = state.nodePool || [];
+  const node = before.find((row) => row.id === req.params.id);
+  if (!node) return res.status(404).json({ error: "node not found" });
+  state.nodePool = before.filter((row) => row.id !== req.params.id);
+  saveState();
+  audit("admin", "delete_node", req.params.id, { name: node.name });
+  res.json({ ok: true });
+});
+
+app.get("/api/subscriptions", (req, res) => {
+  ensureDefaultSubscriptionToken();
+  res.json((state.subscriptionTokens || []).map((token) => publicSubscriptionWithStats(token, req)));
+});
+
+app.post("/api/subscriptions", (req, res) => {
+  state.subscriptionTokens ||= [];
+  const token = normalizeSubscriptionToken(req.body || { name: "Subscription" });
+  state.subscriptionTokens.unshift(token);
+  saveState();
+  audit("admin", "create_subscription", token.id, { name: token.name });
+  res.json(publicSubscriptionWithStats(token, req));
+});
+
+app.put("/api/subscriptions/:id", (req, res) => {
+  const current = (state.subscriptionTokens || []).find((row) => row.id === req.params.id);
+  if (!current) return res.status(404).json({ error: "subscription not found" });
+  Object.assign(current, normalizeSubscriptionToken(req.body || {}, current));
+  saveState();
+  audit("admin", "update_subscription", current.id, { name: current.name, format: current.format });
+  res.json(publicSubscriptionWithStats(current, req));
+});
+
+app.get("/api/subscriptions/:id/preview", (req, res) => {
+  const token = (state.subscriptionTokens || []).find((row) => row.id === req.params.id);
+  if (!token) return res.status(404).json({ error: "subscription not found" });
+  const nodes = selectSubscriptionNodes(state.nodePool || [], token, state.subscriptionGroups || []);
+  const format = String(req.query.format || token.format || "raw");
+  const rendered = renderSubscription(nodes, format, token.profile || {});
+  res.json({
+    subscription: publicSubscriptionWithStats(token, req),
+    summary: summarizeSubscriptionNodes(nodes),
+    nodes: nodes.map(publicNode),
+    format,
+    contentType: rendered.contentType,
+    body: rendered.body.slice(0, 12000),
+    truncated: rendered.body.length > 12000
+  });
+});
+
+app.get("/api/subscriptions/:id/diagnostics", (req, res) => {
+  const token = (state.subscriptionTokens || []).find((row) => row.id === req.params.id);
+  if (!token) return res.status(404).json({ error: "subscription not found" });
+  const nodes = selectSubscriptionNodes(state.nodePool || [], token, state.subscriptionGroups || []);
+  res.json(validateSubscriptionOutputs(nodes, token));
+});
+
+app.delete("/api/subscriptions/:id", (req, res) => {
+  const before = state.subscriptionTokens || [];
+  const item = before.find((row) => row.id === req.params.id);
+  if (!item) return res.status(404).json({ error: "subscription not found" });
+  state.subscriptionTokens = before.filter((row) => row.id !== req.params.id);
+  saveState();
+  audit("admin", "delete_subscription", req.params.id, { name: item.name });
+  res.json({ ok: true });
+});
+
+app.post("/api/subscription-sources", async (req, res) => {
+  try {
+    const source = normalizeSubscriptionSource(req.body || {});
+    state.subscriptionSources ||= [];
+    state.subscriptionSources.unshift(source);
+    let result = { saved: [], removed: 0 };
+    if (req.body?.syncNow !== false) result = await syncSubscriptionSource(source);
+    saveState();
+    audit("admin", "create_subscription_source", source.id, { name: source.name, count: result.saved.length, removed: result.removed });
+    res.json({ source, imported: result.saved.length, removed: result.removed, nodes: result.saved.map(publicNode) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.put("/api/subscription-sources/:id", (req, res) => {
+  const source = (state.subscriptionSources || []).find((row) => row.id === req.params.id);
+  if (!source) return res.status(404).json({ error: "source not found" });
+  Object.assign(source, normalizeSubscriptionSource(req.body || {}, source));
+  saveState();
+  audit("admin", "update_subscription_source", source.id, { name: source.name });
+  res.json(source);
+});
+
+app.post("/api/subscription-sources/:id/sync", async (req, res) => {
+  const source = (state.subscriptionSources || []).find((row) => row.id === req.params.id);
+  if (!source) return res.status(404).json({ error: "source not found" });
+  try {
+    const result = await syncSubscriptionSource(source);
+    saveState();
+    audit("admin", "sync_subscription_source", source.id, { count: result.saved.length, removed: result.removed });
+    res.json({ source, imported: result.saved.length, removed: result.removed, nodes: result.saved.map(publicNode) });
+  } catch (error) {
+    source.lastError = error.message;
+    source.updatedAt = new Date().toISOString();
+    saveState();
+    res.status(400).json({ error: error.message, source });
+  }
+});
+
+app.delete("/api/subscription-sources/:id", (req, res) => {
+  const before = state.subscriptionSources || [];
+  const source = before.find((row) => row.id === req.params.id);
+  if (!source) return res.status(404).json({ error: "source not found" });
+  state.subscriptionSources = before.filter((row) => row.id !== req.params.id);
+  saveState();
+  audit("admin", "delete_subscription_source", req.params.id, { name: source.name });
+  res.json({ ok: true });
+});
+
+app.post("/api/subscription-groups", (req, res) => {
+  const group = normalizeSubscriptionGroup(req.body || {});
+  state.subscriptionGroups ||= [];
+  state.subscriptionGroups.unshift(group);
+  saveState();
+  audit("admin", "create_subscription_group", group.id, { name: group.name });
+  res.json(group);
+});
+
+app.put("/api/subscription-groups/:id", (req, res) => {
+  const group = (state.subscriptionGroups || []).find((row) => row.id === req.params.id);
+  if (!group) return res.status(404).json({ error: "group not found" });
+  Object.assign(group, normalizeSubscriptionGroup(req.body || {}, group));
+  saveState();
+  audit("admin", "update_subscription_group", group.id, { name: group.name });
+  res.json(group);
+});
+
+app.delete("/api/subscription-groups/:id", (req, res) => {
+  const before = state.subscriptionGroups || [];
+  const group = before.find((row) => row.id === req.params.id);
+  if (!group) return res.status(404).json({ error: "group not found" });
+  state.subscriptionGroups = before.filter((row) => row.id !== req.params.id);
+  saveState();
+  audit("admin", "delete_subscription_group", req.params.id, { name: group.name });
+  res.json({ ok: true });
+});
+
+app.get("/api/probe-tasks", (_, res) => res.json(publicProbeTasks()));
+
+app.post("/api/probe-tasks", (req, res) => {
+  try {
+    const task = normalizeProbeTask(req.body || {});
+    state.probeTasks ||= [];
+    state.probeTasks.unshift(task);
+    state.probeTasks = state.probeTasks.slice(0, 200);
+    saveState();
+    const sent = dispatchProbeTask(task, true) || [];
+    audit("admin", "create_probe_task", task.id, { type: task.type, target: task.target, sent: sent.length });
+    res.json({ task, sent });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.put("/api/probe-tasks/:id", (req, res) => {
+  const current = (state.probeTasks || []).find((task) => task.id === req.params.id);
+  if (!current) return res.status(404).json({ error: "probe task not found" });
+  try {
+    const next = normalizeProbeTask({ ...current, ...(req.body || {}), id: current.id, createdAt: current.createdAt });
+    Object.assign(current, next);
+    saveState();
+    audit("admin", "update_probe_task", current.id, { type: current.type, target: current.target });
+    res.json(current);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/probe-tasks/:id/run", (req, res) => {
+  const task = (state.probeTasks || []).find((row) => row.id === req.params.id);
+  if (!task) return res.status(404).json({ error: "probe task not found" });
+  const sent = dispatchProbeTask(task, true) || [];
+  audit("admin", "run_probe_task", task.id, { sent: sent.length });
+  res.json({ ok: true, sent });
+});
+
+app.delete("/api/probe-tasks/:id", (req, res) => {
+  const before = state.probeTasks || [];
+  state.probeTasks = before.filter((task) => task.id !== req.params.id);
+  if (state.probeResults) delete state.probeResults[req.params.id];
+  saveState();
+  audit("admin", "delete_probe_task", req.params.id);
+  res.json({ ok: true });
+});
+
 app.get("/api/agents/:id/ssh-profile", (req, res) => {
   if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
   res.json(publicSshProfile(req.params.id));
@@ -2348,6 +2706,76 @@ app.post("/api/agents/:id/config/wizard", (req, res) => {
   }
 });
 
+app.post("/api/agents/:id/protocol-smoke", async (req, res) => {
+  const agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: "agent not found" });
+  const requested = Array.isArray(req.body?.protocols) && req.body.protocols.length
+    ? req.body.protocols.map(String)
+    : ["vmess-ws", "vless-reality", "trojan", "hysteria2", "shadowsocks", "mixed"];
+  const basePort = Math.max(20000, Math.min(60000, Number(req.body?.basePort || 36000) || 36000));
+  const readId = sendCommand(agent.id, "read_config");
+  const readResult = await waitForCommandResult(readId, 30000);
+  const previousConfig = readResult.config || null;
+  const rows = [];
+  const at = new Date().toISOString();
+  let realityKeys = { privateKey: req.body?.privateKey || "", publicKey: req.body?.publicKey || "" };
+
+  if (requested.includes("vless-reality") && !realityKeys.privateKey) {
+    try {
+      const keyId = sendCommand(agent.id, "exec", { command: "docker exec chiken-singbox sing-box generate reality-keypair 2>/dev/null || sing-box generate reality-keypair" });
+      const keyResult = await waitForCommandResult(keyId, 30000);
+      const privateKey = String(keyResult.output || "").match(/PrivateKey:\s*([A-Za-z0-9_-]+)/i)?.[1] || "";
+      const publicKey = String(keyResult.output || "").match(/PublicKey:\s*([A-Za-z0-9_-]+)/i)?.[1] || "";
+      if (privateKey) realityKeys = { privateKey, publicKey };
+    } catch {}
+  }
+
+  for (const [index, protocol] of requested.entries()) {
+    const port = basePort + index;
+    const input = {
+      protocol,
+      port,
+      listen: "::",
+      tag: `smoke-${protocol}-${port}`,
+      nodeName: `Smoke ${protocol}`,
+      publicHost: agent.ip || agent.host || "127.0.0.1",
+      uuid: "11111111-1111-4111-8111-111111111111",
+      path: "/smoke",
+      password: `smoke-${port}`,
+      method: "aes-256-gcm",
+      serverName: "www.cloudflare.com",
+      serverPort: 443,
+      privateKey: realityKeys.privateKey || "CHANGE_ME_REALITY_PRIVATE_KEY",
+      publicKey: realityKeys.publicKey || "",
+      shortId: "0123456789abcdef"
+    };
+    try {
+      const config = buildConfig(input);
+      const commandId = sendCommand(agent.id, "apply_config", { config, restart: true });
+      const result = await waitForCommandResult(commandId, 120000);
+      const statusId = sendCommand(agent.id, "service", { action: "status" });
+      const status = await waitForCommandResult(statusId, 30000);
+      rows.push({ protocol, port, ok: Boolean(result.ok && status.ok), output: String(result.output || status.output || "").slice(0, 1000), status: String(status.output || "").slice(0, 200) });
+    } catch (error) {
+      rows.push({ protocol, port, ok: false, output: error.message });
+    }
+  }
+
+  if (previousConfig) {
+    try {
+      const restoreId = sendCommand(agent.id, "apply_config", { config: previousConfig, restart: true });
+      const restore = await waitForCommandResult(restoreId, 120000);
+      rows.push({ protocol: "restore", ok: Boolean(restore.ok), output: String(restore.output || "").slice(0, 1000) });
+    } catch (error) {
+      rows.push({ protocol: "restore", ok: false, output: error.message });
+    }
+  }
+
+  const report = { agentId: agent.id, agentName: agent.name, at, ok: rows.filter((row) => row.protocol !== "restore").every((row) => row.ok), rows };
+  audit("admin", "protocol_smoke", agent.id, report);
+  res.json(report);
+});
+
 app.post("/api/agents/:id/service/:action", (req, res) => {
   const { id, action } = req.params;
   if (!["start", "stop", "restart", "status"].includes(action)) return res.status(400).json({ error: "bad action" });
@@ -2423,6 +2851,129 @@ app.post("/api/agents/:id/ssh", async (req, res) => {
     res.json(result);
   } catch (error) {
     res.status(409).json({ error: error.message });
+  }
+});
+
+app.get("/api/files/agents/:id/list", async (req, res) => {
+  if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
+  try {
+    const data = await listRemoteDirectory(getSshConnectConfig(req.params.id), String(req.query.path || "."));
+    res.json(data);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/files/agents/:id/upload", async (req, res) => {
+  if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
+  const parentPath = normalizeRemotePath(req.body?.path || ".");
+  const fileName = String(req.body?.name || "").trim();
+  const base64 = String(req.body?.contentBase64 || "");
+  if (!fileName || !base64) return res.status(400).json({ error: "name and contentBase64 are required" });
+  try {
+    const remotePath = resolveRemotePath(parentPath, fileName);
+    const command = `mkdir -p ${shellQuote(path.posix.dirname(remotePath))} && printf %s ${shellQuote(base64)} | base64 -d > ${shellQuote(remotePath)}`;
+    const result = await execSshCommand(getSshConnectConfig(req.params.id), command);
+    if (!result.ok) throw new Error(result.output || "upload failed");
+    audit("admin", "upload_file", req.params.id, { path: remotePath });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/files/agents/:id/mkdir", async (req, res) => {
+  if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
+  const remotePath = normalizeRemotePath(req.body?.path || ".");
+  try {
+    await withSftp(getSshConnectConfig(req.params.id), async (sftp) => {
+      await new Promise((resolve, reject) => {
+        sftp.mkdir(remotePath, (error) => (error ? reject(error) : resolve()));
+      });
+    });
+    audit("admin", "mkdir_remote", req.params.id, { path: remotePath });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.delete("/api/files/agents/:id/item", async (req, res) => {
+  if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
+  const remotePath = normalizeRemotePath(req.query.path || ".");
+  const type = String(req.query.type || "file");
+  try {
+    await withSftp(getSshConnectConfig(req.params.id), async (sftp) => {
+      await new Promise((resolve, reject) => {
+        const done = (error) => (error ? reject(error) : resolve());
+        if (type === "dir") sftp.rmdir(remotePath, done);
+        else sftp.unlink(remotePath, done);
+      });
+    });
+    audit("admin", "delete_remote_item", req.params.id, { path: remotePath, type });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/files/agents/:id/download", async (req, res) => {
+  if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
+  const remotePath = normalizeRemotePath(req.query.path || ".");
+  try {
+    const conn = await connectSsh(getSshConnectConfig(req.params.id));
+    conn.sftp(async (error, sftp) => {
+      if (error) {
+        conn.end();
+        res.status(400).json({ error: error.message });
+        return;
+      }
+
+      const name = path.posix.basename(remotePath);
+      res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+      res.setHeader("Content-Type", "application/octet-stream");
+      const readStream = sftp.createReadStream(remotePath);
+      readStream.on("error", (streamError) => {
+        conn.end();
+        if (!res.headersSent) res.status(400).json({ error: streamError.message });
+      });
+      res.on("close", () => conn.end());
+      try {
+        await pipeline(readStream, res);
+      } catch {}
+      conn.end();
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/files/transfer", async (req, res) => {
+  const { sourceAgentId, sourcePath, targetAgentId, targetPath } = req.body || {};
+  if (!getAgent(sourceAgentId) || !getAgent(targetAgentId)) return res.status(404).json({ error: "agent not found" });
+  const sourceRemotePath = normalizeRemotePath(sourcePath || ".");
+  const targetRemotePath = normalizeRemotePath(targetPath || ".");
+  try {
+    const tempPath = path.join(os.tmpdir(), `chiken-transfer-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const sourceConn = await connectSsh(getSshConnectConfig(sourceAgentId));
+    try {
+      const sourceSftp = await new Promise((resolve, reject) => sourceConn.sftp((error, sftp) => (error ? reject(error) : resolve(sftp))));
+      await new Promise((resolve, reject) => sourceSftp.fastGet(sourceRemotePath, tempPath, (error) => (error ? reject(error) : resolve())));
+    } finally {
+      sourceConn.end();
+    }
+    try {
+      const base64 = fs.readFileSync(tempPath, "base64");
+      const command = `mkdir -p ${shellQuote(path.posix.dirname(targetRemotePath))} && printf %s ${shellQuote(base64)} | base64 -d > ${shellQuote(targetRemotePath)}`;
+      const result = await execSshCommand(getSshConnectConfig(targetAgentId), command);
+      if (!result.ok) throw new Error(result.output || "transfer failed");
+    } finally {
+      fs.rmSync(tempPath, { force: true });
+    }
+    audit("admin", "transfer_file", "-", { sourceAgentId, sourcePath: sourceRemotePath, targetAgentId, targetPath: targetRemotePath });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
   }
 });
 
@@ -2756,6 +3307,33 @@ app.get("/sub/:token", (req, res) => {
   }
 });
 
+app.get("/sub/:token", (req, res) => {
+  const token = (state.subscriptionTokens || []).find((item) => item.token === req.params.token && item.enabled !== false);
+  if (!token) return res.status(404).send("subscription not found");
+  if (token.expiresAt && Date.parse(token.expiresAt) < Date.now()) return res.status(403).send("subscription expired");
+  if (Number(token.maxAccess || 0) > 0 && Number(token.accessCount || 0) >= Number(token.maxAccess || 0)) return res.status(403).send("subscription access limit reached");
+  const nodes = selectSubscriptionNodes(state.nodePool || [], token, state.subscriptionGroups || []);
+  const format = String(req.query.format || token.format || "base64");
+  const { contentType, body } = renderSubscription(nodes, format, token.profile || {});
+  token.accessCount = Number(token.accessCount || 0) + 1;
+  token.lastAccessAt = new Date().toISOString();
+  state.subscriptionAccessLog ||= [];
+  state.subscriptionAccessLog.unshift({
+    id: nanoid(10),
+    tokenId: token.id,
+    tokenName: token.name,
+    format,
+    nodeCount: nodes.length,
+    at: token.lastAccessAt,
+    userAgent: String(req.get("user-agent") || "").slice(0, 160)
+  });
+  state.subscriptionAccessLog = state.subscriptionAccessLog.slice(0, 500);
+  saveState();
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Cache-Control", "no-store");
+  res.send(body);
+});
+
 if (fs.existsSync(webDist)) app.use(express.static(webDist));
 app.get("*", (_, res, next) => {
   const index = path.join(webDist, "index.html");
@@ -2766,6 +3344,16 @@ app.get("*", (_, res, next) => {
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 const terminalWss = new WebSocketServer({ noServer: true });
+
+setInterval(() => {
+  for (const task of state.probeTasks || []) {
+    if (!task.enabled) continue;
+    const last = state.probeResults?.[task.id];
+    const lastAt = Date.parse(last?.at || "");
+    if (Number.isFinite(lastAt) && Date.now() - lastAt < (Number(task.interval || 60) || 60) * 1000) continue;
+    dispatchProbeTask(task);
+  }
+}, 5000);
 
 server.on("upgrade", (req, socket, head) => {
   const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
@@ -2863,6 +3451,19 @@ wss.on("connection", (ws) => {
     if (msg.type === "command_result") {
       audit("agent", "command_result", agentId, { commandId: msg.commandId, ok: msg.ok, output: String(msg.output || "").slice(0, 500) });
 
+      if (msg.probeResult?.taskId) {
+        state.probeResults ||= {};
+        state.probeResults[msg.probeResult.taskId] ||= {};
+        state.probeResults[msg.probeResult.taskId][agentId] = {
+          ...msg.probeResult,
+          agentId,
+          agentName: state.agents[agentId]?.name || agentId,
+          at: new Date().toISOString()
+        };
+        saveState();
+        emitEvent("probe-result", state.probeResults[msg.probeResult.taskId][agentId]);
+      }
+
       if (configCommandRefs.has(msg.commandId)) {
         const ref = configCommandRefs.get(msg.commandId);
         updateConfigVersion(ref.agentId, ref.versionId, {
@@ -2934,6 +3535,7 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     if (!agentId) return;
+    const previous = structuredClone(state.agents[agentId] || {});
     clients.delete(agentId);
     if (state.agents[agentId]) {
       state.agents[agentId].lastSeen = nowIso();
@@ -2950,6 +3552,7 @@ wss.on("connection", (ws) => {
     });
     scheduleStateSave();
     audit("agent", "agent_offline", agentId);
+    evaluateAgentNotifications(agentId, previous, state.agents[agentId] || previous).catch((error) => audit("system", "notification_error", agentId, { error: error.message }));
   });
 });
 
