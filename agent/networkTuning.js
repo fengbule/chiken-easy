@@ -686,6 +686,8 @@ async function runViaHelper(payload, options = {}) {
     "-v",
     "/etc:/host/etc",
     "-v",
+    "/usr/lib:/host/usr/lib:ro",
+    "-v",
     "/lib/modules:/lib/modules:ro",
     "-e",
     `CHIKEN_NETWORK_TUNING_PAYLOAD_B64=${encodedPayload}`,
