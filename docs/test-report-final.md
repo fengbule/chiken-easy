@@ -258,3 +258,83 @@
 ## Recommended Version Tag
 
 - Suggested next version tag: `v0.3.0`
+
+## 重启后恢复与 main 同步
+
+- 恢复时间：`2026-05-26T11:06:42.2967203+08:00`
+- 当前分支：`release/stabilize-integrated-chiken-stack`
+- 原保存 commit：`89d9d0e`
+- 当前 HEAD（恢复与合并验证时）：`c45e8c1`
+- 当前 commit 状态：`working tree`（基于 `c45e8c1` 完成本地回归修复后再提交）
+- `89d9d0e` 是否仍在当前分支历史中：是
+
+### 与 origin/main 同步结果
+
+- `git fetch --prune origin`：通过
+- `origin/main` 最新提交（同步时）：`58d4cc0`
+- 是否 merge `origin/main`：是
+- merge 方式：先尝试普通 `git merge origin/main`，发现冲突后中止；随后使用 `git merge -X ours origin/main` 保留已远程验收的 release 主线，再补跑完整验收
+
+### 冲突与处理摘要
+
+- 首次普通 merge 冲突文件：
+  - `.env.example`
+  - `README.md`
+  - `agent/index.js`
+  - `docker-compose.agent.yml`
+  - `docker-compose.server.yml`
+  - `docs/development-report-2026-05-20.md`
+  - `docs/development.md`
+  - `docs/test-report-2026-05-20.md`
+  - `server/index.js`
+  - `server/subscriptions.js`
+  - `web/src/App.jsx`
+  - `web/src/style.css`
+- 处理策略：
+  - 先执行 `git merge --abort`，避免不可控人工拼接
+  - 改用 `git merge -X ours origin/main`
+  - 合并后发现 `web/src/App.jsx` 被混入重复定义并导致构建失败
+  - 将以下关键文件恢复为已通过第三轮远程验收的 release 版本后重新验证：
+    - `agent/index.js`
+    - `server/index.js`
+    - `web/src/App.jsx`
+    - `web/src/style.css`
+- 最终状态：无未解决 merge 冲突，且回归验证通过
+
+### 本地验证结果
+
+- `npm install`：通过
+- `npm run check`：通过
+- `CHIKEN_STORAGE=json npm run smoke`：通过
+- `CHIKEN_STORAGE=sqlite npm run smoke`：通过
+
+### 远程验证结果
+
+- `node scripts/remote-verify.mjs`：通过
+- `mima.txt` 解析：通过
+- 解析来源：`C:\Users\fengbule\Desktop\mima.txt`
+- 脱敏服务器摘要：
+  - Server 1：`38.76.178.xxx`
+  - Server 2：`38.76.208.xxx`
+  - Server 3：`103.52.154.xxx`
+- 关键远程验收摘要：
+  - 3 台服务器 `SSH tcp/banner/auth/pwd/uname -a/docker ps`：全部通过
+  - 3 台服务器 SFTP 小文件上传/下载/删除：全部通过
+  - 3 Agents 在线：通过
+  - 订阅访问与访问日志：通过
+  - `mixed` 与 `shadowsocks` 协议级 proxy-check：通过
+  - `vless` 协议级 proxy-check：明确返回 `not_implemented`
+  - VLESS Reality 服务端校验：通过
+  - VLESS Reality 从 Server 3 客户端探测：通过
+  - sing-box TCP / UDP 转发：通过
+  - Realm TCP 转发：通过
+  - GOST TCP 转发：通过
+  - 审计日志校验：通过
+
+### PR 准备状态
+
+- 是否准备创建 PR：是
+- 是否确认没有敏感文件进入 git：是
+- 核查结论：
+  - `git status --ignored` 仅显示被忽略目录，如 `.local/`、`data/`、`dist/`、`node_modules/`
+  - 未发现 `mima.txt`、`.local/test-servers.json`、`.env*`、`*.pem`、`*.key` 被跟踪或 staged
