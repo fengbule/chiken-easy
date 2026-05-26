@@ -538,6 +538,109 @@ function proxyResultToCheck(name, result) {
   });
 }
 
+async function verifyNetworkTuning(baseUrl, token, agents) {
+  const results = [];
+  const statusRows = [];
+
+  for (const agent of agents) {
+    const status = await api(`${baseUrl}/api/agents/${agent.id}/network/tuning`, token);
+    const current = status.body?.status?.current || {};
+    statusRows.push({
+      agentId: agent.id,
+      congestionControl: cleanText(current.congestionControl),
+      qdisc: cleanText(current.defaultQdisc),
+      bbr: Boolean(status.body?.status?.support?.bbr),
+      bbr2: Boolean(status.body?.status?.support?.bbr2),
+      fq: Boolean(status.body?.status?.support?.fq)
+    });
+    results.push(
+      createResult(agent.name || agent.id, "network-tuning", "status", status.ok && Boolean(status.body?.status), {
+        reason: status.ok ? "" : cleanText(status.body?.error || status.body),
+        current: {
+          congestionControl: cleanText(current.congestionControl),
+          qdisc: cleanText(current.defaultQdisc)
+        }
+      })
+    );
+  }
+
+  for (const agent of agents) {
+    const dryRun = await api(`${baseUrl}/api/agents/${agent.id}/network/tuning/dry-run`, token, {
+      method: "POST",
+      body: JSON.stringify({ profile: "enable-bbr" })
+    });
+    results.push(
+      createResult(agent.name || agent.id, "network-tuning", "dry_run_bbr", dryRun.ok && Boolean(dryRun.body?.plan), {
+        reason: dryRun.ok ? cleanText(dryRun.body?.output) : cleanText(dryRun.body?.error || dryRun.body),
+        supported: Boolean(dryRun.body?.plan?.supported)
+      })
+    );
+  }
+
+  const candidate = agents.find((agent) => {
+    if (cleanText(agent.name).toLowerCase() === "main") return false;
+    const row = statusRows.find((item) => item.agentId === agent.id);
+    return row && row.bbr && row.fq;
+  });
+
+  if (!candidate) {
+    results.push(
+      createResult("panel", "network-tuning", "single_host_apply_skip", true, {
+        reason: "no non-critical agent with explicit BBR + fq support was available for a safe live apply test"
+      })
+    );
+    return results;
+  }
+
+  const apply = await api(`${baseUrl}/api/agents/${candidate.id}/network/tuning/apply`, token, {
+    method: "POST",
+    body: JSON.stringify({ profile: "enable-bbr" })
+  });
+  const applyOk =
+    apply.ok &&
+    apply.body?.ok === true &&
+    cleanText(apply.body?.after?.congestionControl) === "bbr" &&
+    cleanText(apply.body?.after?.qdisc) === "fq";
+  results.push(
+    createResult(candidate.name || candidate.id, "network-tuning", "enable_bbr_single_host", applyOk, {
+      reason: applyOk ? "" : cleanText(apply.body?.output || apply.body?.error || "enable-bbr failed"),
+      after: apply.body?.after || null
+    })
+  );
+
+  const history = await api(`${baseUrl}/api/agents/${candidate.id}/network/tuning/history`, token);
+  const hasAudit = history.ok && Array.isArray(history.body) && history.body.some((row) => row.action === "network_tuning_apply");
+  results.push(
+    createResult(candidate.name || candidate.id, "network-tuning", "audit_after_apply", hasAudit, {
+      reason: hasAudit ? "" : "network tuning apply history not found"
+    })
+  );
+
+  const rollback = await api(`${baseUrl}/api/agents/${candidate.id}/network/tuning/rollback`, token, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+  results.push(
+    createResult(candidate.name || candidate.id, "network-tuning", "rollback_single_host", rollback.ok && rollback.body?.ok === true, {
+      reason: rollback.ok ? cleanText(rollback.body?.output) : cleanText(rollback.body?.error || rollback.body),
+      after: rollback.body?.after || null
+    })
+  );
+
+  const postRollback = await api(`${baseUrl}/api/agents/${candidate.id}/network/tuning`, token);
+  const restored =
+    postRollback.ok &&
+    cleanText(postRollback.body?.status?.current?.congestionControl) === cleanText(rollback.body?.after?.congestionControl) &&
+    cleanText(postRollback.body?.status?.current?.defaultQdisc) === cleanText(rollback.body?.after?.qdisc);
+  results.push(
+    createResult(candidate.name || candidate.id, "network-tuning", "post_rollback_status", restored, {
+      reason: restored ? "" : "post-rollback inspection does not match rollback result"
+    })
+  );
+
+  return results;
+}
+
 async function verifyManagedProxyChecks(baseUrl, token, sourceAgent, checkerAgent) {
   const results = [];
   const restoreVersionId = await captureRestorePoint(baseUrl, token, sourceAgent.id);
@@ -869,6 +972,9 @@ async function main() {
   if (mainAgent && checkerAgent) {
     const proxyChecks = await verifyManagedProxyChecks(baseUrl, apiToken, mainAgent, checkerAgent);
     summary.checks.push(...proxyChecks);
+
+    const networkTuningChecks = await verifyNetworkTuning(baseUrl, apiToken, agentRows.slice(0, 3));
+    summary.checks.push(...networkTuningChecks);
 
     const realityChecks = await verifyRealityServer(
       baseUrl,

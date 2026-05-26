@@ -10,6 +10,7 @@ import tls from "tls";
 import { nanoid } from "nanoid";
 import { buildForwardPlan } from "../shared/configFactory.js";
 import { createProbeCollector } from "./systemProbe.js";
+import { createNetworkTuningManager } from "./networkTuning.js";
 
 const stateDir = process.env.CHIKEN_AGENT_STATE || path.resolve("agent-state");
 const stateFile = path.join(stateDir, "agent.json");
@@ -28,6 +29,16 @@ const proxyCheckUrl = process.env.CHIKEN_PROXY_CHECK_URL || "https://www.gstatic
 const probeIntervalMs = Math.max(3000, Math.min(30000, (Number(process.env.CHIKEN_PROBE_INTERVAL || 5) || 5) * 1000));
 const collectProbe = createProbeCollector({ hostRoot });
 const proxyCheckStateDir = path.join(stateDir, "proxy-check");
+const networkTuningHelperImage = process.env.CHIKEN_NETWORK_TUNING_HELPER_IMAGE || "chiken-easy:latest";
+const networkTuningAgentContainer = process.env.CHIKEN_AGENT_CONTAINER_NAME || "chiken-agent";
+const networkTuning = createNetworkTuningManager({
+  serviceMode,
+  stateDir,
+  hostPrefix: hostRoot === "/" ? "/" : hostRoot,
+  procRoot: process.platform === "linux" ? "/proc" : "",
+  helperImage: networkTuningHelperImage,
+  agentContainerName: networkTuningAgentContainer
+});
 
 fs.mkdirSync(stateDir, { recursive: true });
 fs.mkdirSync(forwardDir, { recursive: true });
@@ -773,6 +784,7 @@ async function handle(ws, msg) {
   if (msg.command === "remove_forward_rule") return { commandId: msg.id, ...(await removeForwardRule(msg.payload.rule || msg.payload)) };
   if (msg.command === "forward_image_probe") return { commandId: msg.id, ...(await probeForwardImage(msg.payload.engine)) };
   if (msg.command === "proxy_check") return { commandId: msg.id, ...(await runProxyCheck(msg.payload || {})) };
+  if (msg.command === "network_tuning") return { commandId: msg.id, ...(await networkTuning.handle(msg.payload || {})) };
   if (msg.command === "exec") return { commandId: msg.id, ...(await runShell(msg.payload.command)) };
   if (msg.command === "uninstall_agent") {
     if (serviceMode === "docker") {

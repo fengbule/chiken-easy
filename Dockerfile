@@ -7,7 +7,7 @@ RUN npm run build
 
 FROM node:24-alpine AS runtime
 WORKDIR /app
-RUN apk add --no-cache docker-cli openssl
+RUN apk add --no-cache docker-cli openssl kmod iproute2
 ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev

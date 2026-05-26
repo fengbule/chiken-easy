@@ -205,6 +205,21 @@ function openSqlite(sqlitePath) {
       detail_json TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_node_quality_history_node_at ON node_quality_history(node_id, checked_at DESC);
+
+    CREATE TABLE IF NOT EXISTS network_tuning_history (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      action TEXT NOT NULL,
+      profile TEXT,
+      ok INTEGER NOT NULL,
+      before_json TEXT,
+      after_json TEXT,
+      detail_json TEXT,
+      error TEXT,
+      at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_network_tuning_history_agent_at ON network_tuning_history(agent_id, at DESC);
   `);
   return db;
 }
@@ -317,6 +332,12 @@ function createSqliteAdapter({ dataDir, auditFilePath, sqlitePath }) {
     ),
     selectNodeQualityHistory: db.prepare(
       "SELECT id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, checked_at, detail_json FROM node_quality_history WHERE node_id = ? ORDER BY checked_at DESC LIMIT ?"
+    ),
+    insertNetworkTuningHistory: db.prepare(
+      "INSERT OR REPLACE INTO network_tuning_history (id, agent_id, actor, action, profile, ok, before_json, after_json, detail_json, error, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ),
+    selectNetworkTuningHistory: db.prepare(
+      "SELECT id, agent_id, actor, action, profile, ok, before_json, after_json, detail_json, error, at FROM network_tuning_history WHERE agent_id = ? ORDER BY at DESC LIMIT ?"
     )
   };
 
@@ -426,6 +447,38 @@ function createSqliteAdapter({ dataDir, auditFilePath, sqlitePath }) {
         checkedAt: row.checked_at,
         detail: normalizeJsonField(row.detail_json) || {}
       }));
+    },
+    writeNetworkTuningHistory(row) {
+      statements.insertNetworkTuningHistory.run(
+        row.id || nanoid(),
+        row.agentId,
+        row.actor || "admin",
+        row.action || "network_tuning",
+        row.profile || "",
+        row.ok ? 1 : 0,
+        toJsonText(row.before || null),
+        toJsonText(row.after || null),
+        toJsonText(row.detail || row),
+        row.error || "",
+        row.at || nowIso()
+      );
+      return row;
+    },
+    queryNetworkTuningHistory(agentId, options = {}) {
+      const limit = Math.max(1, Number(options.limit || 100) || 100);
+      return listRows(statements.selectNetworkTuningHistory, [agentId, limit]).map((row) => ({
+        id: row.id,
+        agentId: row.agent_id,
+        actor: row.actor,
+        action: row.action,
+        profile: row.profile,
+        ok: Boolean(row.ok),
+        before: normalizeJsonField(row.before_json),
+        after: normalizeJsonField(row.after_json),
+        detail: normalizeJsonField(row.detail_json) || {},
+        error: row.error || "",
+        at: row.at
+      }));
     }
   };
 }
@@ -455,6 +508,12 @@ function createJsonAdapter(auditFilePath) {
       return null;
     },
     queryNodeQualityHistory() {
+      return [];
+    },
+    writeNetworkTuningHistory() {
+      return null;
+    },
+    queryNetworkTuningHistory() {
       return [];
     }
   };
@@ -519,6 +578,8 @@ export function createStorage({ rootDir, defaults = {}, masterKey } = {}) {
     querySubscriptionAccess: (options = {}) => eventStore.querySubscriptionAccess(options),
     writeNodeQualityHistory: (row) => eventStore.writeNodeQualityHistory(clone(row)),
     queryNodeQualityHistory: (nodeId, options = {}) => eventStore.queryNodeQualityHistory(nodeId, options),
+    writeNetworkTuningHistory: (row) => eventStore.writeNetworkTuningHistory(clone(row)),
+    queryNetworkTuningHistory: (agentId, options = {}) => eventStore.queryNetworkTuningHistory(agentId, options),
     summarizeWarnings: () => warnings.map((line) => sanitizeSensitiveText(line))
   };
 }

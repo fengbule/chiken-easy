@@ -7,6 +7,7 @@ import {
   KeyRound,
   Link2,
   Monitor,
+  Network,
   PlugZap,
   RefreshCw,
   RotateCcw,
@@ -67,6 +68,8 @@ const nav = [
   ["audit", ClipboardList, "审计日志"],
   ["settings", Settings, "设置"]
 ];
+
+nav.splice(7, 0, ["network-tuning", Network, "Network Tuning / BBR"]);
 
 const protocolDefinitions = {
   "vmess-ws": {
@@ -701,6 +704,230 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh, openConsole, ope
           <div className="empty">这台服务器还没有关联备忘录。</div>
         )}
       </Panel>
+    </section>
+  );
+}
+
+function NetworkComparePanel({ compare }) {
+  const rows = [
+    ["Current", compare?.current],
+    ["Before", compare?.before],
+    ["After", compare?.after]
+  ].filter(([, value]) => value);
+
+  if (!rows.length) return <div className="empty">暂无对比数据</div>;
+
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Stage</th>
+          <th>Congestion</th>
+          <th>Qdisc</th>
+          <th>Proxy Check</th>
+          <th>Latency</th>
+          <th>Score</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(([label, value]) => (
+          <tr key={label}>
+            <td>{label}</td>
+            <td>{value.congestionControl || "-"}</td>
+            <td>{value.qdisc || "-"}</td>
+            <td>{value.proxyStatus || "暂无对比数据"}</td>
+            <td>{value.proxyLatencyMs ? `${value.proxyLatencyMs} ms` : "-"}</td>
+            <td>{Number(value.proxyScore || 0) ? value.proxyScore : "-"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function NetworkTuningPage({ agents, agentId, setAgentId }) {
+  const [selectedAgentId, setSelectedAgentId] = useState(agentId || agents[0]?.id || "");
+  const [overview, setOverview] = useState(null);
+  const [historyRows, setHistoryRows] = useState([]);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState("");
+
+  useEffect(() => {
+    if (!selectedAgentId && agents[0]?.id) setSelectedAgentId(agents[0].id);
+  }, [agents, selectedAgentId]);
+
+  useEffect(() => {
+    if (selectedAgentId) setAgentId(selectedAgentId);
+  }, [selectedAgentId, setAgentId]);
+
+  const load = async () => {
+    if (!selectedAgentId) return;
+    try {
+      const [status, history] = await Promise.all([api(`/api/agents/${selectedAgentId}/network/tuning`), api(`/api/agents/${selectedAgentId}/network/tuning/history`)]);
+      setOverview(status);
+      setHistoryRows(history);
+      setMessage("");
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedAgentId) return;
+    load().catch(() => {});
+  }, [selectedAgentId]);
+
+  const submit = async (endpoint, profile = "", prompt = "") => {
+    if (!selectedAgentId) return;
+    if (prompt && !window.confirm(prompt)) return;
+    try {
+      setBusy(`${endpoint}:${profile}`);
+      const response = await api(`/api/agents/${selectedAgentId}/network/tuning/${endpoint}`, {
+        method: "POST",
+        body: JSON.stringify(profile ? { profile } : {})
+      });
+      setMessage(response.output || "operation complete");
+      await load();
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const status = overview?.status;
+  const current = status?.current;
+  const support = status?.support;
+  const recommendation = status?.recommendation;
+
+  return (
+    <section>
+      <div className="toolbar">
+        <select value={selectedAgentId} onChange={(event) => setSelectedAgentId(event.target.value)}>
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+        </select>
+        <button onClick={() => load().catch(() => {})}>
+          <RefreshCw size={15} />
+          Detect
+        </button>
+        <button onClick={() => submit("dry-run", "enable-bbr")} disabled={!selectedAgentId || Boolean(busy)}>
+          Dry Run BBR
+        </button>
+        <button className="primary" onClick={() => submit("apply", "enable-bbr", "Confirm enabling BBR on this host?")} disabled={!selectedAgentId || Boolean(busy)}>
+          Enable BBR
+        </button>
+        <button onClick={() => submit("dry-run", "enable-bbr2")} disabled={!selectedAgentId || Boolean(busy)}>
+          Dry Run BBR2
+        </button>
+        <button onClick={() => submit("apply", "enable-bbr2", "Confirm enabling BBR2 on this host? Only continue if support is explicit.")} disabled={!selectedAgentId || Boolean(busy)}>
+          Enable BBR2
+        </button>
+        <button onClick={() => submit("apply", "set-cubic", "Confirm switching this host back to Cubic?")} disabled={!selectedAgentId || Boolean(busy)}>
+          Set Cubic
+        </button>
+        <button onClick={() => submit("apply", "remove-chiken-tuning", "Confirm removing the managed network tuning config?")} disabled={!selectedAgentId || Boolean(busy)}>
+          Remove Config
+        </button>
+        <button onClick={() => submit("rollback", "", "Confirm restoring the saved network tuning backup?")} disabled={!selectedAgentId || Boolean(busy)}>
+          Rollback
+        </button>
+      </div>
+
+      <div className="grid2">
+        <Panel title="Current Status">
+          {status ? (
+            <dl>
+              <dt>Congestion</dt>
+              <dd>{current?.congestionControl || "-"}</dd>
+              <dt>Available</dt>
+              <dd>{(current?.availableCongestionControls || []).join(", ") || "-"}</dd>
+              <dt>Qdisc</dt>
+              <dd>{current?.defaultQdisc || "-"}</dd>
+              <dt>Kernel</dt>
+              <dd>{status.system?.kernel || "-"}</dd>
+              <dt>Arch</dt>
+              <dd>{status.system?.arch || "-"}</dd>
+              <dt>Distro</dt>
+              <dd>{status.system?.distro || "-"}</dd>
+              <dt>BBR</dt>
+              <dd>{support?.bbr ? "supported" : "unsupported"}</dd>
+              <dt>BBR2</dt>
+              <dd>{support?.bbr2 ? "supported" : "unsupported"}</dd>
+              <dt>fq</dt>
+              <dd>{support?.fq ? "supported" : "unsupported"}</dd>
+              <dt>Persisted</dt>
+              <dd>{current?.persisted ? "yes" : "no"}</dd>
+            </dl>
+          ) : (
+            <div className="empty">暂无检测结果</div>
+          )}
+        </Panel>
+
+        <Panel title="Recommendation And Risks">
+          <div className="panel-stack">
+            <p className="muted">Recommendation: {recommendation?.title || "-"}</p>
+            <p className="muted">{recommendation?.reason || "Run detect and dry-run before deciding whether to apply tuning."}</p>
+            <p className="muted">BBR does not guarantee faster results on all mainland China carriers. Evaluate it with proxy-check, latency, loss, and throughput.</p>
+          </div>
+          {status?.risks?.length ? (
+            <div className="warning-list">
+              {status.risks.map((risk) => (
+                <p key={risk}>{risk}</p>
+              ))}
+            </div>
+          ) : (
+            <div className="empty">No extra risk hints</div>
+          )}
+        </Panel>
+      </div>
+
+      <Panel title="Before And After Reference">
+        <NetworkComparePanel compare={overview?.compare} />
+      </Panel>
+
+      <div className="grid2">
+        <Panel title="History">
+          {historyRows.length ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Action</th>
+                  <th>Profile</th>
+                  <th>Result</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {historyRows.map((row) => (
+                  <tr key={row.id}>
+                    <td>{formatDateTime(row.at)}</td>
+                    <td>{row.action}</td>
+                    <td>{row.profile || "-"}</td>
+                    <td>{row.ok ? "ok" : "failed"}</td>
+                    <td>{row.error || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty">暂无调优历史</div>
+          )}
+        </Panel>
+
+        <Panel title="Notes">
+          <div className="panel-stack">
+            <p className="muted">Dry run only returns the plan and support status. It does not modify the system.</p>
+            <p className="muted">Do not enable BBR in bulk by default. Test one non-critical machine first, then compare proxy-check data.</p>
+            <p className="muted">If the page looks stuck after deployment, first suspect old browser assets and try Ctrl+F5 or clearing site cache.</p>
+          </div>
+          {message ? <pre>{message}</pre> : null}
+        </Panel>
+      </div>
     </section>
   );
 }
@@ -3070,6 +3297,7 @@ function App() {
     if (page === "node-pool") return <NodePoolPage />;
     if (page === "subscriptions") return <SubscriptionsPage />;
     if (page === "forward") return <ForwardWizard agents={agents} />;
+    if (page === "network-tuning") return <NetworkTuningPage agents={agents} agentId={agentId} setAgentId={setAgentId} />;
     if (page === "monitor") return <MonitorPage openAgent={openAgent} />;
     if (page === "workspace") return <WorkspacePage agents={agents} openSsh={openSsh} openConsole={openConsole} />;
     if (page === "memos") return <MemosPage agents={agents} agentFilter={memoAgentFilter} onClearAgentFilter={() => setMemoAgentFilter("")} />;
@@ -3099,6 +3327,7 @@ function App() {
 
   return (
     <Layout
+      nav={nav}
       page={page}
       setPage={setPage}
       headerExtra={<AccessTokenBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} saveToken={saveToken} clearToken={clearToken} hasToken={Boolean(getActiveApiToken())} />}

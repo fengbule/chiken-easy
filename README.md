@@ -24,6 +24,7 @@ This project is still one application:
 - config versioning and rollback
 - forward rules with `sing-box`, `realm`, and `gost`
 - monitor summaries, public probes, history, and alert settings
+- network tuning and BBR diagnostics with dry-run, audit, and rollback
 - memos, files, attachments, and object linking
 - node pool import/export and subscription tokens
 - protocol-aware proxy-check MVP for `ss`, `http`, `socks`, `mixed`
@@ -91,6 +92,7 @@ Important variables:
 - `CHIKEN_REALM_IMAGE=4points/realm:latest`
 - `CHIKEN_GOST_IMAGE=gogost/gost:latest`
 - `CHIKEN_PROXY_CHECK_URL=https://www.gstatic.com/generate_204`
+- `CHIKEN_NETWORK_TUNING_ENABLED=1`
 - `CHIKEN_MONITOR_RAW_HOURS=24`
 - `CHIKEN_MONITOR_AGG_DAYS=7`
 
@@ -101,6 +103,7 @@ Important variables:
 - keep `.local/`, `mima.txt`, `.env*`, `*.pem`, `*.key`, `data/`, `node_modules/`, and `dist/` out of git
 - rotate bootstrap and API tokens after provisioning
 - terminate TLS in front of the panel if exposing it publicly
+- if the admin page looks stuck after deployment, first try `Ctrl+F5` or clear site cache
 
 ## Storage
 
@@ -133,6 +136,16 @@ Current protocol-aware MVP supports:
 
 Protocols not yet fully implemented for authenticated end-to-end proxy-check return explicit unsupported/not-implemented results and do not fake success.
 
+## Network Tuning / BBR
+
+- detect, dry-run, apply, rollback, and history are available from the admin panel
+- apply is limited to `/etc/sysctl.d/99-chiken-network.conf`
+- every apply and rollback writes an audit record with before and after snapshots
+- BBR is not enabled in bulk by default
+- evaluate before and after with proxy-check, latency, packet loss, and throughput
+
+See [docs/network-tuning.md](./docs/network-tuning.md).
+
 ## Local Test Credentials
 
 `mima.txt` is only for local operator testing and must never be committed. Parsed credentials are written to `.local/test-servers.json`, which is also ignored.
@@ -162,6 +175,7 @@ Protocols not yet fully implemented for authenticated end-to-end proxy-check ret
 - [Development](./docs/development.md)
 - [Security Hardening](./docs/security-hardening.md)
 - [Monitor](./docs/monitor.md)
+- [Network Tuning](./docs/network-tuning.md)
 - [Memos](./docs/memos.md)
 - [Subscription](./docs/subscription.md)
 - [Server Workspace](./docs/server-workspace.md)

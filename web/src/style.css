@@ -842,6 +842,16 @@ code {
   margin: 0 0 10px;
 }
 
+.network-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 18px;
+}
+
+.history-note {
+  padding: 0 20px 20px;
+}
+
 @media (max-width: 1080px) {
   .grid2,
   .grid-config,
@@ -850,7 +860,8 @@ code {
   .trend-grid,
   .subscription-node-grid,
   .card-grid,
-  .choice-grid {
+  .choice-grid,
+  .network-status-grid {
     grid-template-columns: 1fr;
   }
 }

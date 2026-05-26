@@ -24,17 +24,21 @@ services:
       CHIKEN_AGENT_IP: "${CHIKEN_AGENT_IP:-}"
       CHIKEN_SERVICE_MODE: docker
       CHIKEN_PROBE_INTERVAL: "${CHIKEN_PROBE_INTERVAL:-5}"
+      CHIKEN_NETWORK_TUNING_ENABLED: "${CHIKEN_NETWORK_TUNING_ENABLED:-1}"
       CHIKEN_HOST_ROOT: /hostfs
       SINGBOX_CONTAINER: chiken-singbox
       SINGBOX_CONFIG_VOLUME: ${PWD}/data/sing-box
       SINGBOX_CONFIG: /etc/sing-box/config.json
       CHIKEN_FORWARDER_DIR: /app/forwarders
       CHIKEN_FORWARDER_HOST_DIR: ${PWD}/data/forwarders
+      CHIKEN_NETWORK_TUNING_HELPER_IMAGE: ${CHIKEN_NETWORK_TUNING_HELPER_IMAGE:-chiken-easy:latest}
+      CHIKEN_AGENT_CONTAINER_NAME: ${CHIKEN_AGENT_CONTAINER_NAME:-chiken-agent}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /proc:/host/proc:ro
       - /etc:/host/etc:ro
       - /usr/lib/os-release:/host/usr-lib/os-release:ro
+      - /lib/modules:/lib/modules:ro
       - chiken-agent-state:/app/agent-state
       - ./data/sing-box:/etc/sing-box
       - ./data/forwarders:/app/forwarders

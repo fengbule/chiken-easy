@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
+import WebSocket from "ws";
 
 const root = process.cwd();
 const distDir = path.join(root, "dist");
@@ -18,8 +19,11 @@ const requiredFiles = [
   "server/security.js",
   "server/subscriptions.js",
   "agent/index.js",
+  "agent/networkHelper.js",
+  "agent/networkTuning.js",
   "web/src/App.jsx",
   "web/src/style.css",
+  "docs/network-tuning.md",
   "templates/protocols.json",
   "templates/docker-singbox-config.json"
 ];
@@ -85,6 +89,119 @@ async function stopServer(child) {
   await sleep(500);
 }
 
+function connectAgent(port) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/agent`);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("agent connect timeout"));
+    }, 10000);
+
+    ws.on("open", () => {
+      ws.send(
+        JSON.stringify({
+          type: "hello",
+          token: "ce_smoke_bootstrap",
+          agent: {
+            id: "smoke-agent",
+            name: "smoke-agent",
+            host: "smoke-agent",
+            ip: "127.0.0.1",
+            os: process.platform,
+            arch: process.arch,
+            singboxVersion: "-",
+            singboxStatus: "unknown",
+            metrics: null
+          }
+        })
+      );
+    });
+
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.command === "network_tuning") {
+        const profile = String(msg.payload?.profile || "");
+        const baseStatus = {
+          system: {
+            platform: "linux",
+            distro: "Ubuntu 24.04",
+            kernel: "6.8.0-smoke",
+            arch: "x86_64",
+            isRoot: true,
+            serviceMode: "mock",
+            sysctl: {
+              procRoot: "/proc",
+              configPath: "/etc/sysctl.d/99-chiken-network.conf",
+              writable: true
+            }
+          },
+          current: {
+            congestionControl: "cubic",
+            availableCongestionControls: ["cubic", "bbr"],
+            defaultQdisc: "fq_codel",
+            persisted: false,
+            managedProfile: ""
+          },
+          support: {
+            bbr: true,
+            bbr2: false,
+            fq: true,
+            cubic: true,
+            canModify: true,
+            profiles: ["enable-bbr", "enable-bbr2", "set-cubic", "remove-chiken-tuning"]
+          },
+          recommendation: {
+            profile: "enable-bbr",
+            title: "BBR is the safer first trial",
+            reason: "smoke mock",
+            canApply: true
+          },
+          risks: ["smoke mock"]
+        };
+        const response = {
+          type: "command_result",
+          commandId: msg.id,
+          ok: true,
+          output: "smoke network tuning ok",
+          status: baseStatus
+        };
+        if (msg.payload?.action === "dry-run") {
+          response.profile = profile;
+          response.before = {
+            congestionControl: "cubic",
+            qdisc: "fq_codel",
+            availableCongestionControls: ["cubic", "bbr"],
+            persisted: false,
+            managedProfile: ""
+          };
+          response.after = response.before;
+          response.plan = {
+            ok: true,
+            profile,
+            supported: true,
+            target: {
+              congestionControl: profile === "enable-bbr" ? "bbr" : "cubic",
+              defaultQdisc: profile === "enable-bbr" ? "fq" : "fq_codel"
+            },
+            steps: ["smoke dry-run"]
+          };
+        }
+        ws.send(JSON.stringify(response));
+        return;
+      }
+      if (msg.type === "welcome") {
+        clearTimeout(timer);
+        resolve(ws);
+      }
+    });
+
+    ws.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
 function authHeaders(token = "ck_smoke_token") {
   return {
     Authorization: `Bearer ${token}`,
@@ -106,10 +223,12 @@ assert(fs.existsSync(distDir), "dist directory missing; run build first");
 
 const storageMode = String(process.env.CHIKEN_STORAGE || "json").trim().toLowerCase() || "json";
 const server = startServer({ CHIKEN_STORAGE: storageMode, CHIKEN_SQLITE_PATH: sqlitePath });
+let agentWs = null;
 
 try {
   const ready = await waitForHealth(server.port);
   assert(ready, `server failed to start: ${server.outputRef()}`);
+  agentWs = await connectAgent(server.port);
 
   const health = await fetchJson(`http://127.0.0.1:${server.port}/api/health`);
   assert(health.ok && health.body.ok === true, "health check did not return ok");
@@ -168,6 +287,20 @@ try {
   const settings = await fetchJson(`http://127.0.0.1:${server.port}/api/settings`, { headers: authHeaders() });
   assert(settings.ok && settings.body.storageMode === storageMode, "settings storage mode mismatch");
 
+  const tuningStatus = await fetchJson(`http://127.0.0.1:${server.port}/api/agents/smoke-agent/network/tuning`, { headers: authHeaders() });
+  assert(tuningStatus.ok && tuningStatus.body.status, "network tuning status endpoint missing");
+
+  const tuningDryRun = await fetchJson(`http://127.0.0.1:${server.port}/api/agents/smoke-agent/network/tuning/dry-run`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ profile: "enable-bbr" })
+  });
+  assert(tuningDryRun.status === 200, "network tuning dry-run endpoint missing");
+  assert(tuningDryRun.body.plan, "network tuning dry-run should return a plan");
+
+  const tuningHistory = await fetchJson(`http://127.0.0.1:${server.port}/api/agents/smoke-agent/network/tuning/history`, { headers: authHeaders() });
+  assert(tuningHistory.ok && Array.isArray(tuningHistory.body), "network tuning history endpoint missing");
+
   if (storageMode === "sqlite") {
     const subCreate = await fetchJson(`http://127.0.0.1:${server.port}/api/subscriptions`, {
       method: "POST",
@@ -192,6 +325,9 @@ try {
     assert(fs.existsSync(sqlitePath), "sqlite database file missing");
   }
 } finally {
+  try {
+    agentWs?.close();
+  } catch {}
   await stopServer(server.child);
 }
 

@@ -44,6 +44,7 @@ const rawHistoryHours = Math.max(1, Number(process.env.CHIKEN_MONITOR_RAW_HOURS 
 const aggregatedDays = Math.max(1, Number(process.env.CHIKEN_MONITOR_AGG_DAYS || 7) || 7);
 const uploadMaxBytes = Math.max(1024 * 1024, (Number(process.env.CHIKEN_UPLOAD_MAX_MB || 20) || 20) * 1024 * 1024);
 const proxyCheckUrl = cleanText(process.env.CHIKEN_PROXY_CHECK_URL || "https://www.gstatic.com/generate_204") || "https://www.gstatic.com/generate_204";
+const networkTuningEnabled = process.env.CHIKEN_NETWORK_TUNING_ENABLED !== "0";
 const stateFlushMs = Math.max(250, Number(process.env.CHIKEN_STATE_FLUSH_MS || 1500) || 1500);
 const allowedUploadTypes = new Set(
   String(process.env.CHIKEN_UPLOAD_TYPES || "image/png,image/jpeg,image/webp,text/plain,application/pdf")
@@ -73,6 +74,8 @@ const defaultState = {
   subscriptionSources: {},
   subscriptionAccessLogs: [],
   proxyChecks: {},
+  networkTuning: {},
+  networkTuningHistory: {},
   scriptLibrary: {},
   commandRuns: {},
   settings: {
@@ -807,6 +810,7 @@ function detailAgent(agent) {
     ...agentSummary(agent),
     asset,
     metricsHistory: buildMonitorHistory(agent.id),
+    networkTuning: state.networkTuning?.[agent.id] || null,
     lastConfig: agent.lastConfig || null,
     memos: Object.values(state.memos || {}).filter((memo) => memo.agentId === agent.id)
   };
@@ -1186,6 +1190,129 @@ function publicSettings() {
     storageMode: storage.mode,
     warnings: storage.summarizeWarnings()
   };
+}
+
+function normalizeNetworkTuningSnapshot(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    congestionControl: cleanText(value.congestionControl),
+    qdisc: cleanText(value.qdisc),
+    availableCongestionControls: Array.isArray(value.availableCongestionControls) ? value.availableCongestionControls.map((item) => cleanText(item)).filter(Boolean) : [],
+    persisted: Boolean(value.persisted),
+    managedProfile: cleanText(value.managedProfile),
+    proxyStatus: cleanText(value.proxyStatus),
+    proxyScore: Number(value.proxyScore || 0) || 0,
+    proxyLatencyMs: Number(value.proxyLatencyMs || 0) || 0
+  };
+}
+
+function buildNetworkTuningCompare(agentId, snapshot = {}) {
+  const node = state.nodePool?.[`${agentId}-local`] || null;
+  const proxyCheck = node?.metadata?.proxyCheck || null;
+  return {
+    congestionControl: cleanText(snapshot.congestionControl),
+    qdisc: cleanText(snapshot.qdisc),
+    proxyStatus:
+      cleanText(snapshot.proxyStatus) ||
+      (proxyCheck ? (proxyCheck.ok ? "ok" : proxyCheck.unsupported ? "unsupported" : proxyCheck.notImplemented ? "not_implemented" : "failed") : ""),
+    proxyLatencyMs: Number.isFinite(Number(snapshot.proxyLatencyMs)) ? Number(snapshot.proxyLatencyMs) : Number(proxyCheck?.latencyMs || 0) || 0,
+    proxyScore: Number.isFinite(Number(snapshot.proxyScore)) ? Number(snapshot.proxyScore) : Number(node?.score || 0) || 0,
+    proxyCheckedAt: cleanText(snapshot.proxyCheckedAt || proxyCheck?.checkedAt),
+    proxyNodeId: cleanText(snapshot.proxyNodeId || node?.id)
+  };
+}
+
+function historyCompareRow(agentId, row) {
+  const detail = row?.detail || {};
+  return {
+    id: row.id,
+    at: row.at,
+    actor: row.actor,
+    action: row.action,
+    profile: row.profile,
+    ok: Boolean(row.ok),
+    error: cleanText(row.error || detail.error),
+    before: normalizeNetworkTuningSnapshot(row.before) ? buildNetworkTuningCompare(agentId, normalizeNetworkTuningSnapshot(row.before)) : null,
+    after: normalizeNetworkTuningSnapshot(row.after) ? buildNetworkTuningCompare(agentId, normalizeNetworkTuningSnapshot(row.after)) : null
+  };
+}
+
+function buildNetworkTuningOverview(agentId, status) {
+  const currentCompare = buildNetworkTuningCompare(agentId, {
+    congestionControl: status?.current?.congestionControl,
+    qdisc: status?.current?.defaultQdisc
+  });
+  const stored = storage.queryNetworkTuningHistory(agentId, { limit: 10 });
+  const fallback = state.networkTuningHistory?.[agentId] || [];
+  const latestHistory = (stored.length ? stored : fallback).slice(0, 10).map((row) => historyCompareRow(agentId, row));
+  const latestSuccess = latestHistory.find((row) => row.ok && row.after);
+  return {
+    status,
+    compare: {
+      current: currentCompare,
+      before: latestSuccess?.before || null,
+      after: latestSuccess?.after || null,
+      available: Boolean(latestSuccess?.before || latestSuccess?.after || currentCompare.proxyStatus)
+    },
+    history: latestHistory
+  };
+}
+
+async function inspectNetworkTuning(agentId) {
+  if (!networkTuningEnabled) throw new Error("network tuning is disabled");
+  const result = await sendCommandAwait(agentId, "network_tuning", { action: "inspect" }, 120000);
+  if (!result.ok) throw new Error(cleanText(result.output || result.error || "network tuning inspect failed"));
+  state.networkTuning ||= {};
+  state.networkTuning[agentId] = result.status || null;
+  scheduleStateSave();
+  return buildNetworkTuningOverview(agentId, result.status || null);
+}
+
+function actorFromRequest(req) {
+  return cleanText(req.apiAccess?.session?.username || req.apiAccess?.apiToken?.name || req.apiAccess?.apiToken?.id || "admin") || "admin";
+}
+
+function saveNetworkTuningHistory(agentId, actor, action, result) {
+  const row = {
+    id: nanoid(),
+    agentId,
+    actor,
+    action,
+    profile: cleanText(result.profile),
+    ok: Boolean(result.ok),
+    before: normalizeNetworkTuningSnapshot({ ...result.before, ...buildNetworkTuningCompare(agentId, result.before || {}) }),
+    after: normalizeNetworkTuningSnapshot({ ...result.after, ...buildNetworkTuningCompare(agentId, result.after || {}) }),
+    error: result.ok ? "" : cleanText(result.output || result.error),
+    detail: {
+      plan: result.plan || null,
+      status: result.status || null,
+      backup: result.backup || null,
+      output: cleanText(result.output || result.error),
+      compare: {
+        before: result.before ? buildNetworkTuningCompare(agentId, result.before) : null,
+        after: result.after ? buildNetworkTuningCompare(agentId, result.after) : null
+      }
+    },
+    at: nowIso()
+  };
+  storage.writeNetworkTuningHistory(row);
+  state.networkTuningHistory ||= {};
+  state.networkTuningHistory[agentId] ||= [];
+  state.networkTuningHistory[agentId].unshift(clone(row));
+  state.networkTuningHistory[agentId] = state.networkTuningHistory[agentId].slice(0, 50);
+  scheduleStateSave();
+  audit(actor, action, agentId, {
+    actor,
+    action,
+    agentId,
+    profile: cleanText(result.profile),
+    before: row.before,
+    after: row.after,
+    ok: row.ok,
+    error: row.error,
+    at: row.at
+  });
+  return historyCompareRow(agentId, row);
 }
 
 function publicNode(node) {
@@ -1795,6 +1922,111 @@ app.get("/api/agents/:id", (req, res) => {
 app.get("/api/agents/:id/probe/history", (req, res) => {
   if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
   res.json(buildMonitorHistory(req.params.id));
+});
+
+app.get("/api/agents/:id/network/tuning", async (req, res) => {
+  if (!networkTuningEnabled) return res.status(404).json({ error: "network tuning is disabled" });
+  if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
+  try {
+    const overview = await inspectNetworkTuning(req.params.id);
+    res.json(overview);
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.post("/api/agents/:id/network/tuning/dry-run", async (req, res) => {
+  if (!networkTuningEnabled) return res.status(404).json({ error: "network tuning is disabled" });
+  if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
+  const profile = cleanText(req.body?.profile);
+  if (!profile) return res.status(400).json({ error: "profile is required" });
+  try {
+    const result = await sendCommandAwait(req.params.id, "network_tuning", { action: "dry-run", profile }, 120000);
+    const status = result.status || state.networkTuning?.[req.params.id] || null;
+    if (status) {
+      state.networkTuning ||= {};
+      state.networkTuning[req.params.id] = status;
+      scheduleStateSave();
+    }
+    res.json({
+      ok: Boolean(result.ok),
+      profile,
+      status,
+      before: result.before || null,
+      after: result.after || null,
+      plan: result.plan || null,
+      output: cleanText(result.output || result.error)
+    });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.post("/api/agents/:id/network/tuning/apply", async (req, res) => {
+  if (!networkTuningEnabled) return res.status(404).json({ error: "network tuning is disabled" });
+  if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
+  const profile = cleanText(req.body?.profile);
+  if (!["enable-bbr", "enable-bbr2", "set-cubic", "remove-chiken-tuning"].includes(profile)) {
+    return res.status(400).json({ error: "unsupported network tuning profile" });
+  }
+  try {
+    const actor = actorFromRequest(req);
+    const result = await sendCommandAwait(req.params.id, "network_tuning", { action: "apply", profile }, 180000);
+    if (result.status) {
+      state.networkTuning ||= {};
+      state.networkTuning[req.params.id] = result.status;
+      scheduleStateSave();
+    }
+    const history = saveNetworkTuningHistory(req.params.id, actor, "network_tuning_apply", result);
+    res.json({
+      ok: Boolean(result.ok),
+      profile,
+      status: result.status || null,
+      before: result.before || null,
+      after: result.after || null,
+      plan: result.plan || null,
+      history,
+      output: cleanText(result.output || result.error)
+    });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.post("/api/agents/:id/network/tuning/rollback", async (req, res) => {
+  if (!networkTuningEnabled) return res.status(404).json({ error: "network tuning is disabled" });
+  if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
+  try {
+    const actor = actorFromRequest(req);
+    const result = await sendCommandAwait(req.params.id, "network_tuning", { action: "rollback", profile: "rollback" }, 180000);
+    if (result.status) {
+      state.networkTuning ||= {};
+      state.networkTuning[req.params.id] = result.status;
+      scheduleStateSave();
+    }
+    const history = saveNetworkTuningHistory(req.params.id, actor, "network_tuning_rollback", result);
+    res.json({
+      ok: Boolean(result.ok),
+      profile: "rollback",
+      status: result.status || null,
+      before: result.before || null,
+      after: result.after || null,
+      plan: result.plan || null,
+      history,
+      output: cleanText(result.output || result.error)
+    });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.get("/api/agents/:id/network/tuning/history", (req, res) => {
+  if (!networkTuningEnabled) return res.status(404).json({ error: "network tuning is disabled" });
+  if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
+  const stored = storage.queryNetworkTuningHistory(req.params.id, { limit: Number(req.query.limit || 50) || 50 });
+  const fallback = state.networkTuningHistory?.[req.params.id] || [];
+  const rows = (stored.length ? stored : fallback).slice(0, Number(req.query.limit || 50) || 50).map((row) => historyCompareRow(req.params.id, row));
+  res.json(rows);
 });
 
 app.get("/api/assets", (_, res) => {
@@ -2756,10 +2988,27 @@ app.get("/sub/:token", (req, res) => {
   }
 });
 
-if (fs.existsSync(webDist)) app.use(express.static(webDist));
+if (fs.existsSync(webDist)) {
+  app.use(
+    express.static(webDist, {
+      setHeaders(res, filePath) {
+        if (path.basename(filePath) === "index.html") {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+          return;
+        }
+        if (/\.(js|css)$/i.test(filePath)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      }
+    })
+  );
+}
 app.get("*", (_, res, next) => {
   const index = path.join(webDist, "index.html");
-  if (fs.existsSync(index)) return res.sendFile(index);
+  if (fs.existsSync(index)) {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    return res.sendFile(index);
+  }
   return next();
 });
 
