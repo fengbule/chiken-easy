@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import net from "net";
 import { Client as SshClient } from "ssh2";
+import WebSocket from "ws";
 
 const cwd = process.cwd();
 const localServersPath = path.join(cwd, ".local", "test-servers.json");
@@ -538,6 +539,89 @@ function proxyResultToCheck(name, result) {
   });
 }
 
+async function verifyMemos(baseUrl, token, agentId = "") {
+  const create = await api(`${baseUrl}/api/memos`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      title: `rv memo ${Date.now()}`,
+      content: "remote verify memo",
+      tags: ["acceptance", "remote-verify"],
+      agentId,
+      visibility: "private"
+    })
+  });
+  if (!create.ok) {
+    return [createResult("panel", "memos", "create", false, { reason: cleanText(create.body?.error || create.body) })];
+  }
+
+  const memoId = create.body?.id;
+  const update = await api(`${baseUrl}/api/memos/${memoId}`, token, {
+    method: "PUT",
+    body: JSON.stringify({
+      ...create.body,
+      title: `${create.body.title} updated`,
+      content: "remote verify memo updated"
+    })
+  });
+  const list = await api(`${baseUrl}/api/memos?agentId=${encodeURIComponent(agentId)}`, token);
+  const deleteResp = await api(`${baseUrl}/api/memos/${memoId}`, token, { method: "DELETE" });
+  const afterDelete = await api(`${baseUrl}/api/memos?agentId=${encodeURIComponent(agentId)}`, token);
+
+  return [
+    createResult("panel", "memos", "create", create.ok && Boolean(memoId), {
+      reason: create.ok ? "" : cleanText(create.body?.error || create.body)
+    }),
+    createResult("panel", "memos", "update", update.ok && cleanText(update.body?.title).includes("updated"), {
+      reason: update.ok ? "" : cleanText(update.body?.error || update.body)
+    }),
+    createResult("panel", "memos", "list", list.ok && Array.isArray(list.body) && list.body.some((row) => row.id === memoId), {
+      reason: list.ok ? "" : cleanText(list.body?.error || list.body)
+    }),
+    createResult("panel", "memos", "delete", deleteResp.ok && afterDelete.ok && Array.isArray(afterDelete.body) && !afterDelete.body.some((row) => row.id === memoId), {
+      reason: deleteResp.ok ? "" : cleanText(deleteResp.body?.error || deleteResp.body)
+    })
+  ];
+}
+
+async function verifyTerminalWebSocket(baseUrl, token, agentId) {
+  const target = new URL(baseUrl);
+  target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
+  target.pathname = "/terminal";
+  target.search = `?agentId=${encodeURIComponent(agentId)}&mode=ssh`;
+
+  return new Promise((resolve) => {
+    const ws = new WebSocket(target.toString(), {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const timer = setTimeout(() => {
+      try {
+        ws.close();
+      } catch {}
+      resolve(createResult("panel", "webssh", "terminal_connect", false, { reason: "terminal timeout" }));
+    }, 20000);
+
+    ws.on("message", (raw) => {
+      const text = raw.toString();
+      if (text.includes("Connected to") || text.includes("\"type\":\"output\"")) {
+        clearTimeout(timer);
+        try {
+          ws.close();
+        } catch {}
+        resolve(createResult("panel", "webssh", "terminal_connect", true, { reason: "" }));
+      }
+    });
+
+    ws.on("error", (error) => {
+      clearTimeout(timer);
+      resolve(createResult("panel", "webssh", "terminal_connect", false, { reason: cleanText(error.message) }));
+    });
+
+    ws.on("close", () => {
+      clearTimeout(timer);
+    });
+  });
+}
+
 async function verifyNetworkTuning(baseUrl, token, agents) {
   const results = [];
   const statusRows = [];
@@ -968,6 +1052,8 @@ async function main() {
 
   summary.checks.push(await verifyBatchCommand(baseUrl, apiToken, agentRows));
   summary.checks.push(...(await verifySubscription(baseUrl, apiToken)));
+  summary.checks.push(...(await verifyMemos(baseUrl, apiToken, mainAgent?.id || agentRows[0]?.id || "")));
+  if (mainAgent?.id) summary.checks.push(await verifyTerminalWebSocket(baseUrl, apiToken, mainAgent.id));
 
   if (mainAgent && checkerAgent) {
     const proxyChecks = await verifyManagedProxyChecks(baseUrl, apiToken, mainAgent, checkerAgent);
@@ -1001,6 +1087,9 @@ async function main() {
   const auditChecks = await verifyAudit(baseUrl, apiToken, [
     "subscription_access",
     "batch_command",
+    "memo_create",
+    "memo_update",
+    "memo_delete",
     "sftp_upload",
     "sftp_download",
     "sftp_delete",
