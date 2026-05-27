@@ -13,6 +13,8 @@ const requiredFiles = [
   "Dockerfile",
   "docker-compose.server.yml",
   "docker-compose.agent.yml",
+  "scripts/install-server.sh",
+  "scripts/install-server-docker.sh",
   "server/index.js",
   "server/configFactory.js",
   "server/storage.js",
@@ -23,6 +25,8 @@ const requiredFiles = [
   "agent/networkTuning.js",
   "web/src/App.jsx",
   "web/src/style.css",
+  "docs/api.md",
+  "docs/deployment.md",
   "docs/network-tuning.md",
   "templates/protocols.json",
   "templates/docker-singbox-config.json"
@@ -247,6 +251,14 @@ try {
 
   const probes = await fetchJson(`http://127.0.0.1:${server.port}/api/public/probes`);
   assert(probes.ok, "public probes endpoint missing");
+  const publicSummary = await fetchJson(`http://127.0.0.1:${server.port}/api/public/summary`);
+  assert(publicSummary.ok, "public summary endpoint missing");
+  const publicPage = await fetchJson(`http://127.0.0.1:${server.port}/`, {});
+  assert(publicPage.ok && String(publicPage.body).includes("Public Probes"), "public probe page missing");
+  const apiDocs = await fetchJson(`http://127.0.0.1:${server.port}/docs/api`, {});
+  assert(apiDocs.ok && String(apiDocs.body).includes("Endpoint Catalog"), "api docs page missing");
+  const openApi = await fetchJson(`http://127.0.0.1:${server.port}/docs/api/openapi.json`);
+  assert(openApi.ok && openApi.body.openapi, "openapi endpoint missing");
   const probeText = JSON.stringify(probes.body);
   for (const secret of ["password", "privatekey", "token", "webhook", "\"host\":", "\"ip\":", "\"ssh\"", "\"rdp\""]) {
     expectNoLeak(probeText, secret);

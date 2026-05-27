@@ -14,6 +14,8 @@ import { buildConfig, buildForwardConfig, buildForwardRule, forwardCatalog, prot
 import { buildAgentInstallScript, buildInstallCommand, createInstallBundle, pruneInstallBundles, resolvePublicBaseUrl, resolvePublicWsUrl } from "./installers.js";
 import { buildNodeProfile, buildSubscriptionProfile, defaultSubscriptionTemplateId, listSubscriptionNodes, renderSubscription, subscriptionTemplateCatalog } from "./subscriptions.js";
 import { createStorage } from "./storage.js";
+import { buildOpenApiSpec, renderApiDocsPage } from "./apiDocs.js";
+import { renderPublicProbePage } from "./publicPage.js";
 import {
   createLegacyPasswordHash,
   createPasswordHash,
@@ -839,6 +841,22 @@ function listPublicProbes() {
     .filter((agent) => ensureAssetFromAgent(agent).public !== false)
     .map(publicProbeCard)
     .sort((left, right) => Number(left.sort || 0) - Number(right.sort || 0) || String(left.name).localeCompare(String(right.name)));
+}
+
+function buildPublicSummary() {
+  const probes = listPublicProbes();
+  const online = probes.filter((item) => item.online);
+  return {
+    total: probes.length,
+    online: online.length,
+    offline: probes.length - online.length,
+    groups: Array.from(new Set(probes.map((item) => item.group).filter(Boolean))).length,
+    regions: Array.from(new Set(probes.map((item) => item.region).filter(Boolean))).length,
+    totalTraffic: probes.reduce((sum, item) => sum + Number(item.metrics?.rxBytes || 0) + Number(item.metrics?.txBytes || 0), 0),
+    totalRxSpeed: probes.reduce((sum, item) => sum + Number(item.metrics?.rxSpeed || 0), 0),
+    totalTxSpeed: probes.reduce((sum, item) => sum + Number(item.metrics?.txSpeed || 0), 0),
+    recentEvents: (state.monitorEvents || []).filter((item) => item.public !== false).slice(0, 20)
+  };
 }
 
 function normalizeCredential(input = {}, current = {}) {
@@ -1880,6 +1898,10 @@ app.get("/api/public/probes", (_, res) => {
   res.json(listPublicProbes());
 });
 
+app.get("/api/public/summary", (_, res) => {
+  res.json(buildPublicSummary());
+});
+
 app.get("/api/public/probes/history", (req, res) => {
   const agent = getAgent(req.query.agentId);
   if (!agent || ensureAssetFromAgent(agent).public === false) return res.status(404).json({ error: "public probe not found" });
@@ -1896,17 +1918,9 @@ app.get("/api/public/events", (_, res) => {
 });
 
 app.get("/api/monitor/summary", (_, res) => {
-  const probes = listPublicProbes();
-  const online = probes.filter((item) => item.online);
+  const summary = buildPublicSummary();
   res.json({
-    total: probes.length,
-    online: online.length,
-    offline: probes.length - online.length,
-    groups: Array.from(new Set(probes.map((item) => item.group).filter(Boolean))).length,
-    regions: Array.from(new Set(probes.map((item) => item.region).filter(Boolean))).length,
-    totalTraffic: probes.reduce((sum, item) => sum + Number(item.metrics?.rxBytes || 0) + Number(item.metrics?.txBytes || 0), 0),
-    totalRxSpeed: probes.reduce((sum, item) => sum + Number(item.metrics?.rxSpeed || 0), 0),
-    totalTxSpeed: probes.reduce((sum, item) => sum + Number(item.metrics?.txSpeed || 0), 0),
+    ...summary,
     recentEvents: (state.monitorEvents || []).slice(0, 20)
   });
 });
@@ -2964,6 +2978,14 @@ app.get("/api/audit", (req, res) => {
   res.json(getAuditRows({ limit: Number(req.query.limit || 300) || 300, action: cleanText(req.query.action), target: cleanText(req.query.target), actor: cleanText(req.query.actor) }));
 });
 
+app.get("/docs/api/openapi.json", (_, res) => {
+  res.json(buildOpenApiSpec());
+});
+
+app.get("/docs/api", (_, res) => {
+  res.type("html").send(renderApiDocsPage({ title: "ChikenEasy API Docs" }));
+});
+
 app.get("/install/agent.sh", (req, res) => {
   pruneInstallBundles(state);
   const bundleId = cleanText(req.query.bundle);
@@ -2991,6 +3013,7 @@ app.get("/sub/:token", (req, res) => {
 if (fs.existsSync(webDist)) {
   app.use(
     express.static(webDist, {
+      index: false,
       setHeaders(res, filePath) {
         if (path.basename(filePath) === "index.html") {
           res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -3003,6 +3026,17 @@ if (fs.existsSync(webDist)) {
     })
   );
 }
+app.get("/", (_, res) => {
+  res.type("html").send(renderPublicProbePage({ title: "ChikenEasy Public Probes", refreshSec: state.settings?.publicProbeRefreshSec || 10 }));
+});
+app.get("/admin", (_, res, next) => {
+  const index = path.join(webDist, "index.html");
+  if (fs.existsSync(index)) {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    return res.sendFile(index);
+  }
+  return next();
+});
 app.get("*", (_, res, next) => {
   const index = path.join(webDist, "index.html");
   if (fs.existsSync(index)) {

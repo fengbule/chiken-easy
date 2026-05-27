@@ -40,7 +40,7 @@ function buildAgentDockerfile() {
   return [
     "FROM node:24-alpine",
     "WORKDIR /app",
-    "RUN apk add --no-cache docker-cli openssl",
+    "RUN apk add --no-cache docker-cli openssl kmod iproute2",
     "COPY package.json ./",
     "RUN npm install --omit=dev",
     "COPY agent ./agent",
@@ -79,14 +79,21 @@ function buildDockerComposeFile() {
     '      CHIKEN_AGENT_IP: "${CHIKEN_AGENT_IP:-}"',
     '      CHIKEN_SERVICE_MODE: "docker"',
     '      CHIKEN_PROBE_INTERVAL: "${CHIKEN_PROBE_INTERVAL:-5}"',
+    '      CHIKEN_NETWORK_TUNING_ENABLED: "${CHIKEN_NETWORK_TUNING_ENABLED:-1}"',
     '      CHIKEN_HOST_ROOT: "/hostfs"',
     '      SINGBOX_CONTAINER: "chiken-singbox"',
     '      SINGBOX_CONFIG_VOLUME: "${PWD}/data/sing-box"',
     '      SINGBOX_CONFIG: "/etc/sing-box/config.json"',
     '      CHIKEN_FORWARDER_DIR: "/app/forwarders"',
     '      CHIKEN_FORWARDER_HOST_DIR: "${PWD}/data/forwarders"',
+    '      CHIKEN_NETWORK_TUNING_HELPER_IMAGE: "${CHIKEN_NETWORK_TUNING_HELPER_IMAGE:-chiken-easy-agent:latest}"',
+    '      CHIKEN_AGENT_CONTAINER_NAME: "${CHIKEN_AGENT_CONTAINER_NAME:-chiken-agent}"',
     "    volumes:",
     "      - /var/run/docker.sock:/var/run/docker.sock",
+    "      - /proc:/host/proc:ro",
+    "      - /etc:/host/etc:ro",
+    "      - /usr/lib/os-release:/host/usr-lib/os-release:ro",
+    "      - /lib/modules:/lib/modules:ro",
     "      - chiken-agent-state:/app/agent-state",
     "      - ./data/sing-box:/etc/sing-box",
     "      - ./data/forwarders:/app/forwarders",
@@ -106,13 +113,16 @@ function buildDotEnv(bundle) {
     `CHIKEN_AGENT_NAME=${defaultName}`,
     `CHIKEN_AGENT_HOST=${defaultHost}`,
     "CHIKEN_AGENT_IP=",
-    `CHIKEN_PROBE_INTERVAL=${bundle.probeInterval || 5}`
+    `CHIKEN_PROBE_INTERVAL=${bundle.probeInterval || 5}`,
+    "CHIKEN_NETWORK_TUNING_ENABLED=1"
   ].join("\n");
 }
 
 function buildServiceInstallScript(bundle) {
   const packageJson = buildAgentPackageJson();
   const agentSource = readProjectFile("agent/index.js");
+  const networkTuningSource = readProjectFile("agent/networkTuning.js");
+  const networkHelperSource = readProjectFile("agent/networkHelper.js");
   const probeSource = readProjectFile("agent/systemProbe.js");
   const sharedSource = readProjectFile("shared/configFactory.js");
   const defaultName = bundle.agentName || "";
@@ -171,6 +181,8 @@ ensure_runtime
 mkdir -p "$APP_DIR/agent" "$APP_DIR/shared" "$APP_DIR/agent-state" /etc/sing-box
 ${hereDoc("$APP_DIR/package.json", packageJson, "__CHIKEN_PACKAGE__")}
 ${hereDoc("$APP_DIR/agent/index.js", agentSource, "__CHIKEN_AGENT__")}
+${hereDoc("$APP_DIR/agent/networkTuning.js", networkTuningSource, "__CHIKEN_NETWORK_TUNING__")}
+${hereDoc("$APP_DIR/agent/networkHelper.js", networkHelperSource, "__CHIKEN_NETWORK_HELPER__")}
 ${hereDoc("$APP_DIR/agent/systemProbe.js", probeSource, "__CHIKEN_PROBE__")}
 ${hereDoc("$APP_DIR/shared/configFactory.js", sharedSource, "__CHIKEN_SHARED__")}
 
@@ -191,6 +203,7 @@ Environment=CHIKEN_TOKEN=$CHIKEN_TOKEN
 Environment=CHIKEN_AGENT_NAME=$CHIKEN_AGENT_NAME
 Environment=CHIKEN_AGENT_HOST=$CHIKEN_AGENT_HOST
 Environment=CHIKEN_PROBE_INTERVAL=$CHIKEN_PROBE_INTERVAL
+Environment=CHIKEN_NETWORK_TUNING_ENABLED=\${CHIKEN_NETWORK_TUNING_ENABLED:-1}
 Environment=CHIKEN_HOST_ROOT=/
 Environment=SINGBOX_CONFIG=/etc/sing-box/config.json
 ExecStart=$(command -v node) agent/index.js
@@ -210,6 +223,8 @@ systemctl status chiken-agent --no-pager || true
 function buildDockerInstallScript(bundle) {
   const packageJson = buildAgentPackageJson();
   const agentSource = readProjectFile("agent/index.js");
+  const networkTuningSource = readProjectFile("agent/networkTuning.js");
+  const networkHelperSource = readProjectFile("agent/networkHelper.js");
   const probeSource = readProjectFile("agent/systemProbe.js");
   const sharedSource = readProjectFile("shared/configFactory.js");
   const dockerfile = buildAgentDockerfile();
@@ -267,6 +282,8 @@ ensure_docker
 mkdir -p "$APP_DIR/agent" "$APP_DIR/shared" "$APP_DIR/data/sing-box" "$APP_DIR/data/forwarders"
 ${hereDoc("$APP_DIR/package.json", packageJson, "__CHIKEN_PACKAGE__")}
 ${hereDoc("$APP_DIR/agent/index.js", agentSource, "__CHIKEN_AGENT__")}
+${hereDoc("$APP_DIR/agent/networkTuning.js", networkTuningSource, "__CHIKEN_NETWORK_TUNING__")}
+${hereDoc("$APP_DIR/agent/networkHelper.js", networkHelperSource, "__CHIKEN_NETWORK_HELPER__")}
 ${hereDoc("$APP_DIR/agent/systemProbe.js", probeSource, "__CHIKEN_PROBE__")}
 ${hereDoc("$APP_DIR/shared/configFactory.js", sharedSource, "__CHIKEN_SHARED__")}
 ${hereDoc("$APP_DIR/Dockerfile.agent", dockerfile, "__CHIKEN_DOCKERFILE__")}

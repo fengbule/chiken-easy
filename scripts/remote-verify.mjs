@@ -539,6 +539,30 @@ function proxyResultToCheck(name, result) {
   });
 }
 
+async function verifyPublicPages(baseUrl) {
+  const publicPage = await fetch(baseUrl);
+  const publicHtml = await publicPage.text();
+  const docsPage = await fetch(`${baseUrl}/docs/api`);
+  const docsHtml = await docsPage.text();
+  const openApi = await fetch(`${baseUrl}/docs/api/openapi.json`);
+  const openApiBody = await openApi.json().catch(() => null);
+
+  return [
+    createResult("panel", "public-page", "root", publicPage.ok && /Public Probes/i.test(publicHtml), {
+      status: publicPage.status,
+      reason: publicPage.ok ? "" : safeOutput(publicHtml)
+    }),
+    createResult("panel", "public-page", "api_docs", docsPage.ok && /Endpoint Catalog/i.test(docsHtml), {
+      status: docsPage.status,
+      reason: docsPage.ok ? "" : safeOutput(docsHtml)
+    }),
+    createResult("panel", "public-page", "openapi_json", openApi.ok && Boolean(openApiBody?.openapi), {
+      status: openApi.status,
+      reason: openApi.ok ? "" : "openapi document missing"
+    })
+  ];
+}
+
 async function verifyMemos(baseUrl, token, agentId = "") {
   const create = await api(`${baseUrl}/api/memos`, token, {
     method: "POST",
@@ -977,6 +1001,28 @@ async function verifyDockerComposeConfig(servers) {
   return results;
 }
 
+async function verifyInstallScripts(servers) {
+  const results = [];
+  if (servers[0]) {
+    const checks = [
+      "cd /opt/chiken-easy && sh -n scripts/install-server.sh",
+      "cd /opt/chiken-easy && sh -n scripts/install-server-docker.sh",
+      "cd /opt/chiken-easy && sh -n scripts/install-agent.sh",
+      "cd /opt/chiken-easy && sh -n scripts/install-docker.sh",
+      "cd /opt/chiken-easy && sh -n scripts/prepare-docker.sh"
+    ];
+    for (const command of checks) {
+      const result = await sshExec(servers[0], "main", command);
+      results.push(
+        createResult("main", "deploy-script", command.replace(/^cd \/opt\/chiken-easy && /, ""), result.ok, {
+          reason: result.ok ? "" : safeOutput(result.output)
+        })
+      );
+    }
+  }
+  return results;
+}
+
 async function main() {
   if (!fs.existsSync(localServersPath)) throw new Error(".local/test-servers.json not found");
   if (!fs.existsSync(localSecretsPath)) throw new Error(".local/deploy-secrets.json not found");
@@ -1018,6 +1064,7 @@ async function main() {
     storageMode: cleanText(settings.body?.storageMode)
   };
   summary.checks.push(createResult("panel", "api", "settings", settings.ok, summary.api.settings));
+  summary.checks.push(...(await verifyPublicPages(baseUrl)));
 
   for (const [index, server] of servers.entries()) {
     const checks = await verifyServer(server, roles[index]);
@@ -1083,6 +1130,7 @@ async function main() {
   }
 
   summary.checks.push(...(await verifyDockerComposeConfig(servers)));
+  summary.checks.push(...(await verifyInstallScripts(servers)));
 
   const auditChecks = await verifyAudit(baseUrl, apiToken, [
     "subscription_access",

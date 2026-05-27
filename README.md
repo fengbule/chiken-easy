@@ -3,6 +3,7 @@
 `chiken-easy` is a sing-box centered integrated operations panel built on the original Node.js + Express + WebSocket + React architecture of this repository. It keeps the existing control-plane shape and hardens it into a deployable stack that combines:
 
 - Komari-style public probes, monitor summaries, history, and alerts
+- a dedicated public probe page at `/`
 - Memos-style Markdown notes, attachments, and lightweight file workspace
 - sublinkPro-style node pool, subscription output, and proxy quality scoring
 - EasyNode-style assets, credentials, SSH, SFTP, scripts, and batch commands
@@ -20,6 +21,7 @@ This project is still one application:
 ## Feature Overview
 
 - dashboard and server inventory
+- Cloudflare-inspired admin and public visual refresh
 - sing-box protocol wizard for `vmess-ws`, `vless-reality`, `trojan`, `hysteria2`, `shadowsocks`, `mixed`
 - config versioning and rollback
 - forward rules with `sing-box`, `realm`, and `gost`
@@ -30,6 +32,7 @@ This project is still one application:
 - protocol-aware proxy-check MVP for `ss`, `http`, `socks`, `mixed`
 - SSH terminal, SFTP, credentials, scripts, and batch runs
 - API token, session-cookie auth, audit logging, and secret redaction
+- built-in API documentation and OpenAPI JSON export
 
 ## Quick Start
 
@@ -44,6 +47,13 @@ On Windows PowerShell:
 npm.cmd run check
 ```
 
+## URLs
+
+- Public probes: `/`
+- Admin console: `/admin`
+- API docs: `/docs/api`
+- OpenAPI JSON: `/docs/api/openapi.json`
+
 ## Docker Deployment
 
 Server host:
@@ -56,6 +66,29 @@ Agent host:
 
 ```bash
 docker compose -f docker-compose.agent.yml up -d --build
+```
+
+One-click Docker helpers from the repository:
+
+```bash
+sudo bash scripts/install-server-docker.sh
+sudo bash scripts/install-docker.sh
+```
+
+## Systemd Deployment
+
+Server:
+
+```bash
+sudo APP_DIR=/opt/chiken-easy bash scripts/install-server.sh
+```
+
+Agent:
+
+```bash
+sudo CHIKEN_SERVER=ws://panel.example.com:7788/agent \
+CHIKEN_TOKEN=ce_xxx \
+bash scripts/install-agent.sh
 ```
 
 Compose validation commands:
@@ -146,6 +179,19 @@ Protocols not yet fully implemented for authenticated end-to-end proxy-check ret
 
 See [docs/network-tuning.md](./docs/network-tuning.md).
 
+## API Access
+
+- control API guide: [docs/api.md](./docs/api.md)
+- deployment guide: [docs/deployment.md](./docs/deployment.md)
+- runtime OpenAPI JSON: `/docs/api/openapi.json`
+
+Example:
+
+```bash
+curl -H "Authorization: Bearer ck_xxx" \
+  http://panel.example.com:7788/api/agents
+```
+
 ## Local Test Credentials
 
 `mima.txt` is only for local operator testing and must never be committed. Parsed credentials are written to `.local/test-servers.json`, which is also ignored.
@@ -176,6 +222,8 @@ See [docs/network-tuning.md](./docs/network-tuning.md).
 - [Security Hardening](./docs/security-hardening.md)
 - [Monitor](./docs/monitor.md)
 - [Network Tuning](./docs/network-tuning.md)
+- [API Guide](./docs/api.md)
+- [Deployment Guide](./docs/deployment.md)
 - [Memos](./docs/memos.md)
 - [Subscription](./docs/subscription.md)
 - [Server Workspace](./docs/server-workspace.md)
