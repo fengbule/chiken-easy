@@ -539,6 +539,76 @@ function proxyResultToCheck(name, result) {
   });
 }
 
+async function verifyCrossServerFileTransfer(baseUrl, token, sourceAgent, targetAgent) {
+  if (!sourceAgent?.id || !targetAgent?.id) {
+    return [createResult("panel", "sftp-copy", "server_to_server", false, { reason: "source or target agent missing" })];
+  }
+
+  const directory = `/tmp/chiken-cross-${Date.now()}`;
+  const fileName = "bridge.txt";
+  const sourcePath = `${directory}/${fileName}`;
+  const targetPath = `${directory}/${fileName}`;
+  const fileBody = Buffer.from(`cross-server ${sourceAgent.id} -> ${targetAgent.id} ${Date.now()}\n`, "utf8");
+
+  await api(`${baseUrl}/api/agents/${sourceAgent.id}/sftp/mkdir`, token, {
+    method: "POST",
+    body: JSON.stringify({ path: directory })
+  });
+  await api(`${baseUrl}/api/agents/${targetAgent.id}/sftp/mkdir`, token, {
+    method: "POST",
+    body: JSON.stringify({ path: directory })
+  });
+
+  const boundary = `----cross-transfer-${Date.now()}`;
+  const multipartBody = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="directory"\r\n\r\n${directory}\r\n`, "utf8"),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${fileName}"\r\nContent-Type: text/plain\r\n\r\n`, "utf8"),
+    fileBody,
+    Buffer.from(`\r\n--${boundary}--\r\n`, "utf8")
+  ]);
+
+  const uploadRaw = await fetch(`${baseUrl}/api/agents/${sourceAgent.id}/sftp/upload`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      "Content-Length": String(multipartBody.length)
+    },
+    body: multipartBody
+  });
+
+  const uploadOk = uploadRaw.ok;
+  const copyResp = await api(`${baseUrl}/api/sftp/copy-between`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      sourceAgentId: sourceAgent.id,
+      sourcePath,
+      targetAgentId: targetAgent.id,
+      targetPath
+    })
+  });
+
+  const downloadResp = await fetch(`${baseUrl}/api/agents/${targetAgent.id}/sftp/download?path=${encodeURIComponent(targetPath)}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const downloadText = await downloadResp.text();
+
+  await api(`${baseUrl}/api/agents/${sourceAgent.id}/sftp?path=${encodeURIComponent(sourcePath)}`, token, { method: "DELETE", body: JSON.stringify({ path: sourcePath }) });
+  await api(`${baseUrl}/api/agents/${targetAgent.id}/sftp?path=${encodeURIComponent(targetPath)}`, token, { method: "DELETE", body: JSON.stringify({ path: targetPath }) });
+
+  return [
+    createResult("panel", "sftp-copy", "upload_source", uploadOk, {
+      reason: uploadOk ? "" : "source upload failed"
+    }),
+    createResult("panel", "sftp-copy", "copy_between_servers", copyResp.ok && copyResp.body?.ok === true, {
+      reason: copyResp.ok ? "" : cleanText(copyResp.body?.error || copyResp.body)
+    }),
+    createResult("panel", "sftp-copy", "download_target", downloadResp.ok && downloadText === fileBody.toString("utf8"), {
+      reason: downloadResp.ok ? "" : safeOutput(downloadText)
+    })
+  ];
+}
+
 async function verifyPublicPages(baseUrl) {
   const publicPage = await fetch(baseUrl);
   const publicHtml = await publicPage.text();
@@ -548,11 +618,11 @@ async function verifyPublicPages(baseUrl) {
   const openApiBody = await openApi.json().catch(() => null);
 
   return [
-    createResult("panel", "public-page", "root", publicPage.ok && /Public Probes/i.test(publicHtml), {
+    createResult("panel", "public-page", "root", publicPage.ok && /探针|Public Probes/i.test(publicHtml), {
       status: publicPage.status,
       reason: publicPage.ok ? "" : safeOutput(publicHtml)
     }),
-    createResult("panel", "public-page", "api_docs", docsPage.ok && /Endpoint Catalog/i.test(docsHtml), {
+    createResult("panel", "public-page", "api_docs", docsPage.ok && /Endpoint Catalog|接口目录|API Docs/i.test(docsHtml), {
       status: docsPage.status,
       reason: docsPage.ok ? "" : safeOutput(docsHtml)
     }),
@@ -1096,6 +1166,9 @@ async function main() {
     const sftpChecks = await verifySftp(baseUrl, apiToken, agent);
     summary.checks.push(...sftpChecks);
   }
+  if (mainAgent && checkerAgent) {
+    summary.checks.push(...(await verifyCrossServerFileTransfer(baseUrl, apiToken, mainAgent, checkerAgent)));
+  }
 
   summary.checks.push(await verifyBatchCommand(baseUrl, apiToken, agentRows));
   summary.checks.push(...(await verifySubscription(baseUrl, apiToken)));
@@ -1139,6 +1212,7 @@ async function main() {
     "memo_update",
     "memo_delete",
     "sftp_upload",
+    "sftp_copy_between",
     "sftp_download",
     "sftp_delete",
     "proxy_check",

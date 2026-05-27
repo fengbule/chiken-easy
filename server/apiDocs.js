@@ -306,6 +306,19 @@ const endpointCatalog = [
     description: "Rename or move a remote path."
   },
   {
+    group: "SFTP",
+    method: "POST",
+    path: "/api/sftp/copy-between",
+    auth: "token-or-session",
+    description: "Copy one file from one managed server to another through the control plane.",
+    body: {
+      sourceAgentId: "agent-a",
+      sourcePath: "/tmp/source.txt",
+      targetAgentId: "agent-b",
+      targetPath: "/tmp/source.txt"
+    }
+  },
+  {
     group: "Workspace",
     method: "GET",
     path: "/api/assets",

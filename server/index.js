@@ -2793,6 +2793,22 @@ app.post("/api/agents/:id/sftp/rename", async (req, res) => {
   }
 });
 
+app.post("/api/sftp/copy-between", async (req, res) => {
+  const sourceAgentId = cleanText(req.body?.sourceAgentId);
+  const targetAgentId = cleanText(req.body?.targetAgentId);
+  if (!getAgent(sourceAgentId) || !getAgent(targetAgentId)) return res.status(404).json({ error: "source or target agent not found" });
+  try {
+    const sourcePath = normalizeRemotePath(req.body?.sourcePath || "");
+    const targetPath = normalizeRemotePath(req.body?.targetPath || "");
+    const buffer = await withSftp(sourceAgentId, {}, async (sftp) => readSftpStream(sftp.createReadStream(sourcePath)));
+    await withSftp(targetAgentId, {}, async (sftp) => sftpWriteFile(sftp, targetPath, buffer));
+    audit("admin", "sftp_copy_between", "-", { sourceAgentId, targetAgentId, sourcePath, targetPath, size: buffer.length });
+    res.json({ ok: true, sourceAgentId, targetAgentId, sourcePath, targetPath, size: buffer.length, output: "server to server file copy completed" });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.get("/api/memos", (req, res) => {
   const query = cleanText(req.query.q).toLowerCase();
   const tag = cleanText(req.query.tag);
@@ -3027,7 +3043,7 @@ if (fs.existsSync(webDist)) {
   );
 }
 app.get("/", (_, res) => {
-  res.type("html").send(renderPublicProbePage({ title: "ChikenEasy Public Probes", refreshSec: state.settings?.publicProbeRefreshSec || 10 }));
+  res.type("html").send(renderPublicProbePage({ title: "ChikenEasy 公开探针", refreshSec: state.settings?.publicProbeRefreshSec || 10 }));
 });
 app.get("/admin", (_, res, next) => {
   const index = path.join(webDist, "index.html");

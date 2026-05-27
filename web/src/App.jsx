@@ -50,6 +50,8 @@ import {
 } from "./utils";
 import Layout from "./components/Layout";
 import StatusBadge, { StatusDot } from "./components/StatusBadge";
+import ServersPage from "./pages/ServersPage";
+import ConsoleTransferPage from "./pages/ConsoleTransferPage";
 
 const URL_TOKEN_PARAM = "token";
 
@@ -70,6 +72,25 @@ const nav = [
 ];
 
 nav.splice(7, 0, ["network-tuning", Network, "Network Tuning / BBR"]);
+
+const navLabels = {
+  dashboard: "总览",
+  servers: "服务器",
+  console: "双端 SFTP / 互传",
+  nodes: "节点配置",
+  "node-pool": "节点池",
+  subscriptions: "订阅聚合",
+  forward: "端口转发",
+  "network-tuning": "网络优化 / BBR",
+  monitor: "监控与公开探针",
+  workspace: "资产 / 凭据 / 脚本",
+  memos: "备忘录 / 文件",
+  tokens: "API 令牌",
+  audit: "审计日志",
+  settings: "设置"
+};
+
+const localizedNav = nav.map(([id, Icon]) => [id, Icon, navLabels[id] || id]);
 
 const protocolDefinitions = {
   "vmess-ws": {
@@ -3221,7 +3242,7 @@ function sampleConfig() {
 }
 
 function App() {
-  const [page, setPage] = useState("dashboard");
+  const [page, setPage] = useState("servers");
   const [agentId, setAgentId] = useState("");
   const [agents, setAgents] = useState([]);
   const [tokenDraft, setTokenDraft] = useState("");
@@ -3291,8 +3312,8 @@ function App() {
 
   const content = useMemo(() => {
     if (page === "dashboard") return <Dashboard openAgent={openAgent} openSsh={openSsh} />;
-    if (page === "servers") return <Servers openAgent={openAgent} openSsh={openSsh} />;
-    if (page === "console") return <ConsolePage agents={agents} agentId={agentId} setAgentId={setAgentId} />;
+    if (page === "servers") return <ServersPage agents={agents} openAgent={openAgent} openSsh={openSsh} />;
+    if (page === "console") return <ConsoleTransferPage agents={agents} agentId={agentId} setAgentId={setAgentId} />;
     if (page === "nodes") return <NodeWizard agents={agents} />;
     if (page === "node-pool") return <NodePoolPage />;
     if (page === "subscriptions") return <SubscriptionsPage />;
@@ -3327,7 +3348,7 @@ function App() {
 
   return (
     <Layout
-      nav={nav}
+      nav={localizedNav}
       page={page}
       setPage={setPage}
       headerExtra={<AccessTokenBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} saveToken={saveToken} clearToken={clearToken} hasToken={Boolean(getActiveApiToken())} />}

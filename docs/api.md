@@ -51,6 +51,7 @@ Public endpoints:
 - `POST /api/agents/:id/sftp/upload`
 - `GET /api/agents/:id/sftp/download?path=...`
 - `DELETE /api/agents/:id/sftp?path=...`
+- `POST /api/sftp/copy-between`
 
 ### Node pool / subscriptions
 

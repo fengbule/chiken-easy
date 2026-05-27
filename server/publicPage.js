@@ -7,10 +7,10 @@ function escapeHtml(value) {
 }
 
 export function renderPublicProbePage(options = {}) {
-  const title = escapeHtml(options.title || "ChikenEasy Public Probes");
+  const title = escapeHtml(options.title || "ChikenEasy 公开探针");
   const refreshSec = Math.max(5, Number(options.refreshSec || 10) || 10);
   return `<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
@@ -353,6 +353,23 @@ export function renderPublicProbePage(options = {}) {
         font-size: 13px;
         line-height: 1.7;
       }
+      details.log-drawer {
+        margin-top: 22px;
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        background: var(--card);
+        box-shadow: 0 18px 50px rgba(17, 34, 68, 0.08);
+        overflow: hidden;
+      }
+      details.log-drawer summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 18px 24px;
+        font-weight: 700;
+      }
+      details.log-drawer summary::-webkit-details-marker {
+        display: none;
+      }
       .empty {
         padding: 28px 4px;
         text-align: center;
@@ -395,35 +412,35 @@ export function renderPublicProbePage(options = {}) {
             <div class="brand-mark">CE</div>
             <div class="brand-copy">
               <strong>${title}</strong>
-              <span>Cloudflare-inspired public network probes</span>
+              <span>中文公开探针页，优先浏览探针，不让日志抢视线</span>
             </div>
           </div>
           <div class="top-links">
-            <a class="ghost-link" href="/docs/api">API Docs</a>
-            <a class="solid-link" href="/admin">Admin Console</a>
+            <a class="ghost-link" href="/docs/api">API 文档</a>
+            <a class="solid-link" href="/admin">管理后台</a>
           </div>
         </div>
       </div>
 
       <div class="hero">
         <div class="hero-card">
-          <div class="eyebrow">Public Probes</div>
-          <h1>Probe health, routes, and fleet posture in one place.</h1>
+          <div class="eyebrow">公开探针</div>
+          <h1>一页查看探针健康、链路状态与整体可用性。</h1>
           <p class="hero-copy">
-            This page exposes sanitized public probe data only. Use the admin console for control actions, SSH, memos, subscriptions, BBR tuning, and automation.
+            这里只展示脱敏后的公开探针数据。控制动作、SSH、备忘录、订阅、BBR 调优与自动化，请进入管理后台。
           </p>
-          <p class="hero-note">Auto refresh every ${refreshSec} seconds. If this page looks stale after an update, try Ctrl+F5 first.</p>
+          <p class="hero-note">每 ${refreshSec} 秒自动刷新。若更新后页面看起来像旧版本，请先尝试 Ctrl+F5。</p>
         </div>
         <div class="hero-stats" id="summary-cards">
-          <div class="stat"><div class="stat-label">Loading</div><div class="stat-value orange">...</div></div>
+          <div class="stat"><div class="stat-label">加载中</div><div class="stat-value orange">...</div></div>
         </div>
       </div>
 
       <div class="content">
         <div class="panel">
           <div class="panel-head">
-            <h2>Probe Fleet</h2>
-            <span id="probe-count">Loading...</span>
+            <h2>探针列表</h2>
+            <span id="probe-count">加载中...</span>
           </div>
           <div class="panel-body">
             <div class="probe-grid" id="probe-grid"></div>
@@ -432,29 +449,26 @@ export function renderPublicProbePage(options = {}) {
 
         <div class="panel">
           <div class="panel-head">
-            <h2>Selected Probe</h2>
-            <span id="selected-title">Waiting for probe data</span>
+            <h2>当前探针</h2>
+            <span id="selected-title">等待探针数据</span>
           </div>
           <div class="panel-body">
             <div class="detail-stack" id="probe-detail"></div>
             <div class="spark-stack" id="probe-history"></div>
           </div>
         </div>
-
-        <div class="panel">
-          <div class="panel-head">
-            <h2>Recent Events</h2>
-            <span>Public only</span>
-          </div>
-          <div class="panel-body">
-            <div class="events" id="event-list"></div>
-          </div>
-        </div>
       </div>
+
+      <details class="log-drawer">
+        <summary>最近日志与事件（默认收起，避免影响翻阅探针）</summary>
+        <div class="panel-body">
+          <div class="events" id="event-list"></div>
+        </div>
+      </details>
 
       <div class="footer">
         <div class="hero">
-          <div>Public probe data is sanitized by design. Sensitive SSH, token, key, file, and subscription management stays behind the admin console and API token protection.</div>
+          <div>公开探针页按设计只返回脱敏数据。SSH、令牌、密钥、文件管理、订阅管理与自动化控制都留在管理后台和 API 令牌保护之后。</div>
         </div>
       </div>
     </div>
@@ -516,12 +530,12 @@ export function renderPublicProbePage(options = {}) {
       function renderSummary() {
         const summary = state.summary || {};
         const cards = [
-          ["Total Probes", summary.total || 0, "orange"],
-          ["Online", summary.online || 0, "blue"],
-          ["Offline", summary.offline || 0, ""],
-          ["Regions", summary.regions || 0, ""],
-          ["Real-time RX", formatSpeed(summary.totalRxSpeed || 0), ""],
-          ["Real-time TX", formatSpeed(summary.totalTxSpeed || 0), ""]
+          ["探针总数", summary.total || 0, "orange"],
+          ["在线", summary.online || 0, "blue"],
+          ["离线", summary.offline || 0, ""],
+          ["地区", summary.regions || 0, ""],
+          ["实时下行", formatSpeed(summary.totalRxSpeed || 0), ""],
+          ["实时上行", formatSpeed(summary.totalTxSpeed || 0), ""]
         ];
         document.getElementById("summary-cards").innerHTML = cards
           .map(([label, value, tone]) => '<div class="stat"><div class="stat-label">' + label + '</div><div class="stat-value ' + tone + '">' + value + "</div></div>")
@@ -538,24 +552,24 @@ export function renderPublicProbePage(options = {}) {
 
       function renderProbes() {
         const probes = state.probes || [];
-        document.getElementById("probe-count").textContent = probes.length ? probes.length + " probes" : "No public probes";
+        document.getElementById("probe-count").textContent = probes.length ? probes.length + " 个探针" : "暂无公开探针";
         document.getElementById("probe-grid").innerHTML = probes.length
           ? probes
               .map((probe) => {
                 const active = state.selectedAgentId === probe.id ? " active" : "";
                 return '<button class="probe-card' + active + '" type="button" data-id="' + probe.id + '">' +
-                  '<div class="probe-top"><strong>' + (probe.flag ? probe.flag + " " : "") + probe.name + '</strong><span class="badge ' + (probe.online ? "online" : "offline") + '">' + (probe.online ? "online" : "offline") + "</span></div>" +
-                  '<p class="probe-sub">' + (probe.group || "ungrouped") + " / " + (probe.region || "unlabelled region") + "</p>" +
+                  '<div class="probe-top"><strong>' + (probe.flag ? probe.flag + " " : "") + probe.name + '</strong><span class="badge ' + (probe.online ? "online" : "offline") + '">' + (probe.online ? "在线" : "离线") + "</span></div>" +
+                  '<p class="probe-sub">' + (probe.group || "未分组") + " / " + (probe.region || "未标注地区") + "</p>" +
                   '<div class="mini-grid">' +
                     '<div class="mini-stat"><span>CPU</span><strong>' + formatPercent(probe.metrics?.cpuUsage) + '</strong></div>' +
-                    '<div class="mini-stat"><span>Memory</span><strong>' + formatPercent(probe.metrics?.memoryUsage) + '</strong></div>' +
-                    '<div class="mini-stat"><span>RX</span><strong>' + formatSpeed(probe.metrics?.rxSpeed) + '</strong></div>' +
-                    '<div class="mini-stat"><span>TX</span><strong>' + formatSpeed(probe.metrics?.txSpeed) + '</strong></div>' +
+                    '<div class="mini-stat"><span>内存</span><strong>' + formatPercent(probe.metrics?.memoryUsage) + '</strong></div>' +
+                    '<div class="mini-stat"><span>下行</span><strong>' + formatSpeed(probe.metrics?.rxSpeed) + '</strong></div>' +
+                    '<div class="mini-stat"><span>上行</span><strong>' + formatSpeed(probe.metrics?.txSpeed) + '</strong></div>' +
                   '</div>' +
                 '</button>';
               })
               .join("")
-          : '<div class="empty">No public probes available</div>';
+          : '<div class="empty">暂无公开探针</div>';
 
         for (const button of document.querySelectorAll(".probe-card")) {
           button.addEventListener("click", () => selectProbe(button.dataset.id));
@@ -567,20 +581,20 @@ export function renderPublicProbePage(options = {}) {
       }
 
       function renderDetail(probe) {
-        document.getElementById("selected-title").textContent = probe ? probe.name : "Waiting for probe data";
+        document.getElementById("selected-title").textContent = probe ? probe.name : "等待探针数据";
         if (!probe) {
-          document.getElementById("probe-detail").innerHTML = '<div class="empty">Select a probe to inspect history</div>';
+          document.getElementById("probe-detail").innerHTML = '<div class="empty">请选择一个探针查看详情与趋势</div>';
           document.getElementById("probe-history").innerHTML = "";
           return;
         }
 
         document.getElementById("probe-detail").innerHTML = [
-          ["Probe", probe.name],
-          ["Status", probe.online ? "online" : "offline"],
-          ["Group", probe.group || "-"],
-          ["Region", probe.region || "-"],
-          ["Total Traffic", formatBytes((probe.metrics?.rxTotal || 0) + (probe.metrics?.txTotal || 0))],
-          ["CPU / MEM", formatPercent(probe.metrics?.cpuUsage) + " / " + formatPercent(probe.metrics?.memoryUsage)]
+          ["探针", probe.name],
+          ["状态", probe.online ? "在线" : "离线"],
+          ["分组", probe.group || "-"],
+          ["地区", probe.region || "-"],
+          ["总流量", formatBytes((probe.metrics?.rxTotal || 0) + (probe.metrics?.txTotal || 0))],
+          ["CPU / 内存", formatPercent(probe.metrics?.cpuUsage) + " / " + formatPercent(probe.metrics?.memoryUsage)]
         ]
           .map(([label, value]) => '<div class="detail-box"><div class="detail-row"><strong>' + label + '</strong><span>' + value + "</span></div></div>")
           .join("");
@@ -588,11 +602,12 @@ export function renderPublicProbePage(options = {}) {
 
       function renderEvents() {
         const events = state.events || [];
-        document.getElementById("event-list").innerHTML = events.length
-          ? events
-              .map((event) => '<div class="event-card"><div class="event-top"><strong>' + event.type + '</strong><span>' + formatDateTime(event.updatedAt) + '</span></div><div class="event-copy">' + (event.message || "No message") + "</div></div>")
+        const visibleEvents = events.slice(0, 8);
+        document.getElementById("event-list").innerHTML = visibleEvents.length
+          ? visibleEvents
+              .map((event) => '<div class="event-card"><div class="event-top"><strong>' + event.type + '</strong><span>' + formatDateTime(event.updatedAt) + '</span></div><div class="event-copy">' + (event.message || "暂无说明") + "</div></div>")
               .join("")
-          : '<div class="empty">No public events yet</div>';
+          : '<div class="empty">暂无公开事件</div>';
       }
 
       async function loadHistory(agentId) {
@@ -602,12 +617,12 @@ export function renderPublicProbePage(options = {}) {
         document.getElementById("probe-history").innerHTML = points.length
           ? [
               ['CPU', points.map((item) => item.cpuUsage || 0), '#f38020'],
-              ['RX', points.map((item) => item.rxSpeed || 0), '#1355c2'],
-              ['TX', points.map((item) => item.txSpeed || 0), '#0f2747']
+              ['下行', points.map((item) => item.rxSpeed || 0), '#1355c2'],
+              ['上行', points.map((item) => item.txSpeed || 0), '#0f2747']
             ]
               .map(([label, values, color]) => '<div class="spark-card"><strong>' + label + '</strong>' + sparkline(values, color) + "</div>")
               .join("")
-          : '<div class="empty">No history samples yet</div>';
+          : '<div class="empty">暂无趋势样本</div>';
       }
 
       async function load() {

@@ -254,9 +254,9 @@ try {
   const publicSummary = await fetchJson(`http://127.0.0.1:${server.port}/api/public/summary`);
   assert(publicSummary.ok, "public summary endpoint missing");
   const publicPage = await fetchJson(`http://127.0.0.1:${server.port}/`, {});
-  assert(publicPage.ok && String(publicPage.body).includes("Public Probes"), "public probe page missing");
+  assert(publicPage.ok && /探针|Public Probes/i.test(String(publicPage.body)), "public probe page missing");
   const apiDocs = await fetchJson(`http://127.0.0.1:${server.port}/docs/api`, {});
-  assert(apiDocs.ok && String(apiDocs.body).includes("Endpoint Catalog"), "api docs page missing");
+  assert(apiDocs.ok && /Endpoint Catalog|接口目录|API Docs/i.test(String(apiDocs.body)), "api docs page missing");
   const openApi = await fetchJson(`http://127.0.0.1:${server.port}/docs/api/openapi.json`);
   assert(openApi.ok && openApi.body.openapi, "openapi endpoint missing");
   const probeText = JSON.stringify(probes.body);

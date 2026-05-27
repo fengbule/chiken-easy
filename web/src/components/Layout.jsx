@@ -2,6 +2,8 @@ import React from "react";
 
 export default function Layout({ nav, page, setPage, children, headerExtra }) {
   const navPage = ["detail", "config", "logs", "ssh"].includes(page) ? "servers" : page;
+  const title = nav.find(([id]) => id === navPage)?.[2] || "服务器";
+
   return (
     <div className="app">
       <aside>
@@ -15,10 +17,10 @@ export default function Layout({ nav, page, setPage, children, headerExtra }) {
       </aside>
       <main>
         <header>
-          <strong>{nav.find(([id]) => id === navPage)?.[2] || "服务器"}</strong>
+          <strong>{title}</strong>
           <div className="header-tools">
             {headerExtra}
-            <span>admin</span>
+            <span>管理员</span>
           </div>
         </header>
         {children}
