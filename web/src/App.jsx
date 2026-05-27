@@ -52,6 +52,7 @@ import Layout from "./components/Layout";
 import StatusBadge, { StatusDot } from "./components/StatusBadge";
 import ServersPage from "./pages/ServersPage";
 import ConsoleTransferPage from "./pages/ConsoleTransferPage";
+import AuthGate from "./pages/AuthGate";
 
 const URL_TOKEN_PARAM = "token";
 
@@ -3248,6 +3249,9 @@ function App() {
   const [tokenDraft, setTokenDraft] = useState("");
   const [tokenReady, setTokenReady] = useState(false);
   const [memoAgentFilter, setMemoAgentFilter] = useState("");
+  const [authState, setAuthState] = useState({ loading: true, authorized: false, hasToken: false, hasSession: false });
+  const [authError, setAuthError] = useState("");
+  const [loginForm, setLoginForm] = useState({ username: "admin", password: "" });
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -3268,25 +3272,81 @@ function App() {
 
   const loadAgents = () => api("/api/agents").then(setAgents);
 
+  const refreshAuth = async (token = getActiveApiToken()) => {
+    try {
+      const headers = new Headers();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      const response = await fetch("/api/auth/status", {
+        headers,
+        credentials: "same-origin"
+      });
+      const body = await response.json();
+      setAuthState({ loading: false, ...body });
+      setAuthError("");
+      return body;
+    } catch (error) {
+      setAuthState({ loading: false, authorized: false, hasToken: false, hasSession: false });
+      setAuthError(error.message);
+      return null;
+    }
+  };
+
   useEffect(() => {
     if (!tokenReady) return;
+    refreshAuth().catch(() => {});
+  }, [tokenReady]);
+
+  useEffect(() => {
+    if (!tokenReady || !authState.authorized) {
+      setAgents([]);
+      return;
+    }
     loadAgents().catch(() => {});
     const timer = setInterval(() => loadAgents().catch(() => {}), 5000);
     return () => clearInterval(timer);
-  }, [tokenReady]);
+  }, [tokenReady, authState.authorized]);
 
-  const saveToken = () => {
+  const saveToken = async () => {
     const token = tokenDraft.trim();
     setActiveApiToken(token);
     persistToken(token);
-    ensureTokenSession(token).catch(() => {});
-    loadAgents().catch(() => {});
+    try {
+      await ensureTokenSession(token);
+      const auth = await refreshAuth(token);
+      if (auth?.authorized) loadAgents().catch(() => {});
+      else setAuthError("Token 已保存，但当前会话仍未授权。");
+    } catch (error) {
+      setAuthError(error.message);
+      await refreshAuth(token);
+    }
   };
 
-  const clearToken = () => {
+  const clearToken = async () => {
     setTokenDraft("");
     setActiveApiToken("");
     persistToken("");
+    try {
+      await fetch("/api/auth/session", { method: "DELETE", credentials: "same-origin" });
+    } catch {}
+    await refreshAuth("");
+  };
+
+  const loginWithPassword = async () => {
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(loginForm)
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || response.statusText);
+      setAuthError("");
+      const auth = await refreshAuth();
+      if (auth?.authorized) loadAgents().catch(() => {});
+    } catch (error) {
+      setAuthError(error.message);
+    }
   };
 
   const openAgent = (id) => {
@@ -3345,6 +3405,32 @@ function App() {
     if (page === "settings") return <SettingsPage />;
     return <Tutorial />;
   }, [page, agentId, agents, tokenDraft, memoAgentFilter]);
+
+  if (!tokenReady || authState.loading) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="auth-badge">Loading</div>
+          <h1>正在检查后台会话…</h1>
+        </div>
+      </div>
+    );
+  }
+
+  if (!authState.authorized) {
+    return (
+      <AuthGate
+        tokenDraft={tokenDraft}
+        setTokenDraft={setTokenDraft}
+        onTokenLogin={saveToken}
+        loginForm={loginForm}
+        setLoginForm={setLoginForm}
+        onPasswordLogin={loginWithPassword}
+        loading={authState.loading}
+        error={authError}
+      />
+    );
+  }
 
   return (
     <Layout

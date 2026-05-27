@@ -37,6 +37,70 @@ body {
   min-height: 100vh;
 }
 
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+}
+
+.auth-card {
+  width: min(920px, 100%);
+  padding: 28px;
+  border-radius: 28px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow);
+}
+
+.auth-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(243, 128, 32, 0.14);
+  color: var(--orange-strong);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-card h1 {
+  margin: 18px 0 10px;
+  font-size: clamp(28px, 4vw, 46px);
+  line-height: 1.06;
+}
+
+.auth-copy {
+  color: var(--muted);
+  line-height: 1.8;
+}
+
+.auth-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 22px;
+}
+
+.auth-panel .actions {
+  padding-top: 0;
+}
+
+.auth-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.auth-error {
+  padding-left: 0;
+}
+
 .app {
   display: flex;
   min-height: 100vh;
@@ -983,7 +1047,8 @@ code {
   .card-grid,
   .choice-grid,
   .network-status-grid,
-  .dual-pane-grid {
+  .dual-pane-grid,
+  .auth-grid {
     grid-template-columns: 1fr;
   }
 }
