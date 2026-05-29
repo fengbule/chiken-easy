@@ -3099,6 +3099,7 @@ function App() {
 
   return (
     <Layout
+      nav={nav}
       page={page}
       setPage={setPage}
       headerExtra={<AccessTokenBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} saveToken={saveToken} clearToken={clearToken} hasToken={Boolean(getActiveApiToken())} />}
