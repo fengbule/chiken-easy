@@ -337,6 +337,56 @@ function AccessTokenBar({ tokenDraft, setTokenDraft, saveToken, clearToken, hasT
   );
 }
 
+function AdminAuthGate({ tokenDraft, setTokenDraft, saveToken, loginDraft, setLoginDraft, loginAdmin, message }) {
+  return (
+    <div className="login-shell">
+      <div className="login-card">
+        <p className="eyebrow">ChikenEasy Admin</p>
+        <h1>后台需要登录</h1>
+        <p className="muted">请使用管理员账号登录，或输入 ck_ 开头的 API Token。sess_ 是浏览器会话 ID，不需要手动填入。</p>
+        <div className="form-grid">
+          <Field label="用户名" value={loginDraft.username} onChange={(value) => setLoginDraft((current) => ({ ...current, username: value }))} placeholder="admin" />
+          <Field label="密码" type="password" value={loginDraft.password} onChange={(value) => setLoginDraft((current) => ({ ...current, password: value }))} placeholder="管理员密码" />
+        </div>
+        <div className="actions">
+          <button className="primary" onClick={loginAdmin}>登录后台</button>
+        </div>
+        <div className="login-divider">or API Token</div>
+        <div className="form-grid">
+          <Field label="API Token" value={tokenDraft} onChange={setTokenDraft} placeholder="ck_xxx" />
+        </div>
+        <div className="actions">
+          <button className="primary" onClick={saveToken}>使用令牌</button>
+        </div>
+        {message ? <p className="panel-message">{message}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function AgentEmptyState({ title = "没有可选 Agent" }) {
+  return (
+    <Panel title={title}>
+      <div className="empty">没有拿到 Agent 列表。请确认后台已登录、右上角不要填写 sess_；如使用 API Token，请填 ck_ 开头的令牌。</div>
+    </Panel>
+  );
+}
+
+function CompactEvents({ events = [] }) {
+  if (!events.length) return <div className="empty">No recent monitor events.</div>;
+  return (
+    <div className="compact-events">
+      {events.slice(0, 12).map((event, index) => (
+        <div className="compact-event" key={event.id || `${event.agentId || "event"}-${event.updatedAt || index}`}>
+          <span>{formatDateTime(event.updatedAt || event.at)}</span>
+          <strong>{event.type || event.action || "event"}</strong>
+          <em>{event.message || event.agentId || event.target || "-"}</em>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MetricPill({ label, value, accent }) {
   return (
     <div className={`metric-pill ${accent || ""}`}>
@@ -395,15 +445,24 @@ function ProbeOverview({ metrics }) {
   );
 }
 
+function normalizeProbeHistory(history) {
+  if (Array.isArray(history)) return history;
+  if (Array.isArray(history?.raw)) return history.raw;
+  if (Array.isArray(history?.samples)) return history.samples;
+  return [];
+}
+
 function ProbeTrends({ history }) {
+  const samples = normalizeProbeHistory(history);
+  const latest = samples.at(-1) || {};
   const rows = [
-    ["CPU", (history || []).map((item) => item.cpu), `${formatPercent(history?.at(-1)?.cpu || 0)}`],
-    ["内存", (history || []).map((item) => item.memory), `${formatPercent(history?.at(-1)?.memory || 0)}`],
-    ["下行", (history || []).map((item) => item.rxRate), formatSpeed(history?.at(-1)?.rxRate || 0)],
-    ["上行", (history || []).map((item) => item.txRate), formatSpeed(history?.at(-1)?.txRate || 0)]
+    ["CPU", samples.map((item) => item.cpu ?? item.cpuUsage), `${formatPercent(latest.cpu ?? latest.cpuUsage ?? 0)}`],
+    ["内存", samples.map((item) => item.memory ?? item.memoryUsage), `${formatPercent(latest.memory ?? latest.memoryUsage ?? 0)}`],
+    ["下行", samples.map((item) => item.rxRate ?? item.rxSpeed), formatSpeed(latest.rxRate ?? latest.rxSpeed ?? 0)],
+    ["上行", samples.map((item) => item.txRate ?? item.txSpeed), formatSpeed(latest.txRate ?? latest.txSpeed ?? 0)]
   ];
 
-  if (!history?.length) return <p className="panel-message">暂时还没有足够的实时样本用于绘图。</p>;
+  if (!samples.length) return <p className="panel-message">暂时还没有足够的实时样本用于绘图。</p>;
 
   return (
     <div className="trend-grid">
@@ -512,6 +571,10 @@ function PublicStatusPage() {
             </div>
             <div className="public-metrics">
               <MetricPill label="CPU" value={formatPercent(probe.metrics?.cpuUsage)} accent="cpu" />
+              <MetricPill label="负载" value={`${probe.metrics?.load1 ?? 0} / ${probe.metrics?.load5 ?? 0} / ${probe.metrics?.load15 ?? 0}`} />
+              <MetricPill label="Swap" value={`${formatPercent(probe.metrics?.swapUsage)} / ${formatBytes(probe.metrics?.swapUsed)} / ${formatBytes(probe.metrics?.swapTotal)}`} />
+              <MetricPill label="总流量" value={`↓ ${formatBytes(probe.metrics?.rxBytes)}  ↑ ${formatBytes(probe.metrics?.txBytes)}`} />
+              <MetricPill label="质量" value="延迟 -- ms / 丢包 --" />
               <MetricPill label="内存" value={`${formatPercent(probe.metrics?.memoryUsage)} / ${formatBytes(probe.metrics?.memoryUsed)} / ${formatBytes(probe.metrics?.memoryTotal)}`} accent="memory" />
               <MetricPill label="磁盘" value={`${formatPercent(probe.metrics?.diskUsage)} / ${formatBytes(probe.metrics?.diskUsed)} / ${formatBytes(probe.metrics?.diskTotal)}`} accent="disk" />
               <MetricPill label="网络" value={`↓ ${formatSpeed(probe.metrics?.rxSpeed)}  ↑ ${formatSpeed(probe.metrics?.txSpeed)}`} accent="network" />
@@ -553,7 +616,7 @@ function Dashboard({ openAgent, openSsh }) {
     return () => clearInterval(timer);
   }, []);
 
-  if (!data) return null;
+  if (!data) return <Panel title="Dashboard"><div className="empty">Loading dashboard data...</div></Panel>;
 
   return (
     <section>
@@ -628,6 +691,10 @@ function Servers({ openAgent, openSsh }) {
 }
 
 function AgentTable({ agents, openAgent, openSsh }) {
+  if (!agents.length) {
+    return <div className="empty">No Agent data yet. Please confirm the admin session is valid and wait for Agent heartbeat.</div>;
+  }
+
   return (
     <table>
       <thead>
@@ -1181,6 +1248,8 @@ function NodeWizard({ agents }) {
     }
   };
 
+  if (!agents.length) return <AgentEmptyState title="节点配置需要先选择 Agent" />;
+
   return (
     <section>
       <div className="grid2">
@@ -1327,6 +1396,8 @@ function ForwardWizard({ agents }) {
       setResult(error.message);
     }
   };
+
+  if (!agents.length) return <AgentEmptyState title="端口转发需要先选择 Agent" />;
 
   return (
     <section>
@@ -1870,30 +1941,7 @@ function MonitorPage({ openAgent }) {
         </Panel>
 
         <Panel title="最近事件">
-          {events.length ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>时间</th>
-                  <th>类型</th>
-                  <th>节点</th>
-                  <th>消息</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.slice(0, 20).map((event) => (
-                  <tr key={event.id}>
-                    <td>{formatDateTime(event.updatedAt)}</td>
-                    <td>{event.type}</td>
-                    <td>{event.agentId}</td>
-                    <td>{event.message}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="empty">还没有公开事件。</div>
-          )}
+          <CompactEvents events={events} />
         </Panel>
       </div>
       {message ? <p className="panel-message">{message}</p> : null}
@@ -2696,7 +2744,7 @@ function WorkspacePage({ agents, openSsh, openConsole }) {
   );
 }
 
-function ConsolePage({ agents, agentId, setAgentId }) {
+function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
   const [pathValue, setPathValue] = useState("/");
   const [rows, setRows] = useState([]);
   const [message, setMessage] = useState("");
@@ -2826,6 +2874,8 @@ function ConsolePage({ agents, agentId, setAgentId }) {
     }
   };
 
+  if (!agents.length) return <AgentEmptyState title="SFTP / 终端需要先选择 Agent" />;
+
   return (
     <section>
       <div className="toolbar">
@@ -2836,6 +2886,7 @@ function ConsolePage({ agents, agentId, setAgentId }) {
             </option>
           ))}
         </select>
+        <button onClick={() => openSsh(currentAgentId)} disabled={!currentAgentId}>打开 SSH 终端</button>
         <input value={pathValue} onChange={(event) => setPathValue(event.target.value)} />
         <button onClick={() => load(pathValue).catch(() => {})}>列目录</button>
         <button onClick={mkdirRemote}>新建目录</button>
@@ -3173,7 +3224,26 @@ function App() {
   const [agents, setAgents] = useState([]);
   const [tokenDraft, setTokenDraft] = useState("");
   const [tokenReady, setTokenReady] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [authorized, setAuthorized] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
+  const [loginDraft, setLoginDraft] = useState({ username: "admin", password: "" });
   const [memoAgentFilter, setMemoAgentFilter] = useState("");
+
+  const refreshAuth = async () => {
+    try {
+      const status = await api("/api/auth/status");
+      setAuthorized(Boolean(status.authorized));
+      setAuthMessage(status.authorized ? "" : "请使用后台登录态或 ck_ API Token。");
+      setAuthReady(true);
+      return Boolean(status.authorized);
+    } catch (error) {
+      setAuthorized(false);
+      setAuthMessage(error.message);
+      setAuthReady(true);
+      return false;
+    }
+  };
 
   useEffect(() => {
     if (!isAdminPath) return;
@@ -3191,6 +3261,7 @@ function App() {
     setActiveApiToken(nextToken);
     setTokenDraft(nextToken);
     setTokenReady(true);
+    refreshAuth().catch(() => {});
   }, [isAdminPath]);
 
   const loadAgents = () => api("/api/agents").then(setAgents);
@@ -3198,10 +3269,11 @@ function App() {
   useEffect(() => {
     if (!isAdminPath) return;
     if (!tokenReady) return;
+    if (!authorized) return;
     loadAgents().catch(() => {});
     const timer = setInterval(() => loadAgents().catch(() => {}), 5000);
     return () => clearInterval(timer);
-  }, [isAdminPath, tokenReady]);
+  }, [isAdminPath, tokenReady, authorized]);
 
   const saveToken = () => {
     const token = tokenDraft.trim();
@@ -3213,14 +3285,35 @@ function App() {
     }
     setActiveApiToken(token);
     persistToken(token);
-    ensureTokenSession(token).catch(() => {});
-    loadAgents().catch(() => {});
+    ensureTokenSession(token)
+      .then(refreshAuth)
+      .then((ok) => {
+        if (ok) loadAgents().catch(() => {});
+      })
+      .catch((error) => {
+        setAuthorized(false);
+        setAuthMessage(error.message);
+      });
+  };
+
+  const loginAdmin = async () => {
+    try {
+      await api("/api/auth/login", { method: "POST", body: JSON.stringify(loginDraft) });
+      setLoginDraft((current) => ({ ...current, password: "" }));
+      const ok = await refreshAuth();
+      if (ok) loadAgents().catch(() => {});
+    } catch (error) {
+      setAuthorized(false);
+      setAuthMessage(error.message);
+    }
   };
 
   const clearToken = () => {
     setTokenDraft("");
     setActiveApiToken("");
     persistToken("");
+    setAuthorized(false);
+    setAgents([]);
   };
 
   const openAgent = (id) => {
@@ -3247,7 +3340,7 @@ function App() {
   const content = useMemo(() => {
     if (page === "dashboard") return <Dashboard openAgent={openAgent} openSsh={openSsh} />;
     if (page === "servers") return <Servers openAgent={openAgent} openSsh={openSsh} />;
-    if (page === "console") return <ConsolePage agents={agents} agentId={agentId} setAgentId={setAgentId} />;
+    if (page === "console") return <ConsolePage agents={agents} agentId={agentId} setAgentId={setAgentId} openSsh={openSsh} />;
     if (page === "nodes") return <NodeWizard agents={agents} />;
     if (page === "node-pool") return <NodePoolPage />;
     if (page === "subscriptions") return <SubscriptionsPage />;
@@ -3280,6 +3373,9 @@ function App() {
   }, [page, agentId, agents, tokenDraft, memoAgentFilter]);
 
   if (!isAdminPath) return <PublicStatusPage />;
+
+  if (!authReady) return <div className="login-shell"><div className="login-card">正在检查后台会话...</div></div>;
+  if (!authorized) return <AdminAuthGate tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} saveToken={saveToken} loginDraft={loginDraft} setLoginDraft={setLoginDraft} loginAdmin={loginAdmin} message={authMessage} />;
 
   return (
     <Layout
