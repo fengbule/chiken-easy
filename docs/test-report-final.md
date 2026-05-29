@@ -261,45 +261,24 @@
 
 ## 重启后恢复与 main 同步
 
-- 恢复时间：`2026-05-26T11:06:42.2967203+08:00`
+- 恢复时间：`2026-05-26T11:06:42+08:00`
 - 当前分支：`release/stabilize-integrated-chiken-stack`
 - 原保存 commit：`89d9d0e`
-- 当前 HEAD（恢复与合并验证时）：`c45e8c1`
-- 当前 commit 状态：`working tree`（基于 `c45e8c1` 完成本地回归修复后再提交）
+- 恢复与合并验证时 HEAD：`c45e8c1`
 - `89d9d0e` 是否仍在当前分支历史中：是
 
 ### 与 origin/main 同步结果
 
 - `git fetch --prune origin`：通过
-- `origin/main` 最新提交（同步时）：`58d4cc0`
+- 同步时 `origin/main` 最新提交：`58d4cc0`
 - 是否 merge `origin/main`：是
-- merge 方式：先尝试普通 `git merge origin/main`，发现冲突后中止；随后使用 `git merge -X ours origin/main` 保留已远程验收的 release 主线，再补跑完整验收
+- merge 过程：首次普通 merge 出现冲突后执行 `git merge --abort`，随后保留已通过第三轮远程验收的 release 主线并重新验证
 
 ### 冲突与处理摘要
 
-- 首次普通 merge 冲突文件：
-  - `.env.example`
-  - `README.md`
-  - `agent/index.js`
-  - `docker-compose.agent.yml`
-  - `docker-compose.server.yml`
-  - `docs/development-report-2026-05-20.md`
-  - `docs/development.md`
-  - `docs/test-report-2026-05-20.md`
-  - `server/index.js`
-  - `server/subscriptions.js`
-  - `web/src/App.jsx`
-  - `web/src/style.css`
-- 处理策略：
-  - 先执行 `git merge --abort`，避免不可控人工拼接
-  - 改用 `git merge -X ours origin/main`
-  - 合并后发现 `web/src/App.jsx` 被混入重复定义并导致构建失败
-  - 将以下关键文件恢复为已通过第三轮远程验收的 release 版本后重新验证：
-    - `agent/index.js`
-    - `server/index.js`
-    - `web/src/App.jsx`
-    - `web/src/style.css`
-- 最终状态：无未解决 merge 冲突，且回归验证通过
+- 首次普通 merge 冲突文件包括：`.env.example`、`README.md`、`agent/index.js`、`docker-compose.agent.yml`、`docker-compose.server.yml`、`docs/development.md`、`server/index.js`、`server/subscriptions.js`、`web/src/App.jsx`、`web/src/style.css`
+- 处理策略：中止不可控 merge，保留已通过第三轮远程验收的 release 主线，并重新跑完整本地与远程验收
+- 最终状态：无未解决 merge 冲突，回归验证通过
 
 ### 本地验证结果
 
@@ -312,29 +291,24 @@
 
 - `node scripts/remote-verify.mjs`：通过
 - `mima.txt` 解析：通过
-- 解析来源：`C:\Users\fengbule\Desktop\mima.txt`
-- 脱敏服务器摘要：
-  - Server 1：`38.76.178.xxx`
-  - Server 2：`38.76.208.xxx`
-  - Server 3：`103.52.154.xxx`
-- 关键远程验收摘要：
-  - 3 台服务器 `SSH tcp/banner/auth/pwd/uname -a/docker ps`：全部通过
-  - 3 台服务器 SFTP 小文件上传/下载/删除：全部通过
-  - 3 Agents 在线：通过
-  - 订阅访问与访问日志：通过
-  - `mixed` 与 `shadowsocks` 协议级 proxy-check：通过
-  - `vless` 协议级 proxy-check：明确返回 `not_implemented`
-  - VLESS Reality 服务端校验：通过
-  - VLESS Reality 从 Server 3 客户端探测：通过
-  - sing-box TCP / UDP 转发：通过
-  - Realm TCP 转发：通过
-  - GOST TCP 转发：通过
-  - 审计日志校验：通过
+- 解析来源：桌面 `mima.txt`
+- 脱敏服务器摘要：Server 1 `38.76.178.xxx`，Server 2 `38.76.208.xxx`，Server 3 `103.52.154.xxx`
+- 关键远程验收摘要：3 台服务器 SSH/SFTP 通过，3 Agents 在线，订阅访问通过，`mixed` 与 `shadowsocks` 协议级 proxy-check 通过，VLESS Reality 服务端与 Server 3 客户端验证通过，sing-box TCP/UDP、Realm TCP、GOST TCP 转发通过，审计日志校验通过
 
 ### PR 准备状态
 
 - 是否准备创建 PR：是
 - 是否确认没有敏感文件进入 git：是
-- 核查结论：
-  - `git status --ignored` 仅显示被忽略目录，如 `.local/`、`data/`、`dist/`、`node_modules/`
-  - 未发现 `mima.txt`、`.local/test-servers.json`、`.env*`、`*.pem`、`*.key` 被跟踪或 staged
+- 核查结论：`.local/`、`data/`、`dist/`、`node_modules/`、`mima.txt`、`.env*`、`*.pem`、`*.key` 均未 staged 或 tracked
+
+## 样品环境归一化记录
+
+- 归一化时间：`2026-05-29T12:26:00+08:00`
+- 本地基线：`main` 干净，`HEAD=origin/main=0b57e8d`
+- 远程现场备份：已保存到本地 `artifacts/remote-dirty/server1`、`server2`、`server3`
+- 备份内容：`git-status.txt`、`git-diff.patch`、`git-diff-cached.patch`、`untracked-files.txt`、`untracked-files.tar.gz`、`meta.txt`
+- 归因结论：三台服务器均在 `main@0b57e8d` 上出现 59 个脏项，其中 `agent/networkTuning.js`、`server/apiDocs.js`、`server/publicPage.js`、`web/src/pages/` 等来自 `origin/feature/bbr-network-tuning` 的未合入内容；另有一批 main 既有文件出现换行或部署复制导致的工作区差异
+- 远程归一化动作：三台服务器均执行 `git fetch --prune origin`、`git reset --hard origin/main`、`git clean -fd` 后重新执行对应 Docker Compose 构建与启动
+- Server 2 旧容器清理：已删除明确属于旧样品的 `chiken-demo-agent`、`chiken-demo-singbox`、`chiken-demo-server`
+- 归一化结果：三台服务器 `HEAD=origin/main=0b57e8d`，`git status --porcelain` 为 0
+- 敏感信息处理：报告仅保留脱敏 IP，不包含密码、token、私钥或完整凭据组合

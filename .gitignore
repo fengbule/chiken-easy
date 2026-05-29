@@ -13,3 +13,4 @@ mima.txt
 *.key
 .env.*
 !.env.example
+artifacts/
