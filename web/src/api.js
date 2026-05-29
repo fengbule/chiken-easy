@@ -2,8 +2,13 @@ const TOKEN_KEY = "chiken_api_token";
 
 let activeApiToken = "";
 
+function usableBearerToken(token) {
+  const value = String(token || "").trim();
+  return value && !value.startsWith("sess_") ? value : "";
+}
+
 export function setActiveApiToken(token) {
-  activeApiToken = String(token || "").trim();
+  activeApiToken = usableBearerToken(token);
 }
 
 export function getActiveApiToken() {
@@ -29,7 +34,8 @@ export async function api(url, options = {}) {
   const headers = new Headers(options.headers || {});
   const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
   if (options.body && !isFormData && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  if (getActiveApiToken()) headers.set("Authorization", `Bearer ${getActiveApiToken()}`);
+  const bearerToken = usableBearerToken(getActiveApiToken());
+  if (bearerToken) headers.set("Authorization", `Bearer ${bearerToken}`);
 
   const response = await fetch(url, { ...options, headers, credentials: "same-origin" });
   if (!response.ok) {
@@ -44,7 +50,7 @@ export async function api(url, options = {}) {
 }
 
 export async function ensureTokenSession(token = getActiveApiToken()) {
-  const currentToken = String(token || "").trim();
+  const currentToken = usableBearerToken(token);
   if (!currentToken) return true;
   const headers = new Headers({ "Content-Type": "application/json", Authorization: `Bearer ${currentToken}` });
   const response = await fetch("/api/auth/session", {
@@ -66,7 +72,8 @@ export async function ensureTokenSession(token = getActiveApiToken()) {
 
 export async function uploadForm(url, formData) {
   const headers = new Headers();
-  if (getActiveApiToken()) headers.set("Authorization", `Bearer ${getActiveApiToken()}`);
+  const bearerToken = usableBearerToken(getActiveApiToken());
+  if (bearerToken) headers.set("Authorization", `Bearer ${bearerToken}`);
   const response = await fetch(url, {
     method: "POST",
     headers,
@@ -86,7 +93,8 @@ export async function uploadForm(url, formData) {
 
 export async function downloadBinary(url, fileName = "download.bin") {
   const headers = new Headers();
-  if (getActiveApiToken()) headers.set("Authorization", `Bearer ${getActiveApiToken()}`);
+  const bearerToken = usableBearerToken(getActiveApiToken());
+  if (bearerToken) headers.set("Authorization", `Bearer ${bearerToken}`);
   const response = await fetch(url, { headers, credentials: "same-origin" });
   if (!response.ok) {
     let message = response.statusText;
@@ -109,7 +117,8 @@ export async function downloadBinary(url, fileName = "download.bin") {
 
 export async function fetchText(url, options = {}) {
   const headers = new Headers(options.headers || {});
-  if (getActiveApiToken()) headers.set("Authorization", `Bearer ${getActiveApiToken()}`);
+  const bearerToken = usableBearerToken(getActiveApiToken());
+  if (bearerToken) headers.set("Authorization", `Bearer ${bearerToken}`);
   const response = await fetch(url, { ...options, headers, credentials: "same-origin" });
   if (!response.ok) {
     let message = response.statusText;

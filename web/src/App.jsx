@@ -52,6 +52,10 @@ import StatusBadge, { StatusDot } from "./components/StatusBadge";
 
 const URL_TOKEN_PARAM = "token";
 
+function isPanelApiToken(token) {
+  return String(token || "").trim().startsWith("ck_");
+}
+
 const nav = [
   ["dashboard", Activity, "仪表盘"],
   ["servers", Monitor, "服务器"],
@@ -433,6 +437,108 @@ function AgentTrafficSummary({ metrics }) {
     <div className="metric-inline">
       <span>↓ {formatSpeed(metrics.network?.rxRate)}</span>
       <span>↑ {formatSpeed(metrics.network?.txRate)}</span>
+    </div>
+  );
+}
+
+function PublicStatusPage() {
+  const [summary, setSummary] = useState(null);
+  const [probes, setProbes] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [message, setMessage] = useState("");
+
+  const load = async () => {
+    try {
+      const [probesData, eventRows] = await Promise.all([
+        fetch("/api/public/probes").then((response) => response.json()),
+        fetch("/api/public/events").then((response) => response.json())
+      ]);
+      const publicProbes = Array.isArray(probesData) ? probesData : [];
+      setSummary({
+        total: publicProbes.length,
+        online: publicProbes.filter((probe) => probe.online).length,
+        offline: publicProbes.filter((probe) => !probe.online).length,
+        regions: new Set(publicProbes.map((probe) => probe.region).filter(Boolean)).size,
+        totalTraffic: publicProbes.reduce((sum, probe) => sum + Number(probe.metrics?.rxBytes || 0) + Number(probe.metrics?.txBytes || 0), 0),
+        totalRxSpeed: publicProbes.reduce((sum, probe) => sum + Number(probe.metrics?.rxSpeed || 0), 0),
+        totalTxSpeed: publicProbes.reduce((sum, probe) => sum + Number(probe.metrics?.txSpeed || 0), 0)
+      });
+      setProbes(publicProbes);
+      setEvents(Array.isArray(eventRows) ? eventRows : []);
+      setMessage("");
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(() => {});
+    const timer = setInterval(() => load().catch(() => {}), 10000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const online = probes.filter((probe) => probe.online).length;
+
+  return (
+    <div className="public-status">
+      <div className="public-hero">
+        <div>
+          <p className="eyebrow">ChikenEasy Public Probe</p>
+          <h1>Komari 风格探针状态页</h1>
+          <p>实时展示 Agent 在线状态、CPU、内存、磁盘、网络速率和最近事件。公开接口只返回展示字段，不包含 SSH、RDP、密码、私钥或 Token。</p>
+        </div>
+        <a className="admin-link" href="/admin">进入后台</a>
+      </div>
+
+      <div className="public-stats">
+        <Card label="探针总数" value={summary?.total ?? probes.length} />
+        <Card label="在线" value={summary?.online ?? online} green />
+        <Card label="离线" value={summary?.offline ?? probes.length - online} />
+        <Card label="地区" value={summary?.regions ?? 0} blue />
+        <Card label="总流量" value={formatBytes(summary?.totalTraffic || 0)} />
+        <Card label="实时下行" value={formatSpeed(summary?.totalRxSpeed || 0)} />
+        <Card label="实时上行" value={formatSpeed(summary?.totalTxSpeed || 0)} />
+      </div>
+
+      <div className="public-probe-grid">
+        {probes.map((probe) => (
+          <article className="public-probe-card" key={probe.id}>
+            <div className="public-probe-head">
+              <div>
+                <strong>{probe.flag ? `${probe.flag} ` : ""}{probe.name}</strong>
+                <span>{probe.group || "默认分组"} / {probe.region || "未标注地区"}</span>
+              </div>
+              <StatusBadge ok={probe.online} text={probe.online ? "online" : "offline"} />
+            </div>
+            <div className="public-metrics">
+              <MetricPill label="CPU" value={formatPercent(probe.metrics?.cpuUsage)} accent="cpu" />
+              <MetricPill label="内存" value={`${formatPercent(probe.metrics?.memoryUsage)} / ${formatBytes(probe.metrics?.memoryUsed)} / ${formatBytes(probe.metrics?.memoryTotal)}`} accent="memory" />
+              <MetricPill label="磁盘" value={`${formatPercent(probe.metrics?.diskUsage)} / ${formatBytes(probe.metrics?.diskUsed)} / ${formatBytes(probe.metrics?.diskTotal)}`} accent="disk" />
+              <MetricPill label="网络" value={`↓ ${formatSpeed(probe.metrics?.rxSpeed)}  ↑ ${formatSpeed(probe.metrics?.txSpeed)}`} accent="network" />
+            </div>
+            <div className="public-card-foot">
+              <span>运行 {formatUptime(probe.metrics?.uptime)}</span>
+              <span>更新 {formatDateTime(probe.metrics?.updatedAt)}</span>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <div className="public-events">
+        <h2>最近事件</h2>
+        {events.length ? (
+          events.slice(0, 8).map((event) => (
+            <div className="public-event" key={event.id || `${event.agentId}-${event.updatedAt}`}>
+              <span>{formatDateTime(event.updatedAt)}</span>
+              <strong>{event.type}</strong>
+              <em>{event.message || event.agentId}</em>
+            </div>
+          ))
+        ) : (
+          <div className="empty">暂无公开事件。</div>
+        )}
+      </div>
+      {message ? <p className="panel-message">{message}</p> : null}
     </div>
   );
 }
@@ -2595,6 +2701,8 @@ function ConsolePage({ agents, agentId, setAgentId }) {
   const [rows, setRows] = useState([]);
   const [message, setMessage] = useState("");
   const [renameForm, setRenameForm] = useState({ oldPath: "", newPath: "" });
+  const [transferForm, setTransferForm] = useState({ sourceAgentId: "", sourcePath: "/tmp/a.txt", targetAgentId: "", targetPath: "/tmp/a.txt" });
+  const [transferring, setTransferring] = useState(false);
 
   const currentAgentId = agentId || agents[0]?.id || "";
 
@@ -2613,6 +2721,15 @@ function ConsolePage({ agents, agentId, setAgentId }) {
   useEffect(() => {
     if (!agentId && agents[0]) setAgentId(agents[0].id);
   }, [agentId, agents]);
+
+  useEffect(() => {
+    if (!agents.length) return;
+    setTransferForm((current) => {
+      const sourceAgentId = current.sourceAgentId || currentAgentId || agents[0].id;
+      const targetAgentId = current.targetAgentId || agents.find((agent) => agent.id !== sourceAgentId)?.id || agents[0].id;
+      return { ...current, sourceAgentId, targetAgentId };
+    });
+  }, [agents, currentAgentId]);
 
   useEffect(() => {
     if (currentAgentId) load("/").catch(() => {});
@@ -2688,13 +2805,34 @@ function ConsolePage({ agents, agentId, setAgentId }) {
     }
   };
 
+  const transferRemote = async () => {
+    if (!transferForm.sourceAgentId || !transferForm.targetAgentId || !transferForm.sourcePath || !transferForm.targetPath) {
+      setMessage("请选择源服务器、目标服务器，并填写源路径和目标路径。");
+      return;
+    }
+    if (transferForm.sourceAgentId === transferForm.targetAgentId && transferForm.sourcePath === transferForm.targetPath) {
+      setMessage("源和目标完全相同，未执行传输。");
+      return;
+    }
+    setTransferring(true);
+    try {
+      const response = await api("/api/sftp/transfer", { method: "POST", body: JSON.stringify(transferForm) });
+      setMessage(`跨服务器传输完成：${formatBytes(response.size)}，${response.sourcePath} -> ${response.targetPath}`);
+      if (response.targetAgentId === currentAgentId) load(pathValue).catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setTransferring(false);
+    }
+  };
+
   return (
     <section>
       <div className="toolbar">
         <select value={currentAgentId} onChange={(event) => setAgentId(event.target.value)}>
           {agents.map((agent) => (
             <option key={agent.id} value={agent.id}>
-              {agent.name}
+              {agent.name} · {agent.connected ? "online" : "offline"}
             </option>
           ))}
         </select>
@@ -2706,6 +2844,12 @@ function ConsolePage({ agents, agentId, setAgentId }) {
           上传文件
         </label>
       </div>
+
+      {!agents.length ? (
+        <Panel title="Agent 状态">
+          <div className="empty">当前后台会话没有拿到 Agent 列表。请确认已登录后台，或在右上角使用 ck_ 开头的 API Token；sess_ 是浏览器会话，不需要手动填入。</div>
+        </Panel>
+      ) : null}
 
       <div className="grid2">
         <Panel title="SFTP 文件管理">
@@ -2752,6 +2896,35 @@ function ConsolePage({ agents, agentId, setAgentId }) {
           {message ? <pre>{message}</pre> : null}
         </Panel>
       </div>
+
+      <Panel title="跨服务器 SFTP 对传">
+        <div className="form-grid">
+          <label>
+            源服务器
+            <select value={transferForm.sourceAgentId} onChange={(event) => setTransferForm((current) => ({ ...current, sourceAgentId: event.target.value }))}>
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>{agent.name} · {agent.connected ? "online" : "offline"}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            目标服务器
+            <select value={transferForm.targetAgentId} onChange={(event) => setTransferForm((current) => ({ ...current, targetAgentId: event.target.value }))}>
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>{agent.name} · {agent.connected ? "online" : "offline"}</option>
+              ))}
+            </select>
+          </label>
+          <Field label="源文件路径" value={transferForm.sourcePath} onChange={(value) => setTransferForm((current) => ({ ...current, sourcePath: value }))} placeholder="/tmp/a.txt" />
+          <Field label="目标文件路径" value={transferForm.targetPath} onChange={(value) => setTransferForm((current) => ({ ...current, targetPath: value }))} placeholder="/tmp/a.txt" />
+        </div>
+        <div className="actions">
+          <button className="primary" onClick={transferRemote} disabled={transferring || agents.length < 2}>
+            {transferring ? "传输中..." : "开始对传"}
+          </button>
+        </div>
+        <div className="panel-tip">对传通过主控临时流转文件内容，默认限制 64 MB，可用 CHIKEN_SFTP_TRANSFER_MAX_MB 调整；路径会标准化处理，操作写入审计日志。</div>
+      </Panel>
     </section>
   );
 }
@@ -2994,6 +3167,7 @@ function sampleConfig() {
 }
 
 function App() {
+  const isAdminPath = window.location.pathname.startsWith("/admin");
   const [page, setPage] = useState("dashboard");
   const [agentId, setAgentId] = useState("");
   const [agents, setAgents] = useState([]);
@@ -3002,33 +3176,41 @@ function App() {
   const [memoAgentFilter, setMemoAgentFilter] = useState("");
 
   useEffect(() => {
+    if (!isAdminPath) return;
     const url = new URL(window.location.href);
     const urlToken = String(url.searchParams.get(URL_TOKEN_PARAM) || "").trim();
     const storedToken = String(loadStoredToken() || "").trim();
-    const nextToken = urlToken || storedToken;
+    const nextToken = isPanelApiToken(urlToken) ? urlToken : isPanelApiToken(storedToken) ? storedToken : "";
 
     if (urlToken) {
       url.searchParams.delete(URL_TOKEN_PARAM);
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-      persistToken(urlToken);
+      if (isPanelApiToken(urlToken)) persistToken(urlToken);
     }
 
     setActiveApiToken(nextToken);
     setTokenDraft(nextToken);
     setTokenReady(true);
-  }, []);
+  }, [isAdminPath]);
 
   const loadAgents = () => api("/api/agents").then(setAgents);
 
   useEffect(() => {
+    if (!isAdminPath) return;
     if (!tokenReady) return;
     loadAgents().catch(() => {});
     const timer = setInterval(() => loadAgents().catch(() => {}), 5000);
     return () => clearInterval(timer);
-  }, [tokenReady]);
+  }, [isAdminPath, tokenReady]);
 
   const saveToken = () => {
     const token = tokenDraft.trim();
+    if (token && !isPanelApiToken(token)) {
+      setTokenDraft("");
+      setActiveApiToken("");
+      persistToken("");
+      return;
+    }
     setActiveApiToken(token);
     persistToken(token);
     ensureTokenSession(token).catch(() => {});
@@ -3096,6 +3278,8 @@ function App() {
     if (page === "settings") return <SettingsPage />;
     return <Tutorial />;
   }, [page, agentId, agents, tokenDraft, memoAgentFilter]);
+
+  if (!isAdminPath) return <PublicStatusPage />;
 
   return (
     <Layout

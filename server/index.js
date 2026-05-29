@@ -572,6 +572,12 @@ function sftpWriteFile(sftp, remotePath, buffer) {
   });
 }
 
+function sftpStat(sftp, remotePath) {
+  return new Promise((resolve, reject) => {
+    sftp.stat(remotePath, (error, stats) => (error ? reject(error) : resolve(stats)));
+  });
+}
+
 function sendCommand(agentId, command, payload = {}) {
   const ws = clients.get(agentId);
   if (!ws || ws.readyState !== ws.OPEN) throw new Error("agent offline");
@@ -2543,6 +2549,31 @@ app.post("/api/agents/:id/sftp/rename", async (req, res) => {
     audit("admin", "sftp_rename", req.params.id, { oldPath, newPath });
     res.json({ ok: true });
   } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/sftp/transfer", async (req, res) => {
+  const sourceAgentId = cleanText(req.body?.sourceAgentId);
+  const targetAgentId = cleanText(req.body?.targetAgentId);
+  if (!getAgent(sourceAgentId)) return res.status(404).json({ error: "source agent not found" });
+  if (!getAgent(targetAgentId)) return res.status(404).json({ error: "target agent not found" });
+  try {
+    const sourcePath = normalizeRemotePath(req.body?.sourcePath || "");
+    const targetPath = normalizeRemotePath(req.body?.targetPath || "");
+    const maxBytes = Math.max(1024 * 1024, (Number(process.env.CHIKEN_SFTP_TRANSFER_MAX_MB || 64) || 64) * 1024 * 1024);
+    const buffer = await withSftp(sourceAgentId, {}, async (sftp) => {
+      const stats = await sftpStat(sftp, sourcePath);
+      const size = Number(stats?.size || 0);
+      if (stats?.isDirectory?.()) throw new Error("source path is a directory");
+      if (size > maxBytes) throw new Error(`file exceeds transfer limit (${Math.round(maxBytes / 1024 / 1024)} MB)`);
+      return readSftpStream(sftp.createReadStream(sourcePath));
+    });
+    await withSftp(targetAgentId, {}, (sftp) => sftpWriteFile(sftp, targetPath, buffer));
+    audit("admin", "sftp_transfer", `${sourceAgentId}->${targetAgentId}`, { sourcePath, targetPath, size: buffer.length });
+    res.json({ ok: true, sourceAgentId, targetAgentId, sourcePath, targetPath, size: buffer.length });
+  } catch (error) {
+    audit("admin", "sftp_transfer", `${sourceAgentId}->${targetAgentId}`, { ok: false, error: error.message });
     res.status(400).json({ error: error.message });
   }
 });
