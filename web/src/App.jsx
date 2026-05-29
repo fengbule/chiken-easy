@@ -3078,57 +3078,59 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
           </div>
         </Panel>
 
-        <Panel title="路径工具">
-          <div className="form-grid">
-            <Field label="旧路径" value={renameForm.oldPath} onChange={(value) => setRenameForm((current) => ({ ...current, oldPath: value }))} placeholder="/tmp/a.txt" />
-            <Field label="新路径" value={renameForm.newPath} onChange={(value) => setRenameForm((current) => ({ ...current, newPath: value }))} placeholder="/tmp/b.txt" />
-          </div>
-          <div className="actions">
-            <button className="primary" onClick={renameRemote}>执行重命名</button>
-          </div>
-          <div className="panel-tip">远程文件操作全部写入审计日志，路径会经过标准化处理，避免目录穿越。</div>
-          {message ? <pre>{message}</pre> : null}
-        </Panel>
-      </div>
+        <div className="sftp-side-stack">
+          <Panel title="快速对传">
+            <div className="transfer-board transfer-compact">
+              <label>
+                <span>源服务器</span>
+                <select value={transferForm.sourceAgentId} onChange={(event) => setTransferForm((current) => ({ ...current, sourceAgentId: event.target.value }))}>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>{agent.name} · {agent.connected ? "online" : "offline"}</option>
+                  ))}
+                </select>
+                <input value={transferForm.sourcePath} onChange={(event) => setTransferForm((current) => ({ ...current, sourcePath: event.target.value }))} placeholder="/tmp/a.txt" />
+              </label>
+              <div className="transfer-arrow">↓</div>
+              <label>
+                <span>目标服务器</span>
+                <select value={transferForm.targetAgentId} onChange={(event) => setTransferForm((current) => ({ ...current, targetAgentId: event.target.value }))}>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>{agent.name} · {agent.connected ? "online" : "offline"}</option>
+                  ))}
+                </select>
+                <input value={transferForm.targetPath} onChange={(event) => setTransferForm((current) => ({ ...current, targetPath: event.target.value }))} placeholder="/tmp/a.txt" />
+              </label>
+            </div>
+            <div className="actions">
+              <button className="primary" onClick={transferRemote} disabled={transferring || agents.length < 2}>
+                {transferring ? "传输中..." : "开始对传"}
+              </button>
+              <button onClick={() => setTransferForm((current) => ({
+                ...current,
+                sourceAgentId: currentAgentId,
+                sourcePath: pathValue === "/" ? "/tmp/a.txt" : pathValue,
+                targetAgentId: agents.find((agent) => agent.id !== currentAgentId)?.id || currentAgentId,
+                targetPath: pathValue === "/" ? "/tmp/a.txt" : pathValue
+              }))}>
+                使用当前路径
+              </button>
+            </div>
+            <div className="panel-tip">文件行点“对传”会自动填入源路径；默认限制 64 MB，操作写入审计。</div>
+          </Panel>
 
-      <Panel title="跨服务器 SFTP 对传">
-        <div className="transfer-board">
-          <label>
-            <span>源服务器</span>
-            <select value={transferForm.sourceAgentId} onChange={(event) => setTransferForm((current) => ({ ...current, sourceAgentId: event.target.value }))}>
-              {agents.map((agent) => (
-                <option key={agent.id} value={agent.id}>{agent.name} · {agent.connected ? "online" : "offline"}</option>
-              ))}
-            </select>
-            <input value={transferForm.sourcePath} onChange={(event) => setTransferForm((current) => ({ ...current, sourcePath: event.target.value }))} placeholder="/tmp/a.txt" />
-          </label>
-          <div className="transfer-arrow">→</div>
-          <label>
-            <span>目标服务器</span>
-            <select value={transferForm.targetAgentId} onChange={(event) => setTransferForm((current) => ({ ...current, targetAgentId: event.target.value }))}>
-              {agents.map((agent) => (
-                <option key={agent.id} value={agent.id}>{agent.name} · {agent.connected ? "online" : "offline"}</option>
-              ))}
-            </select>
-            <input value={transferForm.targetPath} onChange={(event) => setTransferForm((current) => ({ ...current, targetPath: event.target.value }))} placeholder="/tmp/a.txt" />
-          </label>
+          <Panel title="路径工具">
+            <div className="form-grid">
+              <Field label="旧路径" value={renameForm.oldPath} onChange={(value) => setRenameForm((current) => ({ ...current, oldPath: value }))} placeholder="/tmp/a.txt" />
+              <Field label="新路径" value={renameForm.newPath} onChange={(value) => setRenameForm((current) => ({ ...current, newPath: value }))} placeholder="/tmp/b.txt" />
+            </div>
+            <div className="actions">
+              <button className="primary" onClick={renameRemote}>执行重命名</button>
+            </div>
+            <div className="panel-tip">远程文件操作全部写入审计日志，路径会经过标准化处理，避免目录穿越。</div>
+            {message ? <pre>{message}</pre> : null}
+          </Panel>
         </div>
-        <div className="actions">
-          <button className="primary" onClick={transferRemote} disabled={transferring || agents.length < 2}>
-            {transferring ? "传输中..." : "开始对传"}
-          </button>
-          <button onClick={() => setTransferForm((current) => ({
-            ...current,
-            sourceAgentId: currentAgentId,
-            sourcePath: pathValue === "/" ? "/tmp/a.txt" : pathValue,
-            targetAgentId: agents.find((agent) => agent.id !== currentAgentId)?.id || currentAgentId,
-            targetPath: pathValue === "/" ? "/tmp/a.txt" : pathValue
-          }))}>
-            使用当前路径
-          </button>
-        </div>
-        <div className="panel-tip">对传通过主控临时流转文件内容，默认限制 64 MB，可用 CHIKEN_SFTP_TRANSFER_MAX_MB 调整；路径会标准化处理，操作写入审计日志。</div>
-      </Panel>
+      </div>
     </section>
   );
 }
