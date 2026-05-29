@@ -632,12 +632,12 @@ textarea {
 }
 
 .sftp-shell {
-  background: #fff;
-  border: 1px solid #e4eaf2;
-  border-radius: 10px;
-  box-shadow: 0 4px 14px rgba(17, 34, 51, 0.08);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border: 1px solid #dfe8f3;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(17, 34, 51, 0.08);
   margin-bottom: 16px;
-  padding: 14px;
+  padding: 16px;
 }
 
 .sftp-toolbar {
@@ -645,6 +645,10 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.sftp-agent-picker {
+  min-width: 210px;
 }
 
 .sftp-toolbar label {
@@ -656,25 +660,57 @@ textarea {
 
 .sftp-pathbar {
   flex: 1;
-  min-width: 280px;
+  min-width: 360px;
 }
 
-.sftp-pathbar input {
+.path-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.path-input-row input {
   width: 100%;
 }
 
+.sftp-action-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .sftp-current {
-  align-items: center;
+  align-items: flex-start;
   border-top: 1px solid #edf1f6;
   color: #607086;
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
   margin-top: 14px;
   padding-top: 12px;
 }
 
+.sftp-current-main {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
 .sftp-current strong {
   color: #243447;
+}
+
+.path-crumbs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.path-crumbs button {
+  background: #eef5ff;
+  border-color: #d8e7fb;
+  color: #255b91;
+  height: 30px;
+  padding: 0 10px;
 }
 
 .sftp-grid {
@@ -683,22 +719,26 @@ textarea {
 
 .file-browser {
   padding: 12px 18px 18px;
+  overflow-x: auto;
 }
 
 .file-row {
   align-items: center;
   border-bottom: 1px solid #edf1f6;
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) 110px 180px 150px;
-  gap: 12px;
-  min-height: 42px;
-  padding: 0 8px;
+  grid-template-columns: minmax(360px, 1fr) 120px 190px 190px;
+  gap: 16px;
+  min-height: 50px;
+  min-width: 860px;
+  padding: 0 12px;
 }
 
 .file-row.file-head {
   color: #6a7788;
   font-weight: 700;
-  min-height: 36px;
+  min-height: 38px;
+  background: #fbfdff;
+  border-radius: 10px 10px 0 0;
 }
 
 .file-row.file-up {
@@ -726,15 +766,57 @@ textarea {
   justify-content: flex-start;
   padding: 0;
   text-align: left;
+  min-width: 0;
+  width: 100%;
 }
 
 .file-icon {
-  width: 22px;
+  align-items: center;
+  background: #edf5ff;
+  border: 1px solid #d8e7fb;
+  border-radius: 8px;
+  color: #28649d;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 800;
+  height: 26px;
+  justify-content: center;
+  letter-spacing: 0.02em;
+  width: 42px;
+}
+
+.file-row.file .file-icon {
+  background: #f4f7fb;
+  border-color: #e1e8f0;
+  color: #677789;
+}
+
+.file-title,
+.file-name {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.file-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .file-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.file-actions button {
+  height: 34px;
+  padding: 0 12px;
 }
 
 .danger-link {
@@ -743,6 +825,47 @@ textarea {
 
 .compact-empty {
   padding: 24px;
+}
+
+.panel-muted {
+  color: #708196;
+  font-size: 13px;
+}
+
+.transfer-board {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 54px minmax(240px, 1fr);
+  gap: 14px;
+  padding: 20px;
+}
+
+.transfer-board label {
+  background: #fbfdff;
+  border: 1px solid #e1e9f3;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px;
+}
+
+.transfer-board label span {
+  color: #5f7186;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.transfer-arrow {
+  align-self: center;
+  background: #eaf4ff;
+  border: 1px solid #d5e8fb;
+  border-radius: 999px;
+  color: #1e72b8;
+  font-size: 24px;
+  font-weight: 800;
+  height: 48px;
+  line-height: 46px;
+  text-align: center;
 }
 
 .metric-pill {
@@ -978,21 +1101,37 @@ textarea {
   background: rgba(255, 255, 255, 0.96);
 }
 
+.public-brand {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.public-brand-mark {
+  align-items: center;
+  background: linear-gradient(135deg, #102f52, #32b37d);
+  border-radius: 14px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 15px;
+  font-weight: 900;
+  height: 42px;
+  justify-content: center;
+  letter-spacing: -0.04em;
+  width: 42px;
+}
+
 .public-hero h1 {
   margin: 0;
-  color: #1d232a;
-  font-size: 26px;
-  letter-spacing: -0.02em;
+  color: #142238;
+  font-size: 25px;
+  letter-spacing: -0.03em;
 }
 
-.public-hero h1 span {
-  color: #e4e6ea;
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.public-hero p:not(.eyebrow) {
-  display: none;
+.public-hero p {
+  color: #7a8491;
+  font-size: 13px;
+  margin: 3px 0 0;
 }
 
 .admin-link {

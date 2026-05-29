@@ -617,8 +617,12 @@ function PublicStatusPage() {
   return (
     <div className="public-status">
       <div className="public-hero">
-        <div>
-          <h1>针 <span>| Komari Monitor</span></h1>
+        <div className="public-brand">
+          <span className="public-brand-mark">CE</span>
+          <div>
+            <h1>Chiken Easy</h1>
+            <p>节点观测台 · Agent Fleet Status</p>
+          </div>
         </div>
         <div className="public-actions">
           <a className="admin-link" href="/admin">后台</a>
@@ -2824,6 +2828,11 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
   const currentAgent = agents.find((agent) => agent.id === currentAgentId);
   const parentPath = pathValue && pathValue !== "/" ? pathValue.split("/").filter(Boolean).slice(0, -1).join("/") : "";
   const parentTarget = parentPath ? `/${parentPath}` : "/";
+  const sortedRows = [...rows].sort((left, right) => {
+    if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
+    return String(left.name || "").localeCompare(String(right.name || ""), "zh-CN", { numeric: true, sensitivity: "base" });
+  });
+  const pathParts = pathValue.split("/").filter(Boolean);
 
   const load = async (nextPath = pathValue) => {
     if (!currentAgentId) return;
@@ -2861,6 +2870,31 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
   };
 
   const entryPath = (entry) => (pathValue === "/" ? `/${entry.name}` : `${pathValue}/${entry.name}`);
+  const targetPathFor = (entry, targetAgentId = transferForm.targetAgentId) => {
+    const fallbackDir = pathValue && pathValue !== "/" ? pathValue : "/tmp";
+    const targetDir = targetAgentId === currentAgentId ? pathValue : fallbackDir;
+    return targetDir === "/" ? `/${entry.name}` : `${targetDir}/${entry.name}`;
+  };
+
+  const selectForTransfer = (entry) => {
+    const sourcePath = entryPath(entry);
+    const targetAgentId = transferForm.targetAgentId && transferForm.targetAgentId !== currentAgentId
+      ? transferForm.targetAgentId
+      : agents.find((agent) => agent.id !== currentAgentId)?.id || currentAgentId;
+    setTransferForm((current) => ({
+      ...current,
+      sourceAgentId: currentAgentId,
+      sourcePath,
+      targetAgentId,
+      targetPath: targetPathFor(entry, targetAgentId)
+    }));
+    setMessage(`已选择对传源文件：${sourcePath}`);
+  };
+
+  const jumpToPath = (index) => {
+    if (index < 0) load("/").catch(() => {});
+    else load(`/${pathParts.slice(0, index + 1).join("/")}`).catch(() => {});
+  };
 
   const uploadRemote = async (event) => {
     const file = event.target.files?.[0];
@@ -2953,7 +2987,7 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
     <section>
       <div className="sftp-shell">
         <div className="sftp-toolbar">
-          <div>
+          <div className="sftp-agent-picker">
             <label>Agent 服务器</label>
             <select value={currentAgentId} onChange={(event) => setAgentId(event.target.value)}>
               {agents.map((agent) => (
@@ -2965,20 +2999,37 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
           </div>
           <div className="sftp-pathbar">
             <label>当前路径</label>
-            <input value={pathValue} onChange={(event) => setPathValue(event.target.value)} />
+            <div className="path-input-row">
+              <input value={pathValue} onChange={(event) => setPathValue(event.target.value)} onKeyDown={(event) => {
+                if (event.key === "Enter") load(pathValue).catch(() => {});
+              }} />
+              <button onClick={() => load(pathValue).catch(() => {})}>前往</button>
+            </div>
           </div>
-          <button onClick={() => load(pathValue).catch(() => {})}>刷新</button>
-          <button onClick={() => openSsh(currentAgentId)} disabled={!currentAgentId}>打开 SSH 终端</button>
-          <button onClick={mkdirRemote}>新建目录</button>
-          <label className="upload-label">
-            <input type="file" onChange={uploadRemote} />
-            上传文件
-          </label>
+          <div className="sftp-action-bar">
+            <button onClick={() => load(pathValue).catch(() => {})}>刷新</button>
+            <button onClick={() => openSsh(currentAgentId)} disabled={!currentAgentId}>SSH</button>
+            <button onClick={mkdirRemote}>新建目录</button>
+            <label className="upload-label">
+              <input type="file" onChange={uploadRemote} />
+              上传文件
+            </label>
+          </div>
         </div>
 
         <div className="sftp-current">
-          <strong>{currentAgent?.name || "Agent"}</strong>
-          <span>{pathValue}</span>
+          <div className="sftp-current-main">
+            <strong>{currentAgent?.name || "Agent"}</strong>
+            <StatusBadge ok={currentAgent?.connected} text={currentAgent?.connected ? "online" : "offline"} />
+          </div>
+          <div className="path-crumbs">
+            <button onClick={() => jumpToPath(-1)}>/</button>
+            {pathParts.map((part, index) => (
+              <button key={`${part}-${index}`} onClick={() => jumpToPath(index)}>
+                {part}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -2989,7 +3040,10 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
       ) : null}
 
       <div className="grid2 sftp-grid">
-        <Panel title="SFTP 文件管理">
+        <Panel
+          title="SFTP 文件管理"
+          right={<span className="panel-muted">{sortedRows.length} 项 · 目录优先</span>}
+        >
           <div className="file-browser">
             <div className="file-row file-head">
               <span>名称</span>
@@ -2998,21 +3052,25 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
               <span>操作</span>
             </div>
             <button className="file-row file-up" onClick={() => load(parentTarget).catch(() => {})} disabled={pathValue === "/"}>
-              <span>[上级目录]</span>
+              <span className="file-title">
+                <span className="file-icon">UP</span>
+                <span className="file-label">[上级目录]</span>
+              </span>
               <span />
               <span />
               <span>{pathValue === "/" ? "根目录" : parentTarget}</span>
             </button>
-            {rows.length ? rows.map((entry) => (
+            {sortedRows.length ? sortedRows.map((entry) => (
               <div className={`file-row ${entry.isDirectory ? "directory" : "file"}`} key={`${entry.name}-${entry.modifiedAt}`}>
                 <button className="file-name" onClick={() => (entry.isDirectory ? goTo(entry) : downloadRemote(entry))}>
-                  <span className="file-icon">{entry.isDirectory ? "[DIR]" : "[FILE]"}</span>
-                  <span>{entry.name}{entry.isDirectory ? "/" : ""}</span>
+                  <span className="file-icon">{entry.isDirectory ? "DIR" : "FILE"}</span>
+                  <span className="file-label" title={entry.name}>{entry.name}{entry.isDirectory ? "/" : ""}</span>
                 </button>
                 <span>{entry.isDirectory ? "" : formatBytes(entry.size)}</span>
                 <span>{formatDateTime(entry.modifiedAt)}</span>
                 <span className="file-actions">
                   {entry.isDirectory ? <button onClick={() => goTo(entry)}>进入</button> : <button onClick={() => downloadRemote(entry)}>下载</button>}
+                  {!entry.isDirectory ? <button onClick={() => selectForTransfer(entry)}>对传</button> : null}
                   {!entry.isDirectory ? <button className="link danger-link" onClick={() => deleteRemote(entry)}>删除</button> : null}
                 </span>
               </div>
@@ -3020,7 +3078,7 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
           </div>
         </Panel>
 
-        <Panel title="重命名与快捷命令">
+        <Panel title="路径工具">
           <div className="form-grid">
             <Field label="旧路径" value={renameForm.oldPath} onChange={(value) => setRenameForm((current) => ({ ...current, oldPath: value }))} placeholder="/tmp/a.txt" />
             <Field label="新路径" value={renameForm.newPath} onChange={(value) => setRenameForm((current) => ({ ...current, newPath: value }))} placeholder="/tmp/b.txt" />
@@ -3034,29 +3092,39 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
       </div>
 
       <Panel title="跨服务器 SFTP 对传">
-        <div className="form-grid">
+        <div className="transfer-board">
           <label>
-            源服务器
+            <span>源服务器</span>
             <select value={transferForm.sourceAgentId} onChange={(event) => setTransferForm((current) => ({ ...current, sourceAgentId: event.target.value }))}>
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>{agent.name} · {agent.connected ? "online" : "offline"}</option>
               ))}
             </select>
+            <input value={transferForm.sourcePath} onChange={(event) => setTransferForm((current) => ({ ...current, sourcePath: event.target.value }))} placeholder="/tmp/a.txt" />
           </label>
+          <div className="transfer-arrow">→</div>
           <label>
-            目标服务器
+            <span>目标服务器</span>
             <select value={transferForm.targetAgentId} onChange={(event) => setTransferForm((current) => ({ ...current, targetAgentId: event.target.value }))}>
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>{agent.name} · {agent.connected ? "online" : "offline"}</option>
               ))}
             </select>
+            <input value={transferForm.targetPath} onChange={(event) => setTransferForm((current) => ({ ...current, targetPath: event.target.value }))} placeholder="/tmp/a.txt" />
           </label>
-          <Field label="源文件路径" value={transferForm.sourcePath} onChange={(value) => setTransferForm((current) => ({ ...current, sourcePath: value }))} placeholder="/tmp/a.txt" />
-          <Field label="目标文件路径" value={transferForm.targetPath} onChange={(value) => setTransferForm((current) => ({ ...current, targetPath: value }))} placeholder="/tmp/a.txt" />
         </div>
         <div className="actions">
           <button className="primary" onClick={transferRemote} disabled={transferring || agents.length < 2}>
             {transferring ? "传输中..." : "开始对传"}
+          </button>
+          <button onClick={() => setTransferForm((current) => ({
+            ...current,
+            sourceAgentId: currentAgentId,
+            sourcePath: pathValue === "/" ? "/tmp/a.txt" : pathValue,
+            targetAgentId: agents.find((agent) => agent.id !== currentAgentId)?.id || currentAgentId,
+            targetPath: pathValue === "/" ? "/tmp/a.txt" : pathValue
+          }))}>
+            使用当前路径
           </button>
         </div>
         <div className="panel-tip">对传通过主控临时流转文件内容，默认限制 64 MB，可用 CHIKEN_SFTP_TRANSFER_MAX_MB 调整；路径会标准化处理，操作写入审计日志。</div>
