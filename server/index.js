@@ -827,6 +827,8 @@ function publicProbeCard(agent) {
     group: asset.publicGroup || asset.group || "",
     region: asset.publicRegion || asset.region || "",
     flag: asset.publicFlag || "",
+    os: cleanText(agent.os || ""),
+    arch: cleanText(agent.arch || ""),
     sort: Number(asset.sort || 0) || 0,
     online: Boolean(clients.has(agent.id)),
     price: asset.price || "",
@@ -1594,6 +1596,16 @@ function attachDirectSshTerminal(ws, agentId) {
   let shell = null;
   const pendingWrites = [];
   const conn = new SshClient();
+  let connected = false;
+
+  const emit = (payload) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
+  };
+
+  const closeWithReason = (reason, output = "") => {
+    emit({ type: "error", reason, output: output || `${reason}\n` });
+    ws.close();
+  };
 
   const flushPending = () => {
     if (!shell) return;
@@ -1609,37 +1621,36 @@ function attachDirectSshTerminal(ws, agentId) {
 
   conn
     .on("ready", () => {
+      connected = true;
       conn.shell({ term: "xterm-256color", cols: 120, rows: 40 }, (error, stream) => {
         if (error) {
-          ws.send(JSON.stringify({ type: "output", output: `${error.message}\n` }));
-          ws.close();
+          closeWithReason("ssh_shell_failed", `${error.message}\n`);
           conn.end();
           return;
         }
         shell = stream;
         audit("admin", "ssh_connect", agentId, { host: resolveSshProfile(agentId).host });
-        ws.send(JSON.stringify({ type: "output", output: `Connected to ${resolveSshProfile(agentId).username}@${resolveSshProfile(agentId).host}\n` }));
+        emit({ type: "status", status: "connected", output: `Connected to ${resolveSshProfile(agentId).username}@${resolveSshProfile(agentId).host}\n` });
         flushPending();
 
         stream.on("data", (data) => {
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "output", output: data.toString() }));
+          emit({ type: "output", output: data.toString() });
         });
         stream.stderr?.on("data", (data) => {
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "output", output: data.toString() }));
+          emit({ type: "output", output: data.toString() });
         });
         stream.on("close", () => {
+          emit({ type: "status", status: "closed", output: "\n[ssh shell closed]\n" });
           if (ws.readyState === ws.OPEN) ws.close();
           conn.end();
         });
       });
     })
     .on("error", (error) => {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: "output", output: `${error.message}\n` }));
-        ws.close();
-      }
+      closeWithReason("ssh_connect_failed", `${error.message}\n`);
     })
     .on("close", () => {
+      if (!connected) emit({ type: "error", reason: "ssh_closed_before_ready", output: "SSH connection closed before shell became ready.\n" });
       if (ws.readyState === ws.OPEN) ws.close();
     });
 

@@ -631,6 +631,120 @@ textarea {
   padding: 12px;
 }
 
+.sftp-shell {
+  background: #fff;
+  border: 1px solid #e4eaf2;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(17, 34, 51, 0.08);
+  margin-bottom: 16px;
+  padding: 14px;
+}
+
+.sftp-toolbar {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.sftp-toolbar label {
+  color: #697789;
+  display: block;
+  font-size: 12px;
+  margin-bottom: 5px;
+}
+
+.sftp-pathbar {
+  flex: 1;
+  min-width: 280px;
+}
+
+.sftp-pathbar input {
+  width: 100%;
+}
+
+.sftp-current {
+  align-items: center;
+  border-top: 1px solid #edf1f6;
+  color: #607086;
+  display: flex;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.sftp-current strong {
+  color: #243447;
+}
+
+.sftp-grid {
+  grid-template-columns: minmax(520px, 1.4fr) minmax(320px, 0.8fr);
+}
+
+.file-browser {
+  padding: 12px 18px 18px;
+}
+
+.file-row {
+  align-items: center;
+  border-bottom: 1px solid #edf1f6;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 110px 180px 150px;
+  gap: 12px;
+  min-height: 42px;
+  padding: 0 8px;
+}
+
+.file-row.file-head {
+  color: #6a7788;
+  font-weight: 700;
+  min-height: 36px;
+}
+
+.file-row.file-up {
+  background: #fbfdff;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  color: #145aa8;
+  cursor: pointer;
+  height: auto;
+  text-align: left;
+  width: 100%;
+}
+
+.file-row.file-up:disabled {
+  color: #9aa5b3;
+  cursor: default;
+}
+
+.file-name {
+  background: transparent;
+  border: 0;
+  color: #1f3348;
+  height: auto;
+  justify-content: flex-start;
+  padding: 0;
+  text-align: left;
+}
+
+.file-icon {
+  width: 22px;
+}
+
+.file-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.danger-link {
+  color: #c73434 !important;
+}
+
+.compact-empty {
+  padding: 24px;
+}
+
 .metric-pill {
   border: 1px solid #e7edf5;
   border-radius: 10px;
@@ -847,9 +961,9 @@ textarea {
 
 .public-status {
   min-height: 100vh;
-  padding: 14px;
-  color: #edf5ff;
-  background: #080a0f;
+  padding: 0 6px 28px;
+  color: #2e3338;
+  background: #fbfbfc;
 }
 
 .public-hero {
@@ -857,12 +971,24 @@ textarea {
   justify-content: space-between;
   gap: 16px;
   align-items: center;
-  margin-bottom: 12px;
+  border-bottom: 1px solid #e7e7e9;
+  height: 86px;
+  margin: 0 -6px 0;
+  padding: 0 18px;
+  background: rgba(255, 255, 255, 0.96);
 }
 
 .public-hero h1 {
   margin: 0;
-  font-size: 22px;
+  color: #1d232a;
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+
+.public-hero h1 span {
+  color: #e4e6ea;
+  font-size: 18px;
+  font-weight: 700;
 }
 
 .public-hero p:not(.eyebrow) {
@@ -870,43 +996,105 @@ textarea {
 }
 
 .admin-link {
-  color: #d9e9ff;
-  background: #101722;
-  border: 1px solid #273244;
-  border-radius: 999px;
+  color: #5f6369;
+  background: #f0f0f1;
+  border: 1px solid #e5e5e6;
+  border-radius: 8px;
   box-shadow: none;
-  padding: 8px 13px;
+  padding: 10px 14px;
   text-decoration: none;
   white-space: nowrap;
 }
 
 .public-stats {
-  display: none;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
+  gap: 0;
+  border: 1px solid #dfe1e5;
+  border-radius: 9px;
+  margin: 0 0 18px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.public-stats .stat {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 15px;
+}
+
+.public-stats .stat span {
+  color: #7a7f86;
+}
+
+.public-stats .stat b {
+  font-size: 18px;
+  color: #20242a;
+}
+
+.public-filter {
+  margin-bottom: 22px;
+}
+
+.public-filter input {
+  width: min(520px, 100%);
+  height: 42px;
+  border: 1px solid #cfd3da;
+  border-radius: 6px;
+  font-size: 16px;
+  margin-bottom: 14px;
+}
+
+.public-filter p {
+  color: #66717d;
+  margin: 10px 0 0;
+}
+
+.public-groups {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.public-groups span {
+  color: #6a727c;
+  font-size: 16px;
+}
+
+.public-groups button {
+  background: #f0f1f3;
+  border-color: transparent;
+  height: 32px;
+  padding: 0 14px;
 }
 
 .public-probe-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(310px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(390px, 1fr));
+  gap: 20px;
 }
 
 .public-probe-card {
-  color: #edf5ff;
-  background: linear-gradient(180deg, #101319 0%, #090b10 100%);
-  border: 1px solid #1d2430;
-  border-radius: 14px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-  padding: 14px;
+  color: #30343a;
+  background: #fff;
+  border: 1px solid #dcdee3;
+  border-radius: 9px;
+  box-shadow: none;
+  min-height: 430px;
+  padding: 14px 14px 18px;
 }
 
 .public-probe-head strong {
   display: block;
-  color: #f5f8ff;
+  color: #24272c;
+  font-size: 25px;
+  line-height: 1.2;
 }
 
 .public-probe-head span,
 .public-card-foot {
-  color: #8c99aa;
+  color: #747b84;
 }
 
 .public-probe-head,
@@ -915,6 +1103,17 @@ textarea {
   justify-content: space-between;
   gap: 10px;
   align-items: center;
+  border-bottom: 1px solid #dedfe3;
+  padding-bottom: 12px;
+}
+
+.public-probe-title em {
+  background: #eef0ff;
+  border-radius: 4px;
+  color: #5b64d8;
+  font-style: normal;
+  margin-right: 6px;
+  padding: 3px 7px;
 }
 
 .public-metrics {
@@ -943,6 +1142,80 @@ textarea {
 .public-card-foot {
   border-top: 1px solid #1d2430;
   padding-top: 12px;
+}
+
+.komari-os-row,
+.komari-kv-row,
+.komari-row-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.komari-os-row {
+  color: #656c75;
+  font-size: 18px;
+  padding: 12px 0 10px;
+}
+
+.komari-os-row strong,
+.komari-kv-row strong,
+.komari-row-head strong {
+  color: #30343a;
+  font-size: 18px;
+}
+
+.komari-meter-row {
+  margin-bottom: 8px;
+}
+
+.komari-row-head span,
+.komari-kv-row span {
+  color: #69717a;
+  font-size: 18px;
+}
+
+.komari-meter {
+  background: #dedede;
+  border-radius: 999px;
+  height: 9px;
+  overflow: hidden;
+  margin: 5px 0 3px;
+}
+
+.komari-meter span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+}
+
+.komari-meter .ok {
+  background: #31aa72;
+}
+
+.komari-meter .warn {
+  background: #ff781f;
+}
+
+.komari-meter .danger {
+  background: #ef4451;
+}
+
+.komari-meter-row small {
+  color: #7c838c;
+  display: block;
+  font-size: 15px;
+}
+
+.komari-kv-row {
+  color: #69717a;
+  font-size: 18px;
+  margin-top: 11px;
+}
+
+.komari-kv-row strong {
+  font-weight: 500;
 }
 
 .public-events {

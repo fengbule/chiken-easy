@@ -500,11 +500,82 @@ function AgentTrafficSummary({ metrics }) {
   );
 }
 
+function formatPublicUptime(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds || 0)));
+  if (!total) return "-";
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (days) return `${days} 天 ${hours} 时 ${minutes} 分 ${sec} 秒`;
+  if (hours) return `${hours} 时 ${minutes} 分 ${sec} 秒`;
+  return `${minutes} 分 ${sec} 秒`;
+}
+
+function usageTone(value) {
+  const percent = Number(value || 0);
+  if (percent >= 85) return "danger";
+  if (percent >= 65) return "warn";
+  return "ok";
+}
+
+function UsageLine({ label, percent, detail }) {
+  const safePercent = Math.max(0, Math.min(100, Number(percent || 0)));
+  return (
+    <div className="komari-meter-row">
+      <div className="komari-row-head">
+        <span>{label}</span>
+        <strong>{formatPercent(safePercent)}</strong>
+      </div>
+      <div className="komari-meter">
+        <span className={usageTone(safePercent)} style={{ width: `${safePercent}%` }} />
+      </div>
+      {detail ? <small>{detail}</small> : null}
+    </div>
+  );
+}
+
+function PublicProbeCard({ probe }) {
+  const metrics = probe.metrics || {};
+  const osText = [probe.os || "Linux", probe.arch || ""].filter(Boolean).join(" / ");
+  return (
+    <article className="public-probe-card">
+      <div className="public-probe-head">
+        <div className="public-probe-title">
+          <strong>{probe.flag ? `${probe.flag} ` : ""}{probe.name}</strong>
+          <span>{probe.price ? <em>{probe.price}</em> : null}{probe.expireAt ? <em>{probe.expireAt}</em> : null}</span>
+        </div>
+        <StatusBadge ok={probe.online} text={probe.online ? "在线" : "离线"} />
+      </div>
+      <div className="komari-os-row">
+        <span>OS</span>
+        <strong>{osText}</strong>
+      </div>
+      <UsageLine label="CPU" percent={metrics.cpuUsage} detail={`${metrics.cpuCores || 0} cores / load ${metrics.load1 ?? 0}`} />
+      <UsageLine label="内存" percent={metrics.memoryUsage} detail={`${formatBytes(metrics.memoryUsed)} / ${formatBytes(metrics.memoryTotal)}`} />
+      <UsageLine label="磁盘" percent={metrics.diskUsage} detail={`${formatBytes(metrics.diskUsed)} / ${formatBytes(metrics.diskTotal)}`} />
+      <div className="komari-kv-row">
+        <span>总流量</span>
+        <strong>↑ {formatBytes(metrics.txBytes)} ↓ {formatBytes(metrics.rxBytes)}</strong>
+      </div>
+      <div className="komari-kv-row">
+        <span>网络</span>
+        <strong>↑ {formatSpeed(metrics.txSpeed)} ↓ {formatSpeed(metrics.rxSpeed)}</strong>
+      </div>
+      <div className="komari-kv-row">
+        <span>运行时间</span>
+        <strong>{formatPublicUptime(metrics.uptime)}</strong>
+      </div>
+    </article>
+  );
+}
+
 function PublicStatusPage() {
   const [summary, setSummary] = useState(null);
   const [probes, setProbes] = useState([]);
   const [events, setEvents] = useState([]);
   const [message, setMessage] = useState("");
+  const [query, setQuery] = useState("");
 
   const load = async () => {
     try {
@@ -537,54 +608,42 @@ function PublicStatusPage() {
   }, []);
 
   const online = probes.filter((probe) => probe.online).length;
+  const groups = ["所有", ...Array.from(new Set(probes.map((probe) => probe.group).filter(Boolean)))];
+  const filteredProbes = probes.filter((probe) =>
+    [probe.name, probe.group, probe.region, probe.os, probe.arch, ...(probe.tags || [])].join(" ").toLowerCase().includes(query.toLowerCase())
+  );
+  const nowText = new Date().toLocaleTimeString("zh-CN", { hour12: false });
 
   return (
     <div className="public-status">
       <div className="public-hero">
         <div>
-          <p className="eyebrow">ChikenEasy Public Probe</p>
-          <h1>Komari 风格探针状态页</h1>
-          <p>实时展示 Agent 在线状态、CPU、内存、磁盘、网络速率和最近事件。公开接口只返回展示字段，不包含 SSH、RDP、密码、私钥或 Token。</p>
+          <h1>针 <span>| Komari Monitor</span></h1>
         </div>
-        <a className="admin-link" href="/admin">进入后台</a>
+        <div className="public-actions">
+          <a className="admin-link" href="/admin">后台</a>
+        </div>
       </div>
 
       <div className="public-stats">
-        <Card label="探针总数" value={summary?.total ?? probes.length} />
-        <Card label="在线" value={summary?.online ?? online} green />
-        <Card label="离线" value={summary?.offline ?? probes.length - online} />
-        <Card label="地区" value={summary?.regions ?? 0} blue />
-        <Card label="总流量" value={formatBytes(summary?.totalTraffic || 0)} />
-        <Card label="实时下行" value={formatSpeed(summary?.totalRxSpeed || 0)} />
-        <Card label="实时上行" value={formatSpeed(summary?.totalTxSpeed || 0)} />
+        <Card label="当前时间" value={nowText} />
+        <Card label="当前在线" value={`${summary?.online ?? online} / ${summary?.total ?? probes.length}`} green />
+        <Card label="点亮地区" value={summary?.regions ?? 0} blue />
+        <Card label="流量概览" value={`↑ ${formatBytes(summary?.totalTraffic || 0)}`} />
+        <Card label="网络速率" value={`↑ ${formatSpeed(summary?.totalTxSpeed || 0)} / ↓ ${formatSpeed(summary?.totalRxSpeed || 0)}`} />
+      </div>
+
+      <div className="public-filter">
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索节点名称、地区、系统..." />
+        <div className="public-groups">
+          <span>分组</span>
+          {groups.slice(0, 6).map((group) => <button key={group}>{group}</button>)}
+        </div>
+        <p>共 {probes.length} 个服务器，{online} 个在线</p>
       </div>
 
       <div className="public-probe-grid">
-        {probes.map((probe) => (
-          <article className="public-probe-card" key={probe.id}>
-            <div className="public-probe-head">
-              <div>
-                <strong>{probe.flag ? `${probe.flag} ` : ""}{probe.name}</strong>
-                <span>{probe.group || "默认分组"} / {probe.region || "未标注地区"}</span>
-              </div>
-              <StatusBadge ok={probe.online} text={probe.online ? "online" : "offline"} />
-            </div>
-            <div className="public-metrics">
-              <MetricPill label="CPU" value={formatPercent(probe.metrics?.cpuUsage)} accent="cpu" />
-              <MetricPill label="负载" value={`${probe.metrics?.load1 ?? 0} / ${probe.metrics?.load5 ?? 0} / ${probe.metrics?.load15 ?? 0}`} />
-              <MetricPill label="Swap" value={`${formatPercent(probe.metrics?.swapUsage)} / ${formatBytes(probe.metrics?.swapUsed)} / ${formatBytes(probe.metrics?.swapTotal)}`} />
-              <MetricPill label="总流量" value={`↓ ${formatBytes(probe.metrics?.rxBytes)}  ↑ ${formatBytes(probe.metrics?.txBytes)}`} />
-              <MetricPill label="质量" value="延迟 -- ms / 丢包 --" />
-              <MetricPill label="内存" value={`${formatPercent(probe.metrics?.memoryUsage)} / ${formatBytes(probe.metrics?.memoryUsed)} / ${formatBytes(probe.metrics?.memoryTotal)}`} accent="memory" />
-              <MetricPill label="磁盘" value={`${formatPercent(probe.metrics?.diskUsage)} / ${formatBytes(probe.metrics?.diskUsed)} / ${formatBytes(probe.metrics?.diskTotal)}`} accent="disk" />
-              <MetricPill label="网络" value={`↓ ${formatSpeed(probe.metrics?.rxSpeed)}  ↑ ${formatSpeed(probe.metrics?.txSpeed)}`} accent="network" />
-            </div>
-            <div className="public-card-foot">
-              <span>运行 {formatUptime(probe.metrics?.uptime)}</span>
-              <span>更新 {formatDateTime(probe.metrics?.updatedAt)}</span>
-            </div>
-          </article>
-        ))}
+        {filteredProbes.map((probe) => <PublicProbeCard key={probe.id} probe={probe} />)}
       </div>
 
       <div className="public-events">
@@ -878,15 +937,17 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh, openConsole, ope
   );
 }
 
-function TerminalPanel({ agentId, agentName, mode, connectNonce }) {
+function TerminalPanel({ agentId, agentName, mode, connectNonce, fallbackToAgent }) {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState("");
+  const [closeReason, setCloseReason] = useState("");
   const wsRef = useRef(null);
   const boxRef = useRef(null);
 
   useEffect(() => {
     setConnected(false);
     setError("");
+    setCloseReason("");
     let disposed = false;
     let cleanup = () => {};
 
@@ -943,11 +1004,16 @@ function TerminalPanel({ agentId, agentName, mode, connectNonce }) {
         term.writeln("\r\n[connection closed]");
       };
       ws.onerror = () => {
-        setError("终端连接失败，请检查 SSH 配置或 API Token。");
+        setError("终端 WebSocket 连接失败，请检查会话、反向代理或刷新后重试。");
       };
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data);
         if (message.output) term.write(message.output);
+        if (message.type === "status" && message.status === "connected") setConnected(true);
+        if (message.type === "error") {
+          setCloseReason(message.reason || "terminal_error");
+          setError(message.output || message.reason || "终端连接失败");
+        }
       };
 
       const disposable = term.onData((data) => {
@@ -986,6 +1052,7 @@ function TerminalPanel({ agentId, agentName, mode, connectNonce }) {
       }
     >
       <div className="terminal-toolbar">
+        {mode === "ssh" ? <button onClick={fallbackToAgent}>改用 Agent 执行</button> : null}
         <button onClick={() => sendControl("\u0003")} disabled={!connected}>
           Ctrl+C
         </button>
@@ -995,6 +1062,7 @@ function TerminalPanel({ agentId, agentName, mode, connectNonce }) {
         <span className="muted">支持原始按键、粘贴和窗口自动调整大小。</span>
       </div>
       <div className="terminal-shell" ref={boxRef} />
+      {closeReason ? <p className="panel-message">关闭原因：{closeReason}</p> : null}
       {error ? <p className="panel-message">{error}</p> : null}
     </Panel>
   );
@@ -1140,7 +1208,7 @@ function SshPage({ id, back }) {
         </button>
       </div>
 
-      <TerminalPanel agentId={id} agentName={agent.name} mode={mode} connectNonce={connectNonce} />
+      <TerminalPanel agentId={id} agentName={agent.name} mode={mode} connectNonce={connectNonce} fallbackToAgent={() => { setMode("agent"); setConnectNonce((value) => value + 1); }} />
 
       <div className="grid2 ssh-grid">
         <Panel title="SSH 配置" right={<span className="muted">列表里的 SSH 现在会直接进入这个终端</span>}>
@@ -2753,6 +2821,9 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
   const [transferring, setTransferring] = useState(false);
 
   const currentAgentId = agentId || agents[0]?.id || "";
+  const currentAgent = agents.find((agent) => agent.id === currentAgentId);
+  const parentPath = pathValue && pathValue !== "/" ? pathValue.split("/").filter(Boolean).slice(0, -1).join("/") : "";
+  const parentTarget = parentPath ? `/${parentPath}` : "/";
 
   const load = async (nextPath = pathValue) => {
     if (!currentAgentId) return;
@@ -2789,6 +2860,8 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
     load(next).catch(() => {});
   };
 
+  const entryPath = (entry) => (pathValue === "/" ? `/${entry.name}` : `${pathValue}/${entry.name}`);
+
   const uploadRemote = async (event) => {
     const file = event.target.files?.[0];
     if (!file || !currentAgentId) return;
@@ -2809,7 +2882,7 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
   const downloadRemote = async (entry) => {
     try {
       await ensureTokenSession();
-      const fullPath = pathValue === "/" ? `/${entry.name}` : `${pathValue}/${entry.name}`;
+      const fullPath = entryPath(entry);
       await downloadBinary(`/api/agents/${currentAgentId}/sftp/download?path=${encodeURIComponent(fullPath)}`, entry.name);
     } catch (error) {
       setMessage(error.message);
@@ -2878,22 +2951,35 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
 
   return (
     <section>
-      <div className="toolbar">
-        <select value={currentAgentId} onChange={(event) => setAgentId(event.target.value)}>
-          {agents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.name} · {agent.connected ? "online" : "offline"}
-            </option>
-          ))}
-        </select>
-        <button onClick={() => openSsh(currentAgentId)} disabled={!currentAgentId}>打开 SSH 终端</button>
-        <input value={pathValue} onChange={(event) => setPathValue(event.target.value)} />
-        <button onClick={() => load(pathValue).catch(() => {})}>列目录</button>
-        <button onClick={mkdirRemote}>新建目录</button>
-        <label className="upload-label">
-          <input type="file" onChange={uploadRemote} />
-          上传文件
-        </label>
+      <div className="sftp-shell">
+        <div className="sftp-toolbar">
+          <div>
+            <label>Agent 服务器</label>
+            <select value={currentAgentId} onChange={(event) => setAgentId(event.target.value)}>
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name} · {agent.connected ? "online" : "offline"}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="sftp-pathbar">
+            <label>当前路径</label>
+            <input value={pathValue} onChange={(event) => setPathValue(event.target.value)} />
+          </div>
+          <button onClick={() => load(pathValue).catch(() => {})}>刷新</button>
+          <button onClick={() => openSsh(currentAgentId)} disabled={!currentAgentId}>打开 SSH 终端</button>
+          <button onClick={mkdirRemote}>新建目录</button>
+          <label className="upload-label">
+            <input type="file" onChange={uploadRemote} />
+            上传文件
+          </label>
+        </div>
+
+        <div className="sftp-current">
+          <strong>{currentAgent?.name || "Agent"}</strong>
+          <span>{pathValue}</span>
+        </div>
       </div>
 
       {!agents.length ? (
@@ -2902,37 +2988,36 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
         </Panel>
       ) : null}
 
-      <div className="grid2">
+      <div className="grid2 sftp-grid">
         <Panel title="SFTP 文件管理">
-          {rows.length ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>大小</th>
-                  <th>修改时间</th>
-                  <th>类型</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((entry) => (
-                  <tr key={`${entry.name}-${entry.modifiedAt}`}>
-                    <td>{entry.name}</td>
-                    <td>{entry.isDirectory ? "-" : formatBytes(entry.size)}</td>
-                    <td>{formatDateTime(entry.modifiedAt)}</td>
-                    <td>{entry.isDirectory ? "dir" : "file"}</td>
-                    <td className="actions-cell">
-                      {entry.isDirectory ? <button className="link" onClick={() => goTo(entry)}>进入</button> : <button className="link" onClick={() => downloadRemote(entry)}>下载</button>}
-                      {!entry.isDirectory ? <button className="link" onClick={() => deleteRemote(entry)}>删除</button> : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="empty">目录为空或尚未读取。</div>
-          )}
+          <div className="file-browser">
+            <div className="file-row file-head">
+              <span>名称</span>
+              <span>大小</span>
+              <span>修改日期</span>
+              <span>操作</span>
+            </div>
+            <button className="file-row file-up" onClick={() => load(parentTarget).catch(() => {})} disabled={pathValue === "/"}>
+              <span>[上级目录]</span>
+              <span />
+              <span />
+              <span>{pathValue === "/" ? "根目录" : parentTarget}</span>
+            </button>
+            {rows.length ? rows.map((entry) => (
+              <div className={`file-row ${entry.isDirectory ? "directory" : "file"}`} key={`${entry.name}-${entry.modifiedAt}`}>
+                <button className="file-name" onClick={() => (entry.isDirectory ? goTo(entry) : downloadRemote(entry))}>
+                  <span className="file-icon">{entry.isDirectory ? "[DIR]" : "[FILE]"}</span>
+                  <span>{entry.name}{entry.isDirectory ? "/" : ""}</span>
+                </button>
+                <span>{entry.isDirectory ? "" : formatBytes(entry.size)}</span>
+                <span>{formatDateTime(entry.modifiedAt)}</span>
+                <span className="file-actions">
+                  {entry.isDirectory ? <button onClick={() => goTo(entry)}>进入</button> : <button onClick={() => downloadRemote(entry)}>下载</button>}
+                  {!entry.isDirectory ? <button className="link danger-link" onClick={() => deleteRemote(entry)}>删除</button> : null}
+                </span>
+              </div>
+            )) : <div className="empty compact-empty">目录为空或尚未读取。</div>}
+          </div>
         </Panel>
 
         <Panel title="重命名与快捷命令">
