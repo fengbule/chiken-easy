@@ -896,12 +896,24 @@ function regionFlag(value = "") {
   return rules.find(([pattern]) => pattern.test(text))?.[1] || "";
 }
 
+function ipPrefixFlag(value = "") {
+  const ip = cleanText(value);
+  const rules = [
+    [/^38\.76\./, "🇭🇰"],
+    [/^103\.52\./, "🇭🇰"]
+  ];
+  return rules.find(([pattern]) => pattern.test(ip))?.[1] || "";
+}
+
 function fallbackFlagForAgent(agent, asset) {
   return (
     regionFlag(asset.publicFlag) ||
     regionFlag(asset.publicRegion) ||
     regionFlag(asset.region) ||
     regionFlag(asset.provider) ||
+    ipPrefixFlag(asset.host) ||
+    ipPrefixFlag(asset.ip) ||
+    ipPrefixFlag(agent.ip) ||
     regionFlag(agent.region) ||
     regionFlag(agent.host) ||
     "🌐"
