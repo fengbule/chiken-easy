@@ -69,12 +69,38 @@ These structures still use the JSON state file as the source of truth:
 
 ## Backup And Rollback
 
-Recommended backup set:
+The panel now exposes authenticated backup APIs:
+
+- `GET /api/backups/download`
+- `POST /api/backups/restore`
+
+The download is a gzip-compressed JSON package (`*.json.gz`) with a manifest and base64 file payloads. It includes migratable runtime files under `data/`, such as:
 
 - `data/state.json`
 - `data/audit.jsonl`
-- `data/backups/`
-- `data/chiken.db` when SQLite mode is enabled
+- `data/chiken.db`, `data/chiken.db-wal`, and `data/chiken.db-shm` when SQLite mode is enabled
+- `data/uploads/`
+- `data/sing-box/`
+
+The package intentionally excludes:
+
+- `.env` and `.env.*`
+- `.local/`
+- private keys and external secrets
+- `node_modules/`
+- `dist/`
+- rotating `data/backups/` snapshots
+
+Before restore, the server writes a pre-restore package under `data/backups/`. Restore then validates every path, blocks directory traversal, writes files under `data/`, reloads state, and appends an audit record.
+
+For a full new-server migration:
+
+1. deploy the same or newer application version
+2. set the same `CHIKEN_MASTER_KEY` if the old instance used encrypted credentials
+3. start the server once so `data/` exists
+4. upload the backup package via `POST /api/backups/restore` or the admin `终端 / SFTP` page
+5. restart the container if environment variables changed
+6. verify `/api/health`, Agent registration, subscriptions, memos, credentials, and SFTP profiles
 
 To roll back from SQLite mode to JSON mode:
 

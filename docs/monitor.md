@@ -80,11 +80,14 @@ Public probe pages only expose sanitized display metadata such as:
 - public name
 - public group
 - public region
-- flag
+- flag emoji
+- operating-system distribution such as Ubuntu or Debian when the Agent can read host `/etc/os-release`
 - tags
 - metrics
 
 They do not expose operational host/IP credentials.
+
+Agent OS detection checks the mounted host filesystem first (`CHIKEN_HOST_ROOT`, `/hostfs`, `/host`) and falls back to the container OS if host metadata is unavailable. Public flags prefer asset `publicFlag`; if empty, the server maps common region strings such as US, Hong Kong, Japan, Singapore, Germany, and the UK to flag emoji and falls back to `🌐`.
 
 ## Real Acceptance Notes
 

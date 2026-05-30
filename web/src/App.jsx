@@ -537,12 +537,12 @@ function UsageLine({ label, percent, detail }) {
 
 function PublicProbeCard({ probe }) {
   const metrics = probe.metrics || {};
-  const osText = [probe.os || "Linux", probe.arch || ""].filter(Boolean).join(" / ");
+  const osText = [probe.osPretty || probe.osName || probe.os || "Linux", probe.arch || ""].filter(Boolean).join(" / ");
   return (
     <article className="public-probe-card">
       <div className="public-probe-head">
         <div className="public-probe-title">
-          <strong>{probe.flag ? `${probe.flag} ` : ""}{probe.name}</strong>
+          <strong><span className="probe-flag">{probe.flag || "🌐"}</span>{probe.name}</strong>
           <span>{probe.price ? <em>{probe.price}</em> : null}{probe.expireAt ? <em>{probe.expireAt}</em> : null}</span>
         </div>
         <StatusBadge ok={probe.online} text={probe.online ? "在线" : "离线"} />
@@ -2817,95 +2817,101 @@ function WorkspacePage({ agents, openSsh, openConsole }) {
 }
 
 function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
-  const [pathValue, setPathValue] = useState("/");
-  const [rows, setRows] = useState([]);
+  const [panes, setPanes] = useState({
+    left: { agentId: "", path: "/", rows: [], loading: false },
+    right: { agentId: "", path: "/", rows: [], loading: false }
+  });
   const [message, setMessage] = useState("");
-  const [renameForm, setRenameForm] = useState({ oldPath: "", newPath: "" });
-  const [transferForm, setTransferForm] = useState({ sourceAgentId: "", sourcePath: "/tmp/a.txt", targetAgentId: "", targetPath: "/tmp/a.txt" });
-  const [transferring, setTransferring] = useState(false);
+  const [renameForm, setRenameForm] = useState({ agentId: "", oldPath: "", newPath: "" });
+  const [transferring, setTransferring] = useState("");
+  const [backupBusy, setBackupBusy] = useState(false);
 
-  const currentAgentId = agentId || agents[0]?.id || "";
-  const currentAgent = agents.find((agent) => agent.id === currentAgentId);
-  const parentPath = pathValue && pathValue !== "/" ? pathValue.split("/").filter(Boolean).slice(0, -1).join("/") : "";
-  const parentTarget = parentPath ? `/${parentPath}` : "/";
-  const sortedRows = [...rows].sort((left, right) => {
+  const sideLabel = (side) => (side === "left" ? "左侧" : "右侧");
+  const otherSide = (side) => (side === "left" ? "right" : "left");
+  const getAgent = (id) => agents.find((item) => item.id === id);
+  const sortedRows = (rows = []) => [...rows].sort((left, right) => {
     if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
     return String(left.name || "").localeCompare(String(right.name || ""), "zh-CN", { numeric: true, sensitivity: "base" });
   });
-  const pathParts = pathValue.split("/").filter(Boolean);
+  const entryPath = (pane, entry) => (pane.path === "/" ? `/${entry.name}` : `${pane.path}/${entry.name}`);
+  const parentTarget = (panePath) => {
+    const parent = panePath && panePath !== "/" ? panePath.split("/").filter(Boolean).slice(0, -1).join("/") : "";
+    return parent ? `/${parent}` : "/";
+  };
 
-  const load = async (nextPath = pathValue) => {
-    if (!currentAgentId) return;
+  const patchPane = (side, patch) => {
+    setPanes((current) => ({ ...current, [side]: { ...current[side], ...patch } }));
+  };
+
+  const loadPane = async (side, nextPath = panes[side].path, nextAgentId = panes[side].agentId) => {
+    if (!nextAgentId) return;
+    patchPane(side, { loading: true, agentId: nextAgentId });
     try {
-      const response = await api(`/api/agents/${currentAgentId}/sftp?path=${encodeURIComponent(nextPath)}`);
-      setRows(response.entries || []);
-      setPathValue(response.path || nextPath);
+      const response = await api(`/api/agents/${nextAgentId}/sftp?path=${encodeURIComponent(nextPath || "/")}`);
+      patchPane(side, {
+        agentId: nextAgentId,
+        path: response.path || nextPath || "/",
+        rows: response.entries || [],
+        loading: false
+      });
       setMessage("");
     } catch (error) {
-      setMessage(error.message);
+      patchPane(side, { loading: false });
+      setMessage(`${sideLabel(side)}读取失败：${error.message}`);
     }
   };
 
   useEffect(() => {
-    if (!agentId && agents[0]) setAgentId(agents[0].id);
-  }, [agentId, agents]);
-
-  useEffect(() => {
     if (!agents.length) return;
-    setTransferForm((current) => {
-      const sourceAgentId = current.sourceAgentId || currentAgentId || agents[0].id;
-      const targetAgentId = current.targetAgentId || agents.find((agent) => agent.id !== sourceAgentId)?.id || agents[0].id;
-      return { ...current, sourceAgentId, targetAgentId };
+    setPanes((current) => {
+      const leftAgentId = agentId || current.left.agentId || agents[0].id;
+      const rightAgentId = current.right.agentId || agents.find((agent) => agent.id !== leftAgentId)?.id || leftAgentId;
+      return {
+        left: { ...current.left, agentId: leftAgentId, rows: current.left.agentId === leftAgentId ? current.left.rows : [] },
+        right: { ...current.right, agentId: rightAgentId, rows: current.right.agentId === rightAgentId ? current.right.rows : [] }
+      };
     });
-  }, [agents, currentAgentId]);
+    if (!agentId && agents[0]) setAgentId(agents[0].id);
+  }, [agents.length, agentId]);
 
   useEffect(() => {
-    if (currentAgentId) load("/").catch(() => {});
-  }, [currentAgentId]);
+    if (panes.left.agentId && !panes.left.rows.length && !panes.left.loading) loadPane("left", "/", panes.left.agentId).catch(() => {});
+  }, [panes.left.agentId]);
 
-  const goTo = (entry) => {
+  useEffect(() => {
+    if (panes.right.agentId && !panes.right.rows.length && !panes.right.loading) loadPane("right", "/", panes.right.agentId).catch(() => {});
+  }, [panes.right.agentId]);
+
+  const changePaneAgent = (side, nextAgentId) => {
+    patchPane(side, { agentId: nextAgentId, path: "/", rows: [] });
+    if (side === "left") setAgentId(nextAgentId);
+    loadPane(side, "/", nextAgentId).catch(() => {});
+  };
+
+  const jumpToPath = (side, index) => {
+    const pane = panes[side];
+    const parts = pane.path.split("/").filter(Boolean);
+    const target = index < 0 ? "/" : `/${parts.slice(0, index + 1).join("/")}`;
+    loadPane(side, target, pane.agentId).catch(() => {});
+  };
+
+  const goTo = (side, entry) => {
     if (!entry.isDirectory) return;
-    const next = pathValue === "/" ? `/${entry.name}` : `${pathValue}/${entry.name}`;
-    load(next).catch(() => {});
+    const pane = panes[side];
+    loadPane(side, entryPath(pane, entry), pane.agentId).catch(() => {});
   };
 
-  const entryPath = (entry) => (pathValue === "/" ? `/${entry.name}` : `${pathValue}/${entry.name}`);
-  const targetPathFor = (entry, targetAgentId = transferForm.targetAgentId) => {
-    const fallbackDir = pathValue && pathValue !== "/" ? pathValue : "/tmp";
-    const targetDir = targetAgentId === currentAgentId ? pathValue : fallbackDir;
-    return targetDir === "/" ? `/${entry.name}` : `${targetDir}/${entry.name}`;
-  };
-
-  const selectForTransfer = (entry) => {
-    const sourcePath = entryPath(entry);
-    const targetAgentId = transferForm.targetAgentId && transferForm.targetAgentId !== currentAgentId
-      ? transferForm.targetAgentId
-      : agents.find((agent) => agent.id !== currentAgentId)?.id || currentAgentId;
-    setTransferForm((current) => ({
-      ...current,
-      sourceAgentId: currentAgentId,
-      sourcePath,
-      targetAgentId,
-      targetPath: targetPathFor(entry, targetAgentId)
-    }));
-    setMessage(`已选择对传源文件：${sourcePath}`);
-  };
-
-  const jumpToPath = (index) => {
-    if (index < 0) load("/").catch(() => {});
-    else load(`/${pathParts.slice(0, index + 1).join("/")}`).catch(() => {});
-  };
-
-  const uploadRemote = async (event) => {
+  const uploadRemote = async (side, event) => {
     const file = event.target.files?.[0];
-    if (!file || !currentAgentId) return;
+    const pane = panes[side];
+    if (!file || !pane.agentId) return;
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("directory", pathValue);
+    formData.append("directory", pane.path);
     try {
-      await uploadForm(`/api/agents/${currentAgentId}/sftp/upload`, formData);
-      setMessage("远程上传完成。");
-      load(pathValue).catch(() => {});
+      await uploadForm(`/api/agents/${pane.agentId}/sftp/upload`, formData);
+      setMessage(`${sideLabel(side)}上传完成：${file.name}`);
+      loadPane(side, pane.path, pane.agentId).catch(() => {});
     } catch (error) {
       setMessage(error.message);
     } finally {
@@ -2913,72 +2919,214 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
     }
   };
 
-  const downloadRemote = async (entry) => {
+  const downloadRemote = async (side, entry) => {
+    const pane = panes[side];
     try {
       await ensureTokenSession();
-      const fullPath = entryPath(entry);
-      await downloadBinary(`/api/agents/${currentAgentId}/sftp/download?path=${encodeURIComponent(fullPath)}`, entry.name);
+      await downloadBinary(`/api/agents/${pane.agentId}/sftp/download?path=${encodeURIComponent(entryPath(pane, entry))}`, entry.name);
     } catch (error) {
       setMessage(error.message);
     }
   };
 
-  const deleteRemote = async (entry) => {
-    if (!window.confirm(`确认删除 ${entry.name} 吗？`)) return;
+  const deleteRemote = async (side, entry) => {
+    const pane = panes[side];
+    const fullPath = entryPath(pane, entry);
+    if (!window.confirm(`确认删除 ${fullPath} 吗？`)) return;
     try {
-      const fullPath = pathValue === "/" ? `/${entry.name}` : `${pathValue}/${entry.name}`;
-      await api(`/api/agents/${currentAgentId}/sftp?path=${encodeURIComponent(fullPath)}`, { method: "DELETE" });
-      setMessage("远程文件已删除。");
-      load(pathValue).catch(() => {});
+      await api(`/api/agents/${pane.agentId}/sftp?path=${encodeURIComponent(fullPath)}`, { method: "DELETE" });
+      setMessage(`${sideLabel(side)}已删除：${fullPath}`);
+      loadPane(side, pane.path, pane.agentId).catch(() => {});
     } catch (error) {
       setMessage(error.message);
     }
   };
 
-  const mkdirRemote = async () => {
-    const name = window.prompt("请输入目录名");
+  const mkdirRemote = async (side) => {
+    const pane = panes[side];
+    const name = window.prompt(`在${sideLabel(side)}创建目录`);
     if (!name) return;
     try {
-      const nextPath = pathValue === "/" ? `/${name}` : `${pathValue}/${name}`;
-      await api(`/api/agents/${currentAgentId}/sftp/mkdir`, { method: "POST", body: JSON.stringify({ path: nextPath }) });
-      setMessage("目录已创建。");
-      load(pathValue).catch(() => {});
+      const nextPath = pane.path === "/" ? `/${name}` : `${pane.path}/${name}`;
+      await api(`/api/agents/${pane.agentId}/sftp/mkdir`, { method: "POST", body: JSON.stringify({ path: nextPath }) });
+      setMessage(`${sideLabel(side)}目录已创建：${nextPath}`);
+      loadPane(side, pane.path, pane.agentId).catch(() => {});
     } catch (error) {
       setMessage(error.message);
+    }
+  };
+
+  const transferEntry = async (side, entry) => {
+    if (entry.isDirectory) return;
+    const source = panes[side];
+    const target = panes[otherSide(side)];
+    if (!source.agentId || !target.agentId) return;
+    const sourcePath = entryPath(source, entry);
+    const targetPath = target.path === "/" ? `/${entry.name}` : `${target.path}/${entry.name}`;
+    const transferKey = `${side}:${sourcePath}`;
+    setTransferring(transferKey);
+    try {
+      const response = await api("/api/sftp/transfer", {
+        method: "POST",
+        body: JSON.stringify({
+          sourceAgentId: source.agentId,
+          sourcePath,
+          targetAgentId: target.agentId,
+          targetPath
+        })
+      });
+      setMessage(`对传完成：${formatBytes(response.size)}，${sourcePath} → ${targetPath}`);
+      loadPane(otherSide(side), target.path, target.agentId).catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setTransferring("");
     }
   };
 
   const renameRemote = async () => {
-    if (!renameForm.oldPath || !renameForm.newPath) return;
+    const targetAgentId = renameForm.agentId || panes.left.agentId;
+    if (!targetAgentId || !renameForm.oldPath || !renameForm.newPath) return;
     try {
-      await api(`/api/agents/${currentAgentId}/sftp/rename`, { method: "POST", body: JSON.stringify(renameForm) });
+      await api(`/api/agents/${targetAgentId}/sftp/rename`, { method: "POST", body: JSON.stringify(renameForm) });
       setMessage("重命名完成。");
-      setRenameForm({ oldPath: "", newPath: "" });
-      load(pathValue).catch(() => {});
+      setRenameForm({ agentId: targetAgentId, oldPath: "", newPath: "" });
+      for (const side of ["left", "right"]) {
+        if (panes[side].agentId === targetAgentId) loadPane(side, panes[side].path, targetAgentId).catch(() => {});
+      }
     } catch (error) {
       setMessage(error.message);
     }
   };
 
-  const transferRemote = async () => {
-    if (!transferForm.sourceAgentId || !transferForm.targetAgentId || !transferForm.sourcePath || !transferForm.targetPath) {
-      setMessage("请选择源服务器、目标服务器，并填写源路径和目标路径。");
-      return;
-    }
-    if (transferForm.sourceAgentId === transferForm.targetAgentId && transferForm.sourcePath === transferForm.targetPath) {
-      setMessage("源和目标完全相同，未执行传输。");
-      return;
-    }
-    setTransferring(true);
+  const downloadBackup = async () => {
+    setBackupBusy(true);
     try {
-      const response = await api("/api/sftp/transfer", { method: "POST", body: JSON.stringify(transferForm) });
-      setMessage(`跨服务器传输完成：${formatBytes(response.size)}，${response.sourcePath} -> ${response.targetPath}`);
-      if (response.targetAgentId === currentAgentId) load(pathValue).catch(() => {});
+      await ensureTokenSession();
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      await downloadBinary("/api/backups/download", `chiken-easy-backup-${stamp}.json.gz`);
+      setMessage("备份压缩包已开始下载。迁移到新服务器时，请同时确保 CHIKEN_MASTER_KEY 与旧服务器一致。");
     } catch (error) {
       setMessage(error.message);
     } finally {
-      setTransferring(false);
+      setBackupBusy(false);
     }
+  };
+
+  const restoreBackup = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!window.confirm("恢复会覆盖当前 data/ 中同名运行数据；系统会先自动生成恢复前快照。继续吗？")) {
+      event.target.value = "";
+      return;
+    }
+    const formData = new FormData();
+    formData.append("backup", file);
+    setBackupBusy(true);
+    try {
+      const response = await uploadForm("/api/backups/restore", formData);
+      setMessage(`恢复完成：${response.fileCount} 个文件，恢复前快照 ${response.preRestoreBackup}`);
+      for (const side of ["left", "right"]) loadPane(side, panes[side].path, panes[side].agentId).catch(() => {});
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBackupBusy(false);
+      event.target.value = "";
+    }
+  };
+
+  const renderPane = (side, title) => {
+    const pane = panes[side];
+    const agent = getAgent(pane.agentId);
+    const rows = sortedRows(pane.rows);
+    const pathParts = pane.path.split("/").filter(Boolean);
+    return (
+      <Panel
+        title={title}
+        right={<span className="panel-muted">{rows.length} 项 · {pane.loading ? "读取中" : "目录优先"}</span>}
+      >
+        <div className="sftp-pane">
+          <div className="sftp-pane-toolbar">
+            <label>
+              Agent
+              <select value={pane.agentId} onChange={(event) => changePaneAgent(side, event.target.value)}>
+                {agents.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name} · {item.connected ? "online" : "offline"}</option>
+                ))}
+              </select>
+            </label>
+            <label className="sftp-pane-path">
+              路径
+              <div className="path-input-row">
+                <input value={pane.path} onChange={(event) => patchPane(side, { path: event.target.value })} onKeyDown={(event) => {
+                  if (event.key === "Enter") loadPane(side, pane.path, pane.agentId).catch(() => {});
+                }} />
+                <button onClick={() => loadPane(side, pane.path, pane.agentId).catch(() => {})}>前往</button>
+              </div>
+            </label>
+          </div>
+          <div className="sftp-pane-actions">
+            <button onClick={() => loadPane(side, pane.path, pane.agentId).catch(() => {})}>刷新</button>
+            <button onClick={() => loadPane(side, parentTarget(pane.path), pane.agentId).catch(() => {})} disabled={pane.path === "/"}>上级</button>
+            <button onClick={() => openSsh(pane.agentId)} disabled={!pane.agentId}>SSH</button>
+            <button onClick={() => mkdirRemote(side)}>新建目录</button>
+            <label className="upload-label">
+              <input type="file" onChange={(event) => uploadRemote(side, event)} />
+              上传
+            </label>
+          </div>
+          <div className="sftp-current compact">
+            <div className="sftp-current-main">
+              <strong>{agent?.name || "Agent"}</strong>
+              <StatusBadge ok={agent?.connected} text={agent?.connected ? "online" : "offline"} />
+            </div>
+            <div className="path-crumbs">
+              <button onClick={() => jumpToPath(side, -1)}>/</button>
+              {pathParts.map((part, index) => (
+                <button key={`${side}-${part}-${index}`} onClick={() => jumpToPath(side, index)}>{part}</button>
+              ))}
+            </div>
+          </div>
+          <div className="sftp-file-list">
+            <div className="file-row file-head">
+              <span>名称</span>
+              <span>大小</span>
+              <span>修改日期</span>
+              <span>操作</span>
+            </div>
+            <div className="sftp-file-scroll">
+              <button className="file-row file-up" onClick={() => loadPane(side, parentTarget(pane.path), pane.agentId).catch(() => {})} disabled={pane.path === "/"}>
+                <span className="file-title">
+                  <span className="file-icon">UP</span>
+                  <span className="file-label">[上级目录]</span>
+                </span>
+                <span />
+                <span />
+                <span>{pane.path === "/" ? "根目录" : parentTarget(pane.path)}</span>
+              </button>
+              {rows.length ? rows.map((entry) => {
+                const transferKey = `${side}:${entryPath(pane, entry)}`;
+                return (
+                  <div className={`file-row ${entry.isDirectory ? "directory" : "file"}`} key={`${entry.name}-${entry.modifiedAt}`}>
+                    <button className="file-name" onClick={() => (entry.isDirectory ? goTo(side, entry) : downloadRemote(side, entry))}>
+                      <span className="file-icon">{entry.isDirectory ? "DIR" : "FILE"}</span>
+                      <span className="file-label" title={entry.name}>{entry.name}{entry.isDirectory ? "/" : ""}</span>
+                    </button>
+                    <span>{entry.isDirectory ? "" : formatBytes(entry.size)}</span>
+                    <span>{formatDateTime(entry.modifiedAt)}</span>
+                    <span className="file-actions">
+                      {entry.isDirectory ? <button onClick={() => goTo(side, entry)}>进入</button> : <button onClick={() => downloadRemote(side, entry)}>下载</button>}
+                      {!entry.isDirectory ? <button onClick={() => transferEntry(side, entry)} disabled={Boolean(transferring)}>{transferring === transferKey ? "传输中" : side === "left" ? "传到右侧" : "传到左侧"}</button> : null}
+                      {!entry.isDirectory ? <button className="link danger-link" onClick={() => deleteRemote(side, entry)}>删除</button> : null}
+                    </span>
+                  </div>
+                );
+              }) : <div className="empty compact-empty">{pane.loading ? "正在读取目录..." : "目录为空或尚未读取。"}</div>}
+            </div>
+          </div>
+        </div>
+      </Panel>
+    );
   };
 
   if (!agents.length) return <AgentEmptyState title="SFTP / 终端需要先选择 Agent" />;
@@ -2986,150 +3134,49 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
   return (
     <section>
       <div className="sftp-shell">
-        <div className="sftp-toolbar">
-          <div className="sftp-agent-picker">
-            <label>Agent 服务器</label>
-            <select value={currentAgentId} onChange={(event) => setAgentId(event.target.value)}>
-              {agents.map((agent) => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.name} · {agent.connected ? "online" : "offline"}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="sftp-pathbar">
-            <label>当前路径</label>
-            <div className="path-input-row">
-              <input value={pathValue} onChange={(event) => setPathValue(event.target.value)} onKeyDown={(event) => {
-                if (event.key === "Enter") load(pathValue).catch(() => {});
-              }} />
-              <button onClick={() => load(pathValue).catch(() => {})}>前往</button>
-            </div>
-          </div>
-          <div className="sftp-action-bar">
-            <button onClick={() => load(pathValue).catch(() => {})}>刷新</button>
-            <button onClick={() => openSsh(currentAgentId)} disabled={!currentAgentId}>SSH</button>
-            <button onClick={mkdirRemote}>新建目录</button>
-            <label className="upload-label">
-              <input type="file" onChange={uploadRemote} />
-              上传文件
-            </label>
-          </div>
-        </div>
-
-        <div className="sftp-current">
-          <div className="sftp-current-main">
-            <strong>{currentAgent?.name || "Agent"}</strong>
-            <StatusBadge ok={currentAgent?.connected} text={currentAgent?.connected ? "online" : "offline"} />
-          </div>
-          <div className="path-crumbs">
-            <button onClick={() => jumpToPath(-1)}>/</button>
-            {pathParts.map((part, index) => (
-              <button key={`${part}-${index}`} onClick={() => jumpToPath(index)}>
-                {part}
-              </button>
-            ))}
-          </div>
+        <div>
+          <h1>双栏 SFTP 对传</h1>
+          <p className="muted">左右两边都是可视化文件管理器。进入目录后直接点文件行的“传到右侧/左侧”，不需要手动复制路径。</p>
         </div>
       </div>
 
-      {!agents.length ? (
-        <Panel title="Agent 状态">
-          <div className="empty">当前后台会话没有拿到 Agent 列表。请确认已登录后台，或在右上角使用 ck_ 开头的 API Token；sess_ 是浏览器会话，不需要手动填入。</div>
-        </Panel>
-      ) : null}
+      <div className="sftp-dual-grid">
+        {renderPane("left", "左侧文件")}
+        {renderPane("right", "右侧文件")}
+      </div>
 
-      <div className="grid2 sftp-grid">
-        <Panel
-          title="SFTP 文件管理"
-          right={<span className="panel-muted">{sortedRows.length} 项 · 目录优先</span>}
-        >
-          <div className="file-browser">
-            <div className="file-row file-head">
-              <span>名称</span>
-              <span>大小</span>
-              <span>修改日期</span>
-              <span>操作</span>
-            </div>
-            <button className="file-row file-up" onClick={() => load(parentTarget).catch(() => {})} disabled={pathValue === "/"}>
-              <span className="file-title">
-                <span className="file-icon">UP</span>
-                <span className="file-label">[上级目录]</span>
-              </span>
-              <span />
-              <span />
-              <span>{pathValue === "/" ? "根目录" : parentTarget}</span>
+      <div className="grid2 sftp-lower-grid">
+        <Panel title="一键备份 / 迁移恢复">
+          <div className="backup-actions">
+            <button className="primary" onClick={downloadBackup} disabled={backupBusy}>
+              {backupBusy ? "处理中..." : "下载备份压缩包"}
             </button>
-            {sortedRows.length ? sortedRows.map((entry) => (
-              <div className={`file-row ${entry.isDirectory ? "directory" : "file"}`} key={`${entry.name}-${entry.modifiedAt}`}>
-                <button className="file-name" onClick={() => (entry.isDirectory ? goTo(entry) : downloadRemote(entry))}>
-                  <span className="file-icon">{entry.isDirectory ? "DIR" : "FILE"}</span>
-                  <span className="file-label" title={entry.name}>{entry.name}{entry.isDirectory ? "/" : ""}</span>
-                </button>
-                <span>{entry.isDirectory ? "" : formatBytes(entry.size)}</span>
-                <span>{formatDateTime(entry.modifiedAt)}</span>
-                <span className="file-actions">
-                  {entry.isDirectory ? <button onClick={() => goTo(entry)}>进入</button> : <button onClick={() => downloadRemote(entry)}>下载</button>}
-                  {!entry.isDirectory ? <button onClick={() => selectForTransfer(entry)}>对传</button> : null}
-                  {!entry.isDirectory ? <button className="link danger-link" onClick={() => deleteRemote(entry)}>删除</button> : null}
-                </span>
-              </div>
-            )) : <div className="empty compact-empty">目录为空或尚未读取。</div>}
+            <label className="upload-label">
+              <input type="file" accept=".gz,.json,.backup,application/gzip,application/json" onChange={restoreBackup} />
+              上传备份并恢复
+            </label>
           </div>
+          <div className="panel-tip">备份包含 data/ 运行状态、审计、SQLite 文件和上传附件，不包含 .env、.local、私钥、node_modules、dist。迁移到新服务器时请先部署相同版本，并设置同一个 CHIKEN_MASTER_KEY。</div>
         </Panel>
 
-        <div className="sftp-side-stack">
-          <Panel title="快速对传">
-            <div className="transfer-board transfer-compact">
-              <label>
-                <span>源服务器</span>
-                <select value={transferForm.sourceAgentId} onChange={(event) => setTransferForm((current) => ({ ...current, sourceAgentId: event.target.value }))}>
-                  {agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>{agent.name} · {agent.connected ? "online" : "offline"}</option>
-                  ))}
-                </select>
-                <input value={transferForm.sourcePath} onChange={(event) => setTransferForm((current) => ({ ...current, sourcePath: event.target.value }))} placeholder="/tmp/a.txt" />
-              </label>
-              <div className="transfer-arrow">↓</div>
-              <label>
-                <span>目标服务器</span>
-                <select value={transferForm.targetAgentId} onChange={(event) => setTransferForm((current) => ({ ...current, targetAgentId: event.target.value }))}>
-                  {agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>{agent.name} · {agent.connected ? "online" : "offline"}</option>
-                  ))}
-                </select>
-                <input value={transferForm.targetPath} onChange={(event) => setTransferForm((current) => ({ ...current, targetPath: event.target.value }))} placeholder="/tmp/a.txt" />
-              </label>
-            </div>
-            <div className="actions">
-              <button className="primary" onClick={transferRemote} disabled={transferring || agents.length < 2}>
-                {transferring ? "传输中..." : "开始对传"}
-              </button>
-              <button onClick={() => setTransferForm((current) => ({
-                ...current,
-                sourceAgentId: currentAgentId,
-                sourcePath: pathValue === "/" ? "/tmp/a.txt" : pathValue,
-                targetAgentId: agents.find((agent) => agent.id !== currentAgentId)?.id || currentAgentId,
-                targetPath: pathValue === "/" ? "/tmp/a.txt" : pathValue
-              }))}>
-                使用当前路径
-              </button>
-            </div>
-            <div className="panel-tip">文件行点“对传”会自动填入源路径；默认限制 64 MB，操作写入审计。</div>
-          </Panel>
-
-          <Panel title="路径工具">
-            <div className="form-grid">
-              <Field label="旧路径" value={renameForm.oldPath} onChange={(value) => setRenameForm((current) => ({ ...current, oldPath: value }))} placeholder="/tmp/a.txt" />
-              <Field label="新路径" value={renameForm.newPath} onChange={(value) => setRenameForm((current) => ({ ...current, newPath: value }))} placeholder="/tmp/b.txt" />
-            </div>
-            <div className="actions">
-              <button className="primary" onClick={renameRemote}>执行重命名</button>
-            </div>
-            <div className="panel-tip">远程文件操作全部写入审计日志，路径会经过标准化处理，避免目录穿越。</div>
-            {message ? <pre>{message}</pre> : null}
-          </Panel>
-        </div>
+        <Panel title="路径工具">
+          <div className="form-grid">
+            <label>
+              Agent
+              <select value={renameForm.agentId || panes.left.agentId} onChange={(event) => setRenameForm((current) => ({ ...current, agentId: event.target.value }))}>
+                {agents.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name} · {item.connected ? "online" : "offline"}</option>
+                ))}
+              </select>
+            </label>
+            <Field label="旧路径" value={renameForm.oldPath} onChange={(value) => setRenameForm((current) => ({ ...current, oldPath: value }))} placeholder="/tmp/a.txt" />
+            <Field label="新路径" value={renameForm.newPath} onChange={(value) => setRenameForm((current) => ({ ...current, newPath: value }))} placeholder="/tmp/b.txt" />
+          </div>
+          <div className="actions">
+            <button className="primary" onClick={renameRemote}>执行重命名</button>
+          </div>
+          {message ? <pre>{message}</pre> : null}
+        </Panel>
       </div>
     </section>
   );

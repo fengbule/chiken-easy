@@ -640,6 +640,12 @@ textarea {
   padding: 16px;
 }
 
+.sftp-shell h1 {
+  color: #16283d;
+  font-size: 24px;
+  margin: 0 0 6px;
+}
+
 .sftp-toolbar {
   align-items: end;
   display: flex;
@@ -718,6 +724,62 @@ textarea {
   align-items: start;
 }
 
+.sftp-dual-grid {
+  align-items: start;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(520px, 1fr));
+  gap: 16px;
+}
+
+.sftp-lower-grid {
+  align-items: start;
+  margin-top: 16px;
+}
+
+.sftp-pane {
+  padding: 16px;
+}
+
+.sftp-pane-toolbar {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.45fr) minmax(240px, 1fr);
+  gap: 12px;
+}
+
+.sftp-pane-toolbar label {
+  color: #63758a;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 6px;
+}
+
+.sftp-pane-actions,
+.backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 0;
+}
+
+.sftp-current.compact {
+  border: 1px solid #e8eef6;
+  border-radius: 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+}
+
+.sftp-file-list {
+  border: 1px solid #e5edf6;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.sftp-file-scroll {
+  max-height: 520px;
+  overflow-y: auto;
+}
+
 .file-browser {
   padding: 12px 18px 18px;
   overflow-x: hidden;
@@ -727,7 +789,7 @@ textarea {
   align-items: center;
   border-bottom: 1px solid #edf1f6;
   display: grid;
-  grid-template-columns: minmax(250px, 1fr) 86px 150px 172px;
+  grid-template-columns: minmax(220px, 1fr) 80px 132px 188px;
   gap: 12px;
   min-height: 50px;
   padding: 0 12px;
@@ -816,7 +878,7 @@ textarea {
 
 .file-actions button {
   height: 32px;
-  padding: 0 10px;
+  padding: 0 9px;
 }
 
 .danger-link {
@@ -884,6 +946,16 @@ textarea {
   line-height: 36px;
   margin: -4px auto;
   width: 38px;
+}
+
+@media (max-width: 1180px) {
+  .sftp-dual-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sftp-pane-toolbar {
+    grid-template-columns: 1fr;
+  }
 }
 
 .metric-pill {
@@ -1243,10 +1315,19 @@ textarea {
 }
 
 .public-probe-head strong {
-  display: block;
+  align-items: center;
+  display: flex;
   color: #24272c;
   font-size: 25px;
+  gap: 2px;
   line-height: 1.2;
+}
+
+.probe-flag {
+  display: inline-block;
+  font-size: 28px;
+  margin-right: 8px;
+  vertical-align: -2px;
 }
 
 .public-probe-head span,

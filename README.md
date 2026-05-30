@@ -27,7 +27,8 @@ This project is still one application:
 - memos, files, attachments, and object linking
 - node pool import/export and subscription tokens
 - protocol-aware proxy-check MVP for `ss`, `http`, `socks`, `mixed`
-- SSH terminal, SFTP, credentials, scripts, and batch runs
+- SSH terminal, dual-pane SFTP transfer, credentials, scripts, and batch runs
+- one-click panel backup download and upload-based restore for server migration
 - API token, session-cookie auth, audit logging, and secret redaction
 
 ## Quick Start
@@ -91,6 +92,8 @@ Important variables:
 - `CHIKEN_REALM_IMAGE=4points/realm:latest`
 - `CHIKEN_GOST_IMAGE=gogost/gost:latest`
 - `CHIKEN_PROXY_CHECK_URL=https://www.gstatic.com/generate_204`
+- `CHIKEN_SFTP_TRANSFER_MAX_MB=64`
+- `CHIKEN_BACKUP_MAX_MB=128`
 - `CHIKEN_MONITOR_RAW_HOURS=24`
 - `CHIKEN_MONITOR_AGG_DAYS=7`
 
@@ -110,8 +113,22 @@ Important variables:
   - probe samples
   - subscription access logs
   - node quality history
+- `GET /api/backups/download` returns a gzip-compressed backup package for `data/`
+- `POST /api/backups/restore` restores that package after creating a pre-restore snapshot
 
 See [docs/storage.md](./docs/storage.md).
+
+## SFTP And Migration
+
+The admin `终端 / SFTP` page is a dual-pane file manager. Pick a source Agent on the left, a target Agent on the right, browse both sides visually, and click `传到右侧` or `传到左侧` on any file. Directory lists are scrollable so large folders do not stretch the page.
+
+For migration:
+
+1. click `下载备份压缩包`
+2. deploy the new server with the same or newer code
+3. set the same `CHIKEN_MASTER_KEY` if encrypted credentials must remain usable
+4. upload the backup with `上传备份并恢复`
+5. restart the container if environment variables changed
 
 ## Realm / GOST Images
 

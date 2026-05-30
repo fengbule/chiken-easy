@@ -5,6 +5,7 @@ import net from "net";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { gzipSync, gunzipSync } from "zlib";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { Client as SshClient } from "ssh2";
@@ -43,6 +44,7 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const rawHistoryHours = Math.max(1, Number(process.env.CHIKEN_MONITOR_RAW_HOURS || 24) || 24);
 const aggregatedDays = Math.max(1, Number(process.env.CHIKEN_MONITOR_AGG_DAYS || 7) || 7);
 const uploadMaxBytes = Math.max(1024 * 1024, (Number(process.env.CHIKEN_UPLOAD_MAX_MB || 20) || 20) * 1024 * 1024);
+const backupMaxBytes = Math.max(8 * 1024 * 1024, (Number(process.env.CHIKEN_BACKUP_MAX_MB || 128) || 128) * 1024 * 1024);
 const proxyCheckUrl = cleanText(process.env.CHIKEN_PROXY_CHECK_URL || "https://www.gstatic.com/generate_204") || "https://www.gstatic.com/generate_204";
 const stateFlushMs = Math.max(250, Number(process.env.CHIKEN_STATE_FLUSH_MS || 1500) || 1500);
 const allowedUploadTypes = new Set(
@@ -222,6 +224,115 @@ function sanitizeAuditDetail(detail) {
 
 function audit(actor, action, target, detail = {}) {
   return storage.appendAudit(actor, action, target, sanitizeAuditDetail(detail));
+}
+
+function safeBackupRelativePath(value) {
+  const relative = String(value || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!relative || relative.includes("\0") || relative.split("/").includes("..") || path.posix.isAbsolute(relative)) {
+    throw new Error("invalid backup path");
+  }
+  return relative;
+}
+
+function collectDataFiles(dir = dataDir, prefix = "") {
+  if (!fs.existsSync(dir)) return [];
+  const rows = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      if (relative === "backups" || relative.startsWith("backups/")) continue;
+      if (entry.name.startsWith(".restore-")) continue;
+      rows.push(...collectDataFiles(path.join(dir, entry.name), relative));
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (entry.name.endsWith(".tmp") || entry.name.endsWith(".lock")) continue;
+    rows.push(relative);
+  }
+  return rows;
+}
+
+function createBackupPayload(reason = "manual") {
+  saveState();
+  const files = collectDataFiles().map((relative) => {
+    const filePath = path.join(dataDir, relative);
+    const buffer = fs.readFileSync(filePath);
+    return {
+      path: safeBackupRelativePath(relative),
+      size: buffer.length,
+      mtimeMs: fs.statSync(filePath).mtimeMs,
+      content: buffer.toString("base64")
+    };
+  });
+  return {
+    format: "chiken-easy.backup",
+    version: 1,
+    reason,
+    createdAt: nowIso(),
+    storageMode: storage.mode,
+    host: os.hostname(),
+    notes: [
+      "Contains data/ runtime state only; .env, .local, private keys, node_modules and dist are intentionally excluded.",
+      "If secrets were encrypted, restore with the same CHIKEN_MASTER_KEY to keep them usable."
+    ],
+    files
+  };
+}
+
+function encodeBackupPayload(payload) {
+  return gzipSync(Buffer.from(JSON.stringify(payload), "utf8"), { level: 9 });
+}
+
+function decodeBackupPayload(buffer) {
+  let raw = buffer;
+  try {
+    raw = gunzipSync(buffer);
+  } catch {
+    raw = buffer;
+  }
+  const payload = JSON.parse(raw.toString("utf8"));
+  if (payload?.format !== "chiken-easy.backup" || payload.version !== 1 || !Array.isArray(payload.files)) {
+    throw new Error("unsupported backup format");
+  }
+  return payload;
+}
+
+function writePreRestoreSnapshot() {
+  const backupDir = path.join(dataDir, "backups");
+  fs.mkdirSync(backupDir, { recursive: true });
+  const filename = `panel-restore-before-${Date.now()}.chiken-backup.json.gz`;
+  const filePath = path.join(backupDir, filename);
+  fs.writeFileSync(filePath, encodeBackupPayload(createBackupPayload("pre-restore")));
+  return filePath;
+}
+
+function restoreBackupPayload(payload) {
+  const preRestorePath = writePreRestoreSnapshot();
+  let restoredBytes = 0;
+  for (const file of payload.files) {
+    const relative = safeBackupRelativePath(file.path);
+    const target = path.resolve(dataDir, relative);
+    const dataRoot = path.resolve(dataDir);
+    if (target !== dataRoot && !target.startsWith(`${dataRoot}${path.sep}`)) {
+      throw new Error("backup path escapes data directory");
+    }
+    const content = Buffer.from(String(file.content || ""), "base64");
+    if (Number(file.size || content.length) !== content.length) throw new Error(`backup file size mismatch: ${relative}`);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+    if (file.mtimeMs) {
+      const mtime = new Date(Number(file.mtimeMs));
+      fs.utimesSync(target, mtime, mtime);
+    }
+    restoredBytes += content.length;
+  }
+  state = storage.loadState();
+  return {
+    fileCount: payload.files.length,
+    bytes: restoredBytes,
+    preRestoreBackup: path.basename(preRestorePath),
+    createdAt: payload.createdAt || ""
+  };
 }
 
 function normalizeAdminRecord(record) {
@@ -763,6 +874,44 @@ function recordMonitorSample(agentId, onlineOverride) {
   storage.writeProbeSample(agentId, { id: nanoid(), agentId, ...sample });
 }
 
+function regionFlag(value = "") {
+  const text = cleanText(value).toLowerCase();
+  if (!text) return "";
+  const emoji = cleanText(value).match(/[\u{1F1E6}-\u{1F1FF}]{2}/u)?.[0];
+  if (emoji) return emoji;
+  const rules = [
+    [/(\bus\b|usa|united states|america|美国|洛杉矶|圣何塞|纽约|达拉斯|西雅图|硅谷|ashburn|dallas|los angeles|san jose|new york|seattle)/, "🇺🇸"],
+    [/(\bhk\b|hong kong|香港)/, "🇭🇰"],
+    [/(\bjp\b|japan|tokyo|osaka|日本|东京|大阪)/, "🇯🇵"],
+    [/(\bsg\b|singapore|新加坡)/, "🇸🇬"],
+    [/(\bde\b|germany|frankfurt|德国|法兰克福)/, "🇩🇪"],
+    [/(\bnl\b|netherlands|amsterdam|荷兰|阿姆斯特丹)/, "🇳🇱"],
+    [/(\bgb\b|\buk\b|united kingdom|london|英国|伦敦)/, "🇬🇧"],
+    [/(\bfr\b|france|paris|法国|巴黎)/, "🇫🇷"],
+    [/(\bca\b|canada|toronto|加拿大|多伦多)/, "🇨🇦"],
+    [/(\bau\b|australia|sydney|澳大利亚|悉尼)/, "🇦🇺"],
+    [/(\bkr\b|korea|seoul|韩国|首尔)/, "🇰🇷"],
+    [/(\btw\b|taiwan|台湾|台北)/, "🇹🇼"]
+  ];
+  return rules.find(([pattern]) => pattern.test(text))?.[1] || "";
+}
+
+function fallbackFlagForAgent(agent, asset) {
+  return (
+    regionFlag(asset.publicFlag) ||
+    regionFlag(asset.publicRegion) ||
+    regionFlag(asset.region) ||
+    regionFlag(asset.provider) ||
+    regionFlag(agent.region) ||
+    regionFlag(agent.host) ||
+    "🌐"
+  );
+}
+
+function osLabel(agent) {
+  return cleanText(agent.osPretty || agent.osName || agent.osId || agent.os || "");
+}
+
 function buildMonitorHistory(agentId) {
   const raw = state.monitorHistory?.[agentId] || [];
   const agg = Object.values(state.monitorAgg?.[agentId] || {})
@@ -789,6 +938,11 @@ function agentSummary(agent) {
     ip: agent.ip,
     arch: agent.arch,
     os: agent.os,
+    osId: agent.osId || "",
+    osName: agent.osName || "",
+    osPretty: agent.osPretty || "",
+    osVersion: agent.osVersion || "",
+    osVersionId: agent.osVersionId || "",
     tags: asset.tags || agent.tags || [],
     group: asset.group || "",
     region: asset.region || "",
@@ -826,8 +980,13 @@ function publicProbeCard(agent) {
     name: asset.publicName || asset.displayName || agent.name || agent.id,
     group: asset.publicGroup || asset.group || "",
     region: asset.publicRegion || asset.region || "",
-    flag: asset.publicFlag || "",
+    flag: fallbackFlagForAgent(agent, asset),
     os: cleanText(agent.os || ""),
+    osId: cleanText(agent.osId || ""),
+    osName: cleanText(agent.osName || ""),
+    osPretty: osLabel(agent),
+    osVersion: cleanText(agent.osVersion || ""),
+    osVersionId: cleanText(agent.osVersionId || ""),
     arch: cleanText(agent.arch || ""),
     sort: Number(asset.sort || 0) || 0,
     online: Boolean(clients.has(agent.id)),
@@ -1686,6 +1845,11 @@ const upload = multer({
     if (!allowedUploadTypes.size || allowedUploadTypes.has(file.mimetype)) callback(null, true);
     else callback(new Error(`file type not allowed: ${file.mimetype}`));
   }
+});
+
+const backupUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: backupMaxBytes }
 });
 
 const app = express();
@@ -2585,6 +2749,42 @@ app.post("/api/sftp/transfer", async (req, res) => {
     res.json({ ok: true, sourceAgentId, targetAgentId, sourcePath, targetPath, size: buffer.length });
   } catch (error) {
     audit("admin", "sftp_transfer", `${sourceAgentId}->${targetAgentId}`, { ok: false, error: error.message });
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/backups/download", (req, res) => {
+  try {
+    const payload = createBackupPayload("manual-download");
+    const buffer = encodeBackupPayload(payload);
+    const filename = `chiken-easy-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.json.gz`;
+    audit("admin", "backup_download", "panel", {
+      fileCount: payload.files.length,
+      bytes: buffer.length,
+      storageMode: payload.storageMode
+    });
+    res.setHeader("Content-Type", "application/gzip");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(buffer);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/backups/restore", backupUpload.single("backup"), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "backup file required" });
+  try {
+    const payload = decodeBackupPayload(req.file.buffer);
+    const summary = restoreBackupPayload(payload);
+    audit("admin", "backup_restore", "panel", {
+      fileCount: summary.fileCount,
+      bytes: summary.bytes,
+      preRestoreBackup: summary.preRestoreBackup,
+      sourceCreatedAt: summary.createdAt
+    });
+    res.json({ ok: true, ...summary });
+  } catch (error) {
+    audit("admin", "backup_restore", "panel", { ok: false, error: error.message });
     res.status(400).json({ error: error.message });
   }
 });

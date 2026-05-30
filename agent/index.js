@@ -56,6 +56,61 @@ function runShell(command, options = {}) {
   });
 }
 
+function parseOsRelease(raw) {
+  const result = {};
+  for (const line of String(raw || "").split(/\r?\n/)) {
+    const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
+    if (!match) continue;
+    let value = match[2].trim();
+    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    result[match[1]] = value.replace(/\\"/g, "\"");
+  }
+  return result;
+}
+
+function readOsInfo() {
+  const candidates = [
+    path.join(hostRoot, "etc/os-release"),
+    path.join(hostRoot, "usr/lib/os-release"),
+    "/hostfs/etc/os-release",
+    "/hostfs/usr/lib/os-release",
+    "/host/etc/os-release",
+    "/host/usr-lib/os-release",
+    "/etc/os-release",
+    "/usr/lib/os-release"
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const parsed = parseOsRelease(fs.readFileSync(candidate, "utf8"));
+      return {
+        osId: parsed.ID || "",
+        osName: parsed.NAME || parsed.ID || "",
+        osPretty: parsed.PRETTY_NAME || parsed.NAME || parsed.ID || process.platform,
+        osVersion: parsed.VERSION || "",
+        osVersionId: parsed.VERSION_ID || ""
+      };
+    } catch {}
+  }
+  return {
+    osId: process.platform,
+    osName: process.platform,
+    osPretty: process.platform,
+    osVersion: os.release(),
+    osVersionId: ""
+  };
+}
+
+function systemIdentity() {
+  return {
+    os: process.platform,
+    arch: process.arch,
+    ...readOsInfo()
+  };
+}
+
 async function runDocker(args, options = {}) {
   return run("docker", args, { timeout: 60000, ...options });
 }
@@ -807,8 +862,7 @@ async function buildAgentHello(state) {
         .flat()
         .find((item) => item && !item.internal && item.family === "IPv4")?.address ||
       "-",
-    os: process.platform,
-    arch: process.arch,
+    ...systemIdentity(),
     singboxVersion: await singboxVersion(),
     singboxStatus: (await service("status")).output || "unknown",
     metrics: await collectProbe().catch(() => null)
@@ -817,6 +871,7 @@ async function buildAgentHello(state) {
 
 async function buildHeartbeatStatus() {
   return {
+    ...systemIdentity(),
     singboxStatus: (await service("status")).output || "unknown",
     metrics: await collectProbe().catch(() => null)
   };
