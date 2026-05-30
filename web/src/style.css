@@ -632,10 +632,14 @@ textarea {
 }
 
 .sftp-shell {
+  align-items: center;
   background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
   border: 1px solid #dfe8f3;
   border-radius: 16px;
   box-shadow: 0 12px 32px rgba(17, 34, 51, 0.08);
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 16px;
   padding: 16px;
 }
@@ -644,6 +648,14 @@ textarea {
   color: #16283d;
   font-size: 24px;
   margin: 0 0 6px;
+}
+
+.sftp-hero-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
 }
 
 .sftp-toolbar {

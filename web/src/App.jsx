@@ -3138,6 +3138,15 @@ function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
           <h1>双栏 SFTP 对传</h1>
           <p className="muted">左右两边都是可视化文件管理器。进入目录后直接点文件行的“传到右侧/左侧”，不需要手动复制路径。</p>
         </div>
+        <div className="sftp-hero-actions">
+          <button className="primary" onClick={downloadBackup} disabled={backupBusy}>
+            {backupBusy ? "处理中..." : "一键下载备份"}
+          </button>
+          <label className="upload-label">
+            <input type="file" accept=".gz,.json,.backup,application/gzip,application/json" onChange={restoreBackup} />
+            上传备份恢复
+          </label>
+        </div>
       </div>
 
       <div className="sftp-dual-grid">
