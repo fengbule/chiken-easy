@@ -1,6 +1,10 @@
 node_modules/
 dist/
 data/
+!android/app/src/main/java/com/chikeneasy/app/data/
+!android/app/src/main/java/com/chikeneasy/app/data/**
+!android/app/src/test/java/com/chikeneasy/app/data/
+!android/app/src/test/java/com/chikeneasy/app/data/**
 .tools/
 forwarders/
 *.log
