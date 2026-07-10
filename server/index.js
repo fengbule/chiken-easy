@@ -323,8 +323,6 @@ function restoreBackupPayload(payload) {
   }
   if (totalSize > backupMaxBytes * 2) throw new Error("backup total size exceeds limit");
 
-  const preRestorePath = writePreRestoreSnapshot();
-  let restoredBytes = 0;
   for (const file of payload.files) {
     const relative = safeBackupRelativePath(file.path);
     const target = path.resolve(dataDir, relative);
@@ -332,28 +330,41 @@ function restoreBackupPayload(payload) {
     if (target !== dataRoot && !target.startsWith(`${dataRoot}${path.sep}`)) {
       throw new Error("backup path escapes data directory");
     }
-    const fileExt = path.extname(relative).toLowerCase();
-    if (fileExt === ".exe" || fileExt === ".bat" || fileExt === ".cmd" || fileExt === ".sh" || fileExt === ".ps1" || fileExt === ".dll") {
-      throw new Error("backup contains executable file");
-    }
     const content = Buffer.from(String(file.content || ""), "base64");
     if (Number(file.size || content.length) !== content.length) throw new Error(`backup file size mismatch: ${relative}`);
     if (content.length > backupMaxBytes) throw new Error(`backup file exceeds size limit: ${relative}`);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content);
-    if (file.mtimeMs) {
-      const mtime = new Date(Number(file.mtimeMs));
-      fs.utimesSync(target, mtime, mtime);
-    }
-    restoredBytes += content.length;
   }
-  state = storage.loadState();
-  return {
-    fileCount: payload.files.length,
-    bytes: restoredBytes,
-    preRestoreBackup: path.basename(preRestorePath),
-    createdAt: payload.createdAt || ""
-  };
+
+  const preRestorePath = writePreRestoreSnapshot();
+  const writtenFiles = [];
+  let restoredBytes = 0;
+  try {
+    for (const file of payload.files) {
+      const relative = safeBackupRelativePath(file.path);
+      const target = path.resolve(dataDir, relative);
+      const content = Buffer.from(String(file.content || ""), "base64");
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+      writtenFiles.push(target);
+      if (file.mtimeMs) {
+        const mtime = new Date(Number(file.mtimeMs));
+        fs.utimesSync(target, mtime, mtime);
+      }
+      restoredBytes += content.length;
+    }
+    state = storage.loadState();
+    return {
+      fileCount: payload.files.length,
+      bytes: restoredBytes,
+      preRestoreBackup: path.basename(preRestorePath),
+      createdAt: payload.createdAt || ""
+    };
+  } catch (error) {
+    for (const written of writtenFiles) {
+      try { fs.rmSync(written, { force: true }); } catch {}
+    }
+    throw new Error(`restore failed: ${error.message} — written files removed, pre-restore snapshot saved`);
+  }
 }
 
 function normalizeAdminRecord(record) {

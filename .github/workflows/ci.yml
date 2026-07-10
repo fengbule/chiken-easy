@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-build:
+    name: Lint and Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  smoke-json:
+    name: Smoke Test (JSON)
+    runs-on: ubuntu-latest
+    needs: lint-build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npx vite build
+      - name: smoke (json)
+        run: CHIKEN_STORAGE=json npm run smoke
+
+  smoke-sqlite:
+    name: Smoke Test (SQLite)
+    runs-on: ubuntu-latest
+    needs: lint-build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npx vite build
+      - name: smoke (sqlite)
+        run: CHIKEN_STORAGE=sqlite npm run smoke
+
+  docker-compose:
+    name: Docker Compose Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: validate server compose
+        run: docker compose -f docker-compose.server.yml config
+      - name: validate agent compose
+        run: docker compose -f docker-compose.agent.yml config

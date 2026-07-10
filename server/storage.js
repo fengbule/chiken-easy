@@ -277,6 +277,13 @@ function openSqlite(sqlitePath) {
     CREATE INDEX IF NOT EXISTS idx_command_runs_script ON command_runs(script_id);
   `);
 
+  try {
+    const colCheck = db.prepare("SELECT error_type FROM node_quality_history LIMIT 0").run();
+  } catch {
+    db.exec("ALTER TABLE node_quality_history ADD COLUMN error_type TEXT DEFAULT ''");
+    db.prepare("INSERT INTO schema_version (version) VALUES (7)").run();
+  }
+
   return db;
 }
 
@@ -366,62 +373,68 @@ function createSqliteAdapter({ dataDir, auditFilePath, sqlitePath }) {
     return createFallbackSqliteAdapter(auditFilePath, error.message);
   }
 
-  const statements = {
-    insertAudit: db.prepare(
-      "INSERT OR REPLACE INTO audit_logs (id, at, actor, action, target, detail_json) VALUES (?, ?, ?, ?, ?, ?)"
-    ),
-    queryAuditBase: db.prepare(
-      "SELECT id, at, actor, action, target, detail_json FROM audit_logs ORDER BY at DESC LIMIT ?"
-    ),
-    insertProbeSample: db.prepare(
-      "INSERT OR REPLACE INTO probe_samples (id, agent_id, collected_at, online, sample_json) VALUES (?, ?, ?, ?, ?)"
-    ),
-    selectProbeSamples: db.prepare(
-      "SELECT id, agent_id, collected_at, online, sample_json FROM probe_samples WHERE agent_id = ? ORDER BY collected_at DESC LIMIT ?"
-    ),
-    insertSubscriptionAccess: db.prepare(
-      "INSERT OR REPLACE INTO subscription_access_logs (id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-    ),
-    selectSubscriptionAccess: db.prepare(
-      "SELECT id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json FROM subscription_access_logs WHERE profile_id = ? ORDER BY at DESC LIMIT ?"
-    ),
-    selectSubscriptionAccessAll: db.prepare(
-      "SELECT id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json FROM subscription_access_logs ORDER BY at DESC LIMIT ?"
-    ),
-    insertNodeQualityHistory: db.prepare(
-      "INSERT OR REPLACE INTO node_quality_history (id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, error_type, checked_at, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ),
-    selectNodeQualityHistory: db.prepare(
-      "SELECT id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, error_type, checked_at, detail_json FROM node_quality_history WHERE node_id = ? ORDER BY checked_at DESC LIMIT ?"
-    ),
-    selectAllNodeQualityHistory: db.prepare(
-      "SELECT id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, error_type, checked_at FROM node_quality_history ORDER BY checked_at DESC LIMIT ?"
-    ),
-    insertMonitorEvent: db.prepare(
-      "INSERT OR REPLACE INTO monitor_events (id, agent_id, event_type, severity, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    ),
-    selectMonitorEvents: db.prepare(
-      "SELECT id, agent_id, event_type, severity, message, detail_json, created_at FROM monitor_events ORDER BY created_at DESC LIMIT ?"
-    ),
-    selectMonitorEventsByAgent: db.prepare(
-      "SELECT id, agent_id, event_type, severity, message, detail_json, created_at FROM monitor_events WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?"
-    ),
-    insertCommandRun: db.prepare(
-      "INSERT OR REPLACE INTO command_runs (id, agent_id, script_id, script_name, command, ok, output, error, stdout_bytes, stderr_bytes, exit_code, duration_ms, started_at, finished_at, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ),
-    selectCommandRuns: db.prepare(
-      "SELECT id, agent_id, script_id, script_name, command, ok, output, error, stdout_bytes, stderr_bytes, exit_code, duration_ms, started_at, finished_at, detail_json FROM command_runs ORDER BY finished_at DESC LIMIT ?"
-    ),
-    selectCommandRunsByAgent: db.prepare(
-      "SELECT id, agent_id, script_id, script_name, command, ok, output, error, stdout_bytes, stderr_bytes, exit_code, duration_ms, started_at, finished_at, detail_json FROM command_runs WHERE agent_id = ? ORDER BY finished_at DESC LIMIT ?"
-    ),
-    deleteOldAudit: db.prepare("DELETE FROM audit_logs WHERE at < ?"),
-    deleteOldProbeSamples: db.prepare("DELETE FROM probe_samples WHERE collected_at < ?"),
-    deleteOldSubscriptionAccess: db.prepare("DELETE FROM subscription_access_logs WHERE at < ?"),
-    deleteOldNodeQualityHistory: db.prepare("DELETE FROM node_quality_history WHERE checked_at < ?"),
-    deleteOldMonitorEvents: db.prepare("DELETE FROM monitor_events WHERE created_at < ?"),
-    deleteOldCommandRuns: db.prepare("DELETE FROM command_runs WHERE finished_at < ?")
-  };
+  let statements;
+  try {
+    statements = {
+      insertAudit: db.prepare(
+        "INSERT OR REPLACE INTO audit_logs (id, at, actor, action, target, detail_json) VALUES (?, ?, ?, ?, ?, ?)"
+      ),
+      queryAuditBase: db.prepare(
+        "SELECT id, at, actor, action, target, detail_json FROM audit_logs ORDER BY at DESC LIMIT ?"
+      ),
+      insertProbeSample: db.prepare(
+        "INSERT OR REPLACE INTO probe_samples (id, agent_id, collected_at, online, sample_json) VALUES (?, ?, ?, ?, ?)"
+      ),
+      selectProbeSamples: db.prepare(
+        "SELECT id, agent_id, collected_at, online, sample_json FROM probe_samples WHERE agent_id = ? ORDER BY collected_at DESC LIMIT ?"
+      ),
+      insertSubscriptionAccess: db.prepare(
+        "INSERT OR REPLACE INTO subscription_access_logs (id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      ),
+      selectSubscriptionAccess: db.prepare(
+        "SELECT id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json FROM subscription_access_logs WHERE profile_id = ? ORDER BY at DESC LIMIT ?"
+      ),
+      selectSubscriptionAccessAll: db.prepare(
+        "SELECT id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json FROM subscription_access_logs ORDER BY at DESC LIMIT ?"
+      ),
+      insertNodeQualityHistory: db.prepare(
+        "INSERT OR REPLACE INTO node_quality_history (id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, error_type, checked_at, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ),
+      selectNodeQualityHistory: db.prepare(
+        "SELECT id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, error_type, checked_at, detail_json FROM node_quality_history WHERE node_id = ? ORDER BY checked_at DESC LIMIT ?"
+      ),
+      selectAllNodeQualityHistory: db.prepare(
+        "SELECT id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, error_type, checked_at FROM node_quality_history ORDER BY checked_at DESC LIMIT ?"
+      ),
+      insertMonitorEvent: db.prepare(
+        "INSERT OR REPLACE INTO monitor_events (id, agent_id, event_type, severity, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ),
+      selectMonitorEvents: db.prepare(
+        "SELECT id, agent_id, event_type, severity, message, detail_json, created_at FROM monitor_events ORDER BY created_at DESC LIMIT ?"
+      ),
+      selectMonitorEventsByAgent: db.prepare(
+        "SELECT id, agent_id, event_type, severity, message, detail_json, created_at FROM monitor_events WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?"
+      ),
+      insertCommandRun: db.prepare(
+        "INSERT OR REPLACE INTO command_runs (id, agent_id, script_id, script_name, command, ok, output, error, stdout_bytes, stderr_bytes, exit_code, duration_ms, started_at, finished_at, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ),
+      selectCommandRuns: db.prepare(
+        "SELECT id, agent_id, script_id, script_name, command, ok, output, error, stdout_bytes, stderr_bytes, exit_code, duration_ms, started_at, finished_at, detail_json FROM command_runs ORDER BY finished_at DESC LIMIT ?"
+      ),
+      selectCommandRunsByAgent: db.prepare(
+        "SELECT id, agent_id, script_id, script_name, command, ok, output, error, stdout_bytes, stderr_bytes, exit_code, duration_ms, started_at, finished_at, detail_json FROM command_runs WHERE agent_id = ? ORDER BY finished_at DESC LIMIT ?"
+      ),
+      deleteOldAudit: db.prepare("DELETE FROM audit_logs WHERE at < ?"),
+      deleteOldProbeSamples: db.prepare("DELETE FROM probe_samples WHERE collected_at < ?"),
+      deleteOldSubscriptionAccess: db.prepare("DELETE FROM subscription_access_logs WHERE at < ?"),
+      deleteOldNodeQualityHistory: db.prepare("DELETE FROM node_quality_history WHERE checked_at < ?"),
+      deleteOldMonitorEvents: db.prepare("DELETE FROM monitor_events WHERE created_at < ?"),
+      deleteOldCommandRuns: db.prepare("DELETE FROM command_runs WHERE finished_at < ?")
+    };
+  } catch (prepareError) {
+    try { db.close(); } catch {}
+    return createFallbackSqliteAdapter(auditFilePath, `prepare failed: ${prepareError.message}`);
+  }
 
   function safeRun(statement, ...args) {
     try {

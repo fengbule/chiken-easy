@@ -26,7 +26,7 @@ const realmImage = process.env.CHIKEN_REALM_IMAGE || "4points/realm:latest";
 const gostImage = process.env.CHIKEN_GOST_IMAGE || "gogost/gost:latest";
 const proxyCheckUrl = process.env.CHIKEN_PROXY_CHECK_URL || "https://www.gstatic.com/generate_204";
 const probeIntervalMs = Math.max(3000, Math.min(30000, (Number(process.env.CHIKEN_PROBE_INTERVAL || 5) || 5) * 1000));
-const agentVersion = process.env.CHIKEN_AGENT_VERSION || (() => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname || __dirname), "../package.json"), "utf8")).version; } catch { return "0.0.0"; } })();
+const agentVersion = process.env.CHIKEN_AGENT_VERSION || (() => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "../package.json"), "utf8")).version; } catch { return "0.0.0"; } })();
 const collectProbe = createProbeCollector({ hostRoot });
 const proxyCheckStateDir = path.join(stateDir, "proxy-check");
 
@@ -236,7 +236,7 @@ function buildProxyCheckOutbound(node) {
         path: cleanText(node.ws?.path || node.transport?.path) || "/"
       },
       tls: {
-        enabled: node.tls?.enabled !== false,
+        enabled: node.tls?.enabled === true,
         server_name: sni,
         insecure: true
       }
@@ -257,7 +257,7 @@ function buildProxyCheckOutbound(node) {
       tag: "proxy",
       server: node.address,
       server_port: Number(node.port),
-      password: node.password,
+      password: node.password || node.hysteria2?.password,
       up_mbps: Number(node.hysteria2?.upMbps || node.upMbps || 100),
       down_mbps: Number(node.hysteria2?.downMbps || node.downMbps || 100),
       tls: {
@@ -876,19 +876,8 @@ async function runProxyCheck(payload = {}) {
       const result = await checkSocksProxy(proxy, targetUrl);
       if (!result.ok && !result.error) result.error = "proxy check target unreachable";
       const geo = result.ok ? await resolveExitMetadataThroughProxy(proxy, "https://api.ip.sb/geoip") : { exitIp: "", exitCountry: "" };
-      let errorType = "";
-      if (!result.ok) {
-        const errorLower = (result.error || "").toLowerCase();
-        if (errorLower.includes("timeout")) errorType = "timeout";
-        else if (errorLower.includes("dns")) errorType = "dns_failure";
-        else if (errorLower.includes("tls") || errorLower.includes("certificate")) errorType = "tls_failure";
-        else if (errorLower.includes("reality")) errorType = "reality_handshake_failed";
-        else if (errorLower.includes("auth") || errorLower.includes("password") || errorLower.includes("uuid")) errorType = "auth_failure";
-        else if (errorLower.includes("connect") || errorLower.includes("refused") || errorLower.includes("reset")) errorType = "tcp_connect_failed";
-        else if (errorLower.includes("unsupported")) errorType = "unsupported_environment";
-        else errorType = "proxy_check_failed";
-      }
-      return { ...base, ...result, ...geo, unsupported: false, errorType: result.ok ? "" : errorType };
+      const errorType = result.ok ? "" : classifyProxyInitError(result.error || "", protocol);
+      return { ...base, ...result, ...geo, unsupported: false, errorType };
     } finally {
       await stopTemporaryProxy(temp);
     }
