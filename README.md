@@ -166,6 +166,27 @@ Each check records: success, HTTP status, latency, exit IP/country, failure stag
 - remote `Realm`/`GOST` validation still depends on registry reachability from the target host
 - `web/src/App.jsx` has been split into page components under `web/src/pages/`
 
+## Rollback
+
+If an upgrade needs to be reverted:
+
+1. Stop the control plane container or process to prevent writes.
+2. Backup the current `data/` directory:
+
+```bash
+cp -r data data.before-rollback-$(date +%s)
+```
+
+3. Identify the pre-restore snapshot (created automatically before each restore):
+
+```bash
+ls -t data/backups/panel-restore-before-*.chiken-backup.json.gz | head -1
+```
+
+4. Restore using `POST /api/backups/restore` with that file.
+5. Restart and verify: `curl -s http://127.0.0.1:7788/api/health`
+6. If the panel is down, manually decompress the snapshot into `data/` using the helper script or the panel's restore logic.
+
 ## Release Checklist
 
 - `npm install`
