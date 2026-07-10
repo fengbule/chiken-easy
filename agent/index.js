@@ -26,6 +26,7 @@ const realmImage = process.env.CHIKEN_REALM_IMAGE || "4points/realm:latest";
 const gostImage = process.env.CHIKEN_GOST_IMAGE || "gogost/gost:latest";
 const proxyCheckUrl = process.env.CHIKEN_PROXY_CHECK_URL || "https://www.gstatic.com/generate_204";
 const probeIntervalMs = Math.max(3000, Math.min(30000, (Number(process.env.CHIKEN_PROBE_INTERVAL || 5) || 5) * 1000));
+const agentVersion = process.env.CHIKEN_AGENT_VERSION || (() => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname || __dirname), "../package.json"), "utf8")).version; } catch { return "0.0.0"; } })();
 const collectProbe = createProbeCollector({ hostRoot });
 const proxyCheckStateDir = path.join(stateDir, "proxy-check");
 
@@ -984,6 +985,8 @@ async function handle(ws, msg) {
     if (msg.payload.type === "logs") return { commandId: msg.id, ...(await tailLogs(msg.payload.lines)) };
     if (msg.payload.type === "config") return { commandId: msg.id, ...(await validateConfig()) };
   }
+  if (msg.command === "cancel") return { commandId: msg.id, ok: true, output: `acknowledged cancel for ${msg.payload?.commandId || "unknown"}`, cancelled: true };
+  if (msg.command === "ping") return { commandId: msg.id, ok: true, output: "pong", version: agentVersion };
   return { commandId: msg.id, ok: false, output: "unknown command" };
 }
 
@@ -999,6 +1002,7 @@ async function buildAgentHello(state) {
         .find((item) => item && !item.internal && item.family === "IPv4")?.address ||
       "-",
     ...systemIdentity(),
+    version: agentVersion,
     singboxVersion: await singboxVersion(),
     singboxStatus: (await service("status")).output || "unknown",
     metrics: await collectProbe().catch(() => null)
@@ -1024,8 +1028,12 @@ async function connect() {
   });
 
   let heartbeatTimer = null;
+  let reconnectDelayMs = 1000;
+  const maxReconnectDelayMs = 60000;
+  const runningCommands = new Set();
 
   ws.on("open", async () => {
+    reconnectDelayMs = 1000;
     ws.send(
       JSON.stringify({
         type: "hello",
@@ -1036,25 +1044,44 @@ async function connect() {
 
     heartbeatTimer = setInterval(async () => {
       if (ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ type: "heartbeat", status: await buildHeartbeatStatus() }));
+      try {
+        ws.send(JSON.stringify({ type: "heartbeat", status: await buildHeartbeatStatus() }));
+      } catch {}
     }, probeIntervalMs);
   });
 
   ws.on("message", async (raw) => {
-    const msg = JSON.parse(raw.toString());
-    if (!msg.command) return;
+    let msg;
+    try {
+      msg = JSON.parse(raw.toString());
+    } catch {
+      return;
+    }
+    if (!msg || !msg.command || typeof msg.command !== "string") return;
+    if (!msg.id || typeof msg.id !== "string") return;
+
+    if (runningCommands.has(msg.id)) {
+      ws.send(JSON.stringify({ type: "command_result", commandId: msg.id, ok: false, output: "duplicate command id" }));
+      return;
+    }
+    runningCommands.add(msg.id);
+
     try {
       const result = await handle(ws, msg);
       ws.send(JSON.stringify({ type: "command_result", ...result, log: result.output }));
       if (result.config) ws.send(JSON.stringify({ type: "config", config: result.config }));
     } catch (error) {
       ws.send(JSON.stringify({ type: "command_result", commandId: msg.id, ok: false, output: error.message }));
+    } finally {
+      runningCommands.delete(msg.id);
     }
   });
 
   ws.on("close", () => {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
-    setTimeout(connect, 5000);
+    const delay = Math.floor(reconnectDelayMs + Math.random() * 1000);
+    reconnectDelayMs = Math.min(maxReconnectDelayMs, Math.floor(reconnectDelayMs * 1.8));
+    setTimeout(connect, delay);
   });
 
   ws.on("error", () => {
@@ -1063,3 +1090,6 @@ async function connect() {
 }
 
 connect();
+
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));

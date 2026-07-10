@@ -955,13 +955,14 @@ function agentSummary(agent) {
     osPretty: agent.osPretty || "",
     osVersion: agent.osVersion || "",
     osVersionId: agent.osVersionId || "",
+    version: agent.version || "-",
     tags: asset.tags || agent.tags || [],
     group: asset.group || "",
     region: asset.region || "",
     provider: asset.provider || "",
     singboxVersion: agent.singboxVersion || "-",
     singboxStatus: agent.singboxStatus || "unknown",
-    connected: clients.has(agent.id),
+    connected: clients.has(agent.id) || Boolean(agent.connected),
     lastSeen: agent.lastSeen,
     registeredAt: agent.registeredAt,
     certFingerprint: agent.certFingerprint || "-",
@@ -3216,6 +3217,21 @@ wss.on("connection", (ws) => {
     audit("agent", "agent_offline", agentId);
   });
 });
+
+const heartbeatTimeoutMs = Math.max(15000, (Number(process.env.CHIKEN_PROBE_INTERVAL || 5) || 5) * 3000);
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, agent] of Object.entries(state.agents || {})) {
+    if (clients.has(id)) continue;
+    const lastSeen = Date.parse(agent.lastSeen || agent.updatedAt) || 0;
+    if (lastSeen > 0 && now - lastSeen < heartbeatTimeoutMs) continue;
+    if (agent.connected === false) continue;
+    state.agents[id] = { ...agent, connected: false, lastSeen: agent.lastSeen || nowIso() };
+    recordMonitorSample(id, false);
+  }
+  scheduleStateSave();
+}, Math.max(10000, Math.floor(heartbeatTimeoutMs / 2)));
 
 const port = Number(process.env.PORT || 7788);
 server.listen(port, () => console.log(`chiken-easy server listening on :${port}`));
