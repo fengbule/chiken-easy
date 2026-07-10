@@ -34,12 +34,16 @@ Default SQLite path:
 CHIKEN_SQLITE_PATH=data/chiken.db
 ```
 
+The database uses schema versioning with an automatic migration mechanism. A `schema_version` table tracks the current version, and any pending migrations are applied on startup. This ensures the database schema stays in sync with the application version without manual intervention.
+
 Current SQLite tables:
 
 - `audit_logs`
 - `probe_samples`
 - `subscription_access_logs`
-- `node_quality_history`
+- `node_quality_history` (now includes `error_type` column for classifying proxy check failures)
+- `monitor_events`
+- `command_runs`
 
 Current SQLite behavior:
 
@@ -49,6 +53,9 @@ Current SQLite behavior:
 - monitor probe samples are written into SQLite
 - subscription access logs are written into SQLite
 - node quality / proxy-check history is written into SQLite
+- SQLite is opened in WAL (Write-Ahead Logging) mode for better concurrent read/write performance, with a busy timeout configured to retry when the database is locked and a cache size tuned for the expected workload
+- history data in monitored tables (probe samples, node quality history, monitor events) is automatically cleaned up on a configurable retention window
+- if SQLite fails to initialize (e.g., file permission errors, corruption), a `FallbackSqliteAdapter` is created that logs the failure and returns empty/no-op results, allowing the service to continue running with degraded history features
 
 ## What Still Lives In `state.json`
 

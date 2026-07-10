@@ -141,14 +141,19 @@ The agent now performs image preflight checks before create/apply. If pull fails
 
 ## Proxy Check
 
-Current protocol-aware MVP supports:
+End-to-end proxy detection uses temporary sing-box client bridges and supports:
 
-- Shadowsocks via temporary local sing-box bridge
-- HTTP proxy
-- SOCKS proxy
-- Mixed proxy
+- HTTP proxy (direct HTTP CONNECT)
+- SOCKS proxy (SOCKS5 handshake)
+- Mixed proxy (SOCKS5 + HTTP)
+- Shadowsocks (temporary local sing-box bridge)
+- Trojan (temporary local sing-box bridge with TLS)
+- VLESS (temporary local sing-box bridge with TLS or Reality)
+- VLESS Reality (temporary local sing-box bridge with Reality handshake)
+- VMess WebSocket (temporary local sing-box bridge with WS transport)
+- Hysteria2 (temporary local sing-box bridge with QUIC)
 
-Protocols not yet fully implemented for authenticated end-to-end proxy-check return explicit unsupported/not-implemented results and do not fake success.
+Each check records: success, HTTP status, latency, exit IP/country, failure stage (DNS, TCP, TLS, Reality, auth, timeout), and check timestamp. Results feed into node scoring and subscription filtering.
 
 ## Local Test Credentials
 
@@ -157,9 +162,9 @@ Protocols not yet fully implemented for authenticated end-to-end proxy-check ret
 ## Known Limits
 
 - `state.json` is still the primary state store even in SQLite mode
-- `trojan`, `vless`, `vmess`, and `hysteria2` proxy-check are not yet full protocol-level checks
+- Proxy checks require Docker access on the agent host to run temporary sing-box containers
 - remote `Realm`/`GOST` validation still depends on registry reachability from the target host
-- `web/src/App.jsx` has been reduced via shared extractions, but the page layer is still intentionally compact
+- `web/src/App.jsx` has been split into page components under `web/src/pages/`
 
 ## Release Checklist
 
