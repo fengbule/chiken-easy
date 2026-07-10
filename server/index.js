@@ -174,7 +174,9 @@ function safeFileName(name) {
 function normalizeRemotePath(value) {
   const input = cleanText(value || "/");
   if (input.includes("\0")) throw new Error("invalid path");
-  return path.posix.normalize(input.startsWith("/") ? input : `/${input}`);
+  const normalized = path.posix.normalize(input.startsWith("/") ? input : `/${input}`);
+  if (normalized.includes("..")) throw new Error("path traversal not allowed");
+  return normalized;
 }
 
 function parseCookies(req) {
@@ -202,12 +204,19 @@ function appendSetCookie(res, cookieValue) {
   res.setHeader("Set-Cookie", [current, cookieValue]);
 }
 
+function isSecureContext(req) {
+  const proto = cleanText(req.headers["x-forwarded-proto"] || req.protocol);
+  return proto === "https";
+}
+
 function setSessionCookie(res, sessionId) {
-  appendSetCookie(res, `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; Path=/; HttpOnly; SameSite=Lax`);
+  const secureFlag = isSecureContext(res.req || {}) ? "; Secure" : "";
+  appendSetCookie(res, `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; Path=/; HttpOnly; SameSite=Lax${secureFlag}`);
 }
 
 function clearSessionCookie(res) {
-  appendSetCookie(res, `${SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
+  const secureFlag = isSecureContext(res.req || {}) ? "; Secure" : "";
+  appendSetCookie(res, `${SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax${secureFlag}`);
 }
 
 function sanitizeAuditDetail(detail) {
@@ -307,6 +316,13 @@ function writePreRestoreSnapshot() {
 }
 
 function restoreBackupPayload(payload) {
+  if (payload.files.length > 500) throw new Error("backup file count exceeds limit");
+  let totalSize = 0;
+  for (const file of payload.files) {
+    totalSize += Number(file.size || 0);
+  }
+  if (totalSize > backupMaxBytes * 2) throw new Error("backup total size exceeds limit");
+
   const preRestorePath = writePreRestoreSnapshot();
   let restoredBytes = 0;
   for (const file of payload.files) {
@@ -316,8 +332,13 @@ function restoreBackupPayload(payload) {
     if (target !== dataRoot && !target.startsWith(`${dataRoot}${path.sep}`)) {
       throw new Error("backup path escapes data directory");
     }
+    const fileExt = path.extname(relative).toLowerCase();
+    if (fileExt === ".exe" || fileExt === ".bat" || fileExt === ".cmd" || fileExt === ".sh" || fileExt === ".ps1" || fileExt === ".dll") {
+      throw new Error("backup contains executable file");
+    }
     const content = Buffer.from(String(file.content || ""), "base64");
     if (Number(file.size || content.length) !== content.length) throw new Error(`backup file size mismatch: ${relative}`);
+    if (content.length > backupMaxBytes) throw new Error(`backup file exceeds size limit: ${relative}`);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, content);
     if (file.mtimeMs) {
