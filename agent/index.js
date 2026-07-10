@@ -33,6 +33,10 @@ fs.mkdirSync(stateDir, { recursive: true });
 fs.mkdirSync(forwardDir, { recursive: true });
 fs.mkdirSync(proxyCheckStateDir, { recursive: true });
 
+function cleanText(value) {
+  return String(value ?? "").trim();
+}
+
 function readState() {
   if (fs.existsSync(stateFile)) return JSON.parse(fs.readFileSync(stateFile, "utf8"));
   const state = { id: nanoid(), name: os.hostname(), tags: [] };
@@ -160,6 +164,8 @@ function randomLocalPort() {
 
 function buildProxyCheckOutbound(node) {
   const protocol = String(node.protocol || "").trim().toLowerCase();
+  const sni = cleanText(node.tls?.sni || node.hysteria2?.sni) || node.address;
+
   if (protocol === "ss" || protocol === "shadowsocks") {
     return {
       type: "shadowsocks",
@@ -168,6 +174,96 @@ function buildProxyCheckOutbound(node) {
       server_port: Number(node.port),
       method: node.ss?.method || node.method || "aes-256-gcm",
       password: node.password
+    };
+  }
+  if (protocol === "trojan") {
+    return {
+      type: "trojan",
+      tag: "proxy",
+      server: node.address,
+      server_port: Number(node.port),
+      password: node.password,
+      tls: {
+        enabled: true,
+        server_name: sni,
+        insecure: true
+      }
+    };
+  }
+  if (protocol === "vless") {
+    const outbound = {
+      type: "vless",
+      tag: "proxy",
+      server: node.address,
+      server_port: Number(node.port),
+      uuid: cleanText(node.uuid),
+      flow: cleanText(node.reality?.flow || node.flow)
+    };
+    if (node.reality?.publicKey || node.reality?.public_key) {
+      outbound.tls = {
+        enabled: true,
+        server_name: sni || "www.cloudflare.com",
+        utls: {
+          enabled: true,
+          fingerprint: cleanText(node.reality?.fingerprint || node.tls?.fingerprint) || "chrome"
+        },
+        reality: {
+          enabled: true,
+          public_key: cleanText(node.reality?.publicKey || node.reality?.public_key),
+          short_id: cleanText(node.reality?.shortId || node.reality?.short_id) || "0123456789abcdef"
+        }
+      };
+    } else {
+      outbound.tls = {
+        enabled: true,
+        server_name: sni,
+        insecure: true
+      };
+    }
+    return outbound;
+  }
+  if (protocol === "vmess") {
+    const outbound = {
+      type: "vmess",
+      tag: "proxy",
+      server: node.address,
+      server_port: Number(node.port),
+      uuid: cleanText(node.uuid),
+      alterId: 0,
+      transport: {
+        type: "ws",
+        path: cleanText(node.ws?.path || node.transport?.path) || "/"
+      },
+      tls: {
+        enabled: node.tls?.enabled !== false,
+        server_name: sni,
+        insecure: true
+      }
+    };
+    const wsHost = cleanText(node.ws?.host || node.transport?.host);
+    if (wsHost) outbound.transport.headers = { Host: wsHost };
+    if (node.ws?.fingerprint || node.tls?.fingerprint) {
+      outbound.tls.utls = {
+        enabled: true,
+        fingerprint: cleanText(node.ws?.fingerprint || node.tls?.fingerprint) || "chrome"
+      };
+    }
+    return outbound;
+  }
+  if (protocol === "hysteria2" || protocol === "hy2") {
+    return {
+      type: "hysteria2",
+      tag: "proxy",
+      server: node.address,
+      server_port: Number(node.port),
+      password: node.password,
+      up_mbps: Number(node.hysteria2?.upMbps || node.upMbps || 100),
+      down_mbps: Number(node.hysteria2?.downMbps || node.downMbps || 100),
+      tls: {
+        enabled: true,
+        server_name: sni,
+        insecure: true
+      }
     };
   }
   if (protocol === "http") {
@@ -243,11 +339,25 @@ async function waitForLocalPort(port, timeoutMs = 10000) {
   return false;
 }
 
+function classifyProxyInitError(logText, protocol) {
+  const lower = String(logText || "").toLowerCase();
+  if (lower.includes("dns") && (lower.includes("resolve") || lower.includes("no such host") || lower.includes("lookup") || lower.includes("nxdomain"))) return "dns_failure";
+  if (lower.includes("reality") && (lower.includes("handshake") || lower.includes("mismatch") || lower.includes("verification") || lower.includes("short_id"))) return "reality_handshake_failed";
+  if (lower.includes("tls") && (lower.includes("handshake") || lower.includes("bad certificate") || lower.includes("unknown ca") || lower.includes("certificate"))) return "tls_failure";
+  if (lower.includes("auth") || lower.includes("password") || lower.includes("uuid") || lower.includes("unauthorized")) return "auth_failure";
+  if (lower.includes("connection refused") || lower.includes("no route to host") || lower.includes("network is unreachable") || lower.includes("connect:")) return "tcp_connect_failed";
+  if (lower.includes("timeout") || lower.includes("deadline exceeded")) return "timeout";
+  if (lower.includes("unsupported") || lower.includes("not supported")) return "unsupported_environment";
+  if (lower.includes("config") && (lower.includes("invalid") || lower.includes("error") || lower.includes("parse"))) return "config_invalid";
+  if (protocol === "https" && (lower.includes("403") || lower.includes("404"))) return "target_error";
+  return "singbox_start_failed";
+}
+
 async function startTemporaryProxy(node) {
   const config = buildProxyCheckConfig(node, randomLocalPort());
-  if (!config) return { ok: false, error: "unsupported protocol", unsupported: true };
+  if (!config) return { ok: false, error: "unsupported protocol", unsupported: true, errorType: "config_invalid" };
   const imageReady = await ensureDockerImage(singboxImage);
-  if (!imageReady.ok) return { ok: false, error: imageReady.output || "failed to ensure sing-box image" };
+  if (!imageReady.ok) return { ok: false, error: imageReady.output || "failed to ensure sing-box image", errorType: "image_pull_failed" };
 
   const listenPort = config.inbounds[0].listen_port;
   const runId = `${cleanProxyName(node.id || node.name || nanoid(6))}-${listenPort}`;
@@ -284,7 +394,8 @@ async function startTemporaryProxy(node) {
 
   if (!result.ok) {
     fs.rmSync(dir, { recursive: true, force: true });
-    return { ok: false, error: result.output || "failed to start temporary sing-box proxy" };
+    const errorType = classifyProxyInitError(result.output, String(node.protocol || ""));
+    return { ok: false, error: result.output || "failed to start temporary sing-box proxy", errorType };
   }
 
   const ready = await waitForLocalPort(listenPort, 12000);
@@ -293,9 +404,12 @@ async function startTemporaryProxy(node) {
     const inspect = await runDocker(["inspect", "-f", "{{.State.Status}}", containerName], { timeout: 15000 });
     await runDocker(["rm", "-f", containerName], { timeout: 30000 });
     fs.rmSync(dir, { recursive: true, force: true });
+    const combinedLogs = [logs.output, inspect.output ? `state=${inspect.output}` : ""].filter(Boolean).join("; ");
+    const errorType = classifyProxyInitError(combinedLogs, String(node.protocol || ""));
     return {
       ok: false,
-      error: [logs.output, inspect.output ? `state=${inspect.output}` : "", "temporary proxy did not become ready"].filter(Boolean).join("; ")
+      error: [combinedLogs, "temporary proxy did not become ready"].filter(Boolean).join("; "),
+      errorType
     };
   }
 
@@ -743,7 +857,7 @@ async function runProxyCheck(payload = {}) {
   }
   if (protocol === "ss" || protocol === "shadowsocks") {
     const temp = await startTemporaryProxy({ ...node, timeoutMs });
-    if (!temp.ok) return { ...base, error: temp.error || "temporary proxy start failed" };
+    if (!temp.ok) return { ...base, error: temp.error || "temporary proxy start failed", errorType: temp.errorType || "proxy_start_failed" };
     try {
       const proxy = { address: "127.0.0.1", port: temp.listenPort, timeoutMs, kind: "socks" };
       const result = await checkSocksProxy(proxy, targetUrl);
@@ -753,8 +867,30 @@ async function runProxyCheck(payload = {}) {
       await stopTemporaryProxy(temp);
     }
   }
-  if (["trojan", "vless", "vmess", "hysteria2"].includes(protocol)) {
-    return { ...base, error: "protocol-level proxy-check not_implemented", notImplemented: true, unsupported: true };
+  if (["trojan", "vless", "vmess", "hysteria2", "hy2"].includes(protocol)) {
+    const temp = await startTemporaryProxy({ ...node, timeoutMs });
+    if (!temp.ok) return { ...base, error: temp.error || "temporary proxy start failed", errorType: temp.errorType || "proxy_start_failed" };
+    try {
+      const proxy = { address: "127.0.0.1", port: temp.listenPort, timeoutMs, kind: "socks" };
+      const result = await checkSocksProxy(proxy, targetUrl);
+      if (!result.ok && !result.error) result.error = "proxy check target unreachable";
+      const geo = result.ok ? await resolveExitMetadataThroughProxy(proxy, "https://api.ip.sb/geoip") : { exitIp: "", exitCountry: "" };
+      let errorType = "";
+      if (!result.ok) {
+        const errorLower = (result.error || "").toLowerCase();
+        if (errorLower.includes("timeout")) errorType = "timeout";
+        else if (errorLower.includes("dns")) errorType = "dns_failure";
+        else if (errorLower.includes("tls") || errorLower.includes("certificate")) errorType = "tls_failure";
+        else if (errorLower.includes("reality")) errorType = "reality_handshake_failed";
+        else if (errorLower.includes("auth") || errorLower.includes("password") || errorLower.includes("uuid")) errorType = "auth_failure";
+        else if (errorLower.includes("connect") || errorLower.includes("refused") || errorLower.includes("reset")) errorType = "tcp_connect_failed";
+        else if (errorLower.includes("unsupported")) errorType = "unsupported_environment";
+        else errorType = "proxy_check_failed";
+      }
+      return { ...base, ...result, ...geo, unsupported: false, errorType: result.ok ? "" : errorType };
+    } finally {
+      await stopTemporaryProxy(temp);
+    }
   }
   return { ...base, error: "unsupported protocol", unsupported: true };
 }
