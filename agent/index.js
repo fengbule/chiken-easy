@@ -275,7 +275,6 @@ function buildProxyCheckOutbound(node) {
       server: node.address,
       server_port: Number(node.port),
       uuid: cleanText(node.uuid),
-      alterId: 0,
       transport: {
         type: "ws",
         path: cleanText(node.ws?.path || node.transport?.path) || "/"

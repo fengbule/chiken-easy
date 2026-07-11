@@ -196,6 +196,14 @@ try {
   });
   assert(configRender.ok && configRender.body?.config?.inbounds?.length >= 1, "config render failed");
 
+  const vmessRender = await fetchJson(`http://127.0.0.1:${server.port}/api/config/render`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ protocol: "vmess-ws", port: 18082, uuid: "44444444-4444-4444-8444-444444444444", path: "/smoke" })
+  });
+  assert(vmessRender.ok, "vmess config render failed");
+  assert(!JSON.stringify(vmessRender.body?.config || {}).includes("alterId"), "vmess sing-box config contains removed alterId field");
+
   const backupDownload = await fetch(`http://127.0.0.1:${server.port}/api/backups/download`, {
     headers: { Authorization: "Bearer ck_smoke_token" }
   });
