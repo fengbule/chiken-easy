@@ -538,9 +538,36 @@ function proxyResultToCheck(name, result) {
   });
 }
 
-async function verifyManagedProxyChecks(baseUrl, token, sourceAgent, checkerAgent) {
+async function verifyManagedProxyChecks(baseUrl, token, sourceAgent, checkerAgent, sourceServer, checkerServer) {
   const results = [];
   const restoreVersionId = await captureRestorePoint(baseUrl, token, sourceAgent.id);
+
+  const validateActiveProtocol = async (name, port, network = "tcp") => {
+    const validate = await sshExec(sourceServer, sourceAgent.name || sourceAgent.id, "docker exec chiken-singbox sh -lc 'sing-box check -c /etc/sing-box/config.json'");
+    const listenCommand = network === "udp" ? `ss -lunp | grep ':${port} ' || true` : `ss -ltnp | grep ':${port} ' || true`;
+    const listen = await sshExec(sourceServer, sourceAgent.name || sourceAgent.id, listenCommand);
+    results.push(createResult(sourceAgent.name || sourceAgent.id, "protocol", `${name}_config_validate`, validate.ok, {
+      reason: validate.ok ? "" : safeOutput(validate.output)
+    }));
+    results.push(createResult(sourceAgent.name || sourceAgent.id, "protocol", `${name}_listen`, Boolean(cleanText(listen.output)), {
+      reason: cleanText(listen.output) ? "" : `${network}_listen_not_found`
+    }));
+  };
+
+  const assertTemporaryProxyCleanup = async (name) => {
+    if (!checkerServer) return;
+    await sleep(1000);
+    const cleanup = await sshExec(checkerServer, checkerAgent.name || checkerAgent.id, "docker ps -a --filter name=chiken-proxy-check- --format '{{.Names}}'");
+    results.push(createResult(checkerAgent.name || checkerAgent.id, "cleanup", `${name}_temporary_proxy`, cleanup.ok && !cleanText(cleanup.output), {
+      reason: cleanup.ok && !cleanText(cleanup.output) ? "" : safeOutput(cleanup.output || cleanup.reason)
+    }));
+  };
+
+  const checkImportedNode = async (name, node) => {
+    const checks = await runNodeCheck(baseUrl, token, checkerAgent.id, [node.id]);
+    results.push(proxyResultToCheck(name, checks[0]));
+    await assertTemporaryProxyCleanup(name);
+  };
 
   try {
     const mixedPort = 19079;
@@ -566,6 +593,22 @@ async function verifyManagedProxyChecks(baseUrl, token, sourceAgent, checkerAgen
       });
       const checks = await runNodeCheck(baseUrl, token, checkerAgent.id, [mixedNode.id]);
       results.push(proxyResultToCheck("mixed_protocol", checks[0]));
+      await assertTemporaryProxyCleanup("mixed_protocol");
+
+      const httpName = `remote-verify-http-${Date.now()}`;
+      const httpImport = await api(`${baseUrl}/api/node-pool/import`, token, {
+        method: "POST",
+        body: JSON.stringify({ content: `http://${sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host}:${mixedPort}#${httpName}`, source: "remote-verify" })
+      });
+      const httpNode = (await fetchNodePool(baseUrl, token)).find((item) => item.name === httpName);
+      results.push(createResult("panel", "node-import", "http_import", httpImport.ok && Boolean(httpNode), {
+        reason: httpImport.ok && httpNode ? "" : cleanText(httpImport.body?.error || "imported HTTP node not found")
+      }));
+      if (httpNode) {
+        await checkImportedNode("http_protocol", httpNode);
+        await api(`${baseUrl}/api/node-pool/${httpNode.id}`, token, { method: "DELETE" });
+      }
+      await validateActiveProtocol("mixed", mixedPort);
     }
 
     const ssPort = 19080;
@@ -594,22 +637,109 @@ async function verifyManagedProxyChecks(baseUrl, token, sourceAgent, checkerAgen
       });
       const checks = await runNodeCheck(baseUrl, token, checkerAgent.id, [ssNode.id]);
       results.push(proxyResultToCheck("ss_protocol", checks[0]));
+      await assertTemporaryProxyCleanup("ss_protocol");
+      await validateActiveProtocol("shadowsocks", ssPort);
     }
 
-    const unsupportedSource = await findNode(baseUrl, token, (item) => item.protocol === "vless" || item.protocol === "trojan" || item.protocol === "hysteria2");
-    if (unsupportedSource) {
-      const checks = await runNodeCheck(baseUrl, token, checkerAgent.id, [unsupportedSource.id]);
-      const result = checks[0];
-      results.push(createResult("panel", "proxy-check", "vless_unsupported", Boolean(result?.unsupported || result?.notImplemented), {
-        reason: cleanText(result?.error),
-        protocol: result?.protocol,
-        unsupported: Boolean(result?.unsupported),
-        notImplemented: Boolean(result?.notImplemented)
+    const wizardCases = [
+      {
+        name: "vmess_ws",
+        body: {
+          protocol: "vmess-ws",
+          port: 19081,
+          uuid: "22222222-2222-4222-8222-222222222222",
+          path: "/remote-verify",
+          exportName: "remote-verify-vmess",
+          exportHost: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host
+        }
+      },
+      {
+        name: "trojan_tls",
+        body: {
+          protocol: "trojan",
+          port: 19082,
+          password: `rv-trojan-${Date.now()}`,
+          serverName: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host,
+          exportName: "remote-verify-trojan",
+          exportHost: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host
+        }
+      },
+      {
+        name: "hysteria2",
+        network: "udp",
+        body: {
+          protocol: "hysteria2",
+          port: 19083,
+          password: `rv-hy2-${Date.now()}`,
+          serverName: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host,
+          exportName: "remote-verify-hysteria2",
+          exportHost: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host
+        }
+      }
+    ];
+
+    for (const testCase of wizardCases) {
+      const applied = await applyConfigWizard(baseUrl, token, sourceAgent, testCase.body);
+      results.push(createResult(sourceAgent.name || sourceAgent.id, "config", `${testCase.name}_apply`, applied.ok, {
+        reason: applied.ok ? "" : cleanText(applied.body?.error || applied.body)
       }));
-    } else {
-      results.push(createResult("panel", "proxy-check", "vless_unsupported", true, {
-        reason: "no unsupported protocol node found for explicit live check"
+      if (!applied.ok) continue;
+      await sleep(5000);
+      await validateActiveProtocol(testCase.name, testCase.body.port, testCase.network || "tcp");
+      const node = await importLocalNode(baseUrl, token, sourceAgent.id);
+      await api(`${baseUrl}/api/node-pool/${node.id}`, token, {
+        method: "PUT",
+        body: JSON.stringify({ address: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host, port: testCase.body.port, enabled: true })
+      });
+      await checkImportedNode(`${testCase.name}_protocol`, node);
+    }
+
+    const vlessTlsPort = 19084;
+    const vlessTlsUuid = "33333333-3333-4333-8333-333333333333";
+    const vlessTlsConfig = {
+      log: { level: "info" },
+      inbounds: [
+        {
+          type: "vless",
+          tag: "remote-verify-vless-tls",
+          listen: "::",
+          listen_port: vlessTlsPort,
+          users: [{ uuid: vlessTlsUuid }],
+          tls: {
+            enabled: true,
+            server_name: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host,
+            certificate_path: "/etc/sing-box/tls/remote-verify-vless-tls.crt",
+            key_path: "/etc/sing-box/tls/remote-verify-vless-tls.key"
+          }
+        }
+      ],
+      outbounds: [{ type: "direct", tag: "direct" }],
+      route: { final: "direct" }
+    };
+    const vlessTlsApply = await api(`${baseUrl}/api/agents/${sourceAgent.id}/config`, token, {
+      method: "POST",
+      body: JSON.stringify({ config: vlessTlsConfig, restart: true })
+    });
+    results.push(createResult(sourceAgent.name || sourceAgent.id, "config", "vless_tls_apply", vlessTlsApply.ok, {
+      reason: vlessTlsApply.ok ? "" : cleanText(vlessTlsApply.body?.error || vlessTlsApply.body)
+    }));
+    if (vlessTlsApply.ok) {
+      await sleep(5000);
+      await validateActiveProtocol("vless_tls", vlessTlsPort);
+      const vlessTlsName = `remote-verify-vless-tls-${Date.now()}`;
+      const vlessTlsUri = `vless://${vlessTlsUuid}@${sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host}:${vlessTlsPort}?security=tls&sni=${encodeURIComponent(sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host)}#${vlessTlsName}`;
+      const imported = await api(`${baseUrl}/api/node-pool/import`, token, {
+        method: "POST",
+        body: JSON.stringify({ content: vlessTlsUri, source: "remote-verify" })
+      });
+      const vlessTlsNode = (await fetchNodePool(baseUrl, token)).find((item) => item.name === vlessTlsName);
+      results.push(createResult("panel", "node-import", "vless_tls_import", imported.ok && Boolean(vlessTlsNode), {
+        reason: imported.ok && vlessTlsNode ? "" : cleanText(imported.body?.error || "imported VLESS TLS node not found")
       }));
+      if (vlessTlsNode) {
+        await checkImportedNode("vless_tls_protocol", vlessTlsNode);
+        await api(`${baseUrl}/api/node-pool/${vlessTlsNode.id}`, token, { method: "DELETE" });
+      }
     }
 
     const eligibleNodes = (await fetchNodePool(baseUrl, token)).filter((item) => item.enabled !== false && item.health === "healthy");
@@ -639,6 +769,7 @@ async function verifyForwardImage(baseUrl, token, agentId, engine) {
 }
 
 async function verifyRealityServer(baseUrl, token, agent, server, clientServer) {
+  const restoreVersionId = await captureRestorePoint(baseUrl, token, agent.id);
   const keypair = await sshExec(server, agent.name || agent.id, "docker exec chiken-singbox sh -lc 'sing-box generate reality-keypair'");
   if (!keypair.ok) {
     return [createResult(agent.name || agent.id, "reality", "keypair", false, { reason: safeOutput(keypair.output) })];
@@ -738,7 +869,7 @@ async function verifyRealityServer(baseUrl, token, agent, server, clientServer) 
       ],
       route: { final: "proxy" }
     }, null, 2)).toString("base64");
-    const clientCommand = `sh -lc 'docker run -d --rm --network host --name chiken-reality-probe --entrypoint sh ghcr.io/sagernet/sing-box:latest -lc \"echo ${tmpConfigB64} | base64 -d >/tmp/reality.json && sing-box run -c /tmp/reality.json\" >/tmp/chiken-reality-container.id 2>/tmp/chiken-reality-container.err && sleep 4 && if command -v curl >/dev/null 2>&1; then curl -x http://127.0.0.1:11080 -I https://www.gstatic.com/generate_204 -m 20 -sS -o /tmp/chiken-reality-body -D -; else wget -e use_proxy=yes -e https_proxy=http://127.0.0.1:11080 -S --spider -T 20 https://www.gstatic.com/generate_204 2>&1; fi; status=$?; echo ---RUNTIME---; docker logs --tail 80 chiken-reality-probe 2>&1 || true; docker rm -f chiken-reality-probe >/dev/null 2>&1 || true; exit $status'`;
+    const clientCommand = `sh -lc 'docker run -d --rm --network host --name chiken-verify-reality-probe --entrypoint sh ghcr.io/sagernet/sing-box:latest -lc \"echo ${tmpConfigB64} | base64 -d >/tmp/reality.json && sing-box run -c /tmp/reality.json\" >/tmp/chiken-verify-reality-container.id 2>/tmp/chiken-verify-reality-container.err && sleep 4 && if command -v curl >/dev/null 2>&1; then curl -x http://127.0.0.1:11080 -I https://www.gstatic.com/generate_204 -m 20 -sS -o /tmp/chiken-verify-reality-body -D -; else wget -e use_proxy=yes -e https_proxy=http://127.0.0.1:11080 -S --spider -T 20 https://www.gstatic.com/generate_204 2>&1; fi; status=$?; echo ---RUNTIME---; docker logs --tail 80 chiken-verify-reality-probe 2>&1 || true; docker rm -f chiken-verify-reality-probe >/dev/null 2>&1 || true; exit $status'`;
     const clientProbe = await sshExec(clientServer, "agent-3", clientCommand, { execOptions: { pty: true } });
     const endToEndOk = clientProbe.ok && (/HTTP\/[0-9.]+\s+204/i.test(clientProbe.output) || /status code 204/i.test(clientProbe.output)) && !/invalid connection|panic|failed|error:/i.test(clientProbe.output);
     serverChecks.push(createResult("agent-3", "reality", "client_probe", endToEndOk, {
@@ -748,6 +879,19 @@ async function verifyRealityServer(baseUrl, token, agent, server, clientServer) 
   } else {
     serverChecks.push(createResult("agent-3", "reality", "client_probe", false, {
       reason: "client server unavailable for end-to-end probe"
+    }));
+  }
+
+  const restored = await restoreConfigVersion(baseUrl, token, agent.id, restoreVersionId);
+  serverChecks.push(createResult(agent.name || agent.id, "config", "reality_restore_previous", restored.ok, {
+    reason: restored.reason || ""
+  }));
+  if (restored.ok) await sleep(5000);
+
+  if (clientServer) {
+    const cleanup = await sshExec(clientServer, "agent-3", "docker ps -a --filter name=chiken-verify-reality-probe --format '{{.Names}}'");
+    serverChecks.push(createResult("agent-3", "cleanup", "reality_temporary_proxy", cleanup.ok && !cleanText(cleanup.output), {
+      reason: cleanup.ok && !cleanText(cleanup.output) ? "" : safeOutput(cleanup.output || cleanup.reason)
     }));
   }
 
@@ -867,7 +1011,14 @@ async function main() {
   summary.checks.push(...(await verifySubscription(baseUrl, apiToken)));
 
   if (mainAgent && checkerAgent) {
-    const proxyChecks = await verifyManagedProxyChecks(baseUrl, apiToken, mainAgent, checkerAgent);
+    const proxyChecks = await verifyManagedProxyChecks(
+      baseUrl,
+      apiToken,
+      mainAgent,
+      checkerAgent,
+      serverByAgentId.get(mainAgent.id) || servers[0],
+      serverByAgentId.get(checkerAgent.id) || servers[1]
+    );
     summary.checks.push(...proxyChecks);
 
     const realityChecks = await verifyRealityServer(
