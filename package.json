@@ -5,13 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:web\"",
-    "dev:server": "node server/index.js",
-    "dev:agent": "node agent/index.js",
+    "dev:server": "node --experimental-sqlite server/index.js",
+    "dev:agent": "node --experimental-sqlite agent/index.js",
     "dev:web": "vite --host 0.0.0.0",
     "build": "vite build",
-    "start": "node server/index.js",
+    "start": "node --experimental-sqlite server/index.js",
     "lint": "node scripts/check.mjs",
-    "smoke": "node scripts/smoke.mjs",
+    "smoke": "node --experimental-sqlite scripts/smoke.mjs",
     "check": "npm run lint && npm run build && npm run smoke"
   },
   "dependencies": {

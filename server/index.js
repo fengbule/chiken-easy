@@ -2374,6 +2374,13 @@ app.get("/api/node-pool", (_, res) => {
   res.json(Object.values(state.nodePool || {}).map(publicNode));
 });
 
+app.get("/api/node-pool/export", (req, res) => {
+  const format = cleanText(req.query.format || "base64") || "base64";
+  const exportResult = exportNodePool(Object.values(state.nodePool || {}), format);
+  res.setHeader("Content-Type", exportResult.contentType);
+  res.send(exportResult.body);
+});
+
 app.get("/api/node-pool/:id", (req, res) => {
   const node = state.nodePool?.[req.params.id];
   if (!node) return res.status(404).json({ error: "node not found" });
@@ -2468,13 +2475,6 @@ app.post("/api/node-pool/check", async (req, res) => {
   saveState();
   audit("admin", "proxy_check", "-", { count: results.length, agentId, url: req.body?.url || proxyCheckUrl });
   res.json({ ok: true, results });
-});
-
-app.get("/api/node-pool/export", (req, res) => {
-  const format = cleanText(req.query.format || "base64") || "base64";
-  const exportResult = exportNodePool(Object.values(state.nodePool || {}), format);
-  res.setHeader("Content-Type", exportResult.contentType);
-  res.send(exportResult.body);
 });
 
 app.get("/api/protocols", (_, res) => res.json(protocolCatalog));
