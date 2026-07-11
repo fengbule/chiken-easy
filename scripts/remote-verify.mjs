@@ -230,7 +230,7 @@ async function waitForAgentsOnline(baseUrl, token, expected = 3) {
     const rows = Array.isArray(response.body) ? response.body : [];
     const connected = rows.filter((item) => item.connected).length;
     return { ok: response.ok && connected >= expected, count: rows.length, connected, rows };
-  }, { timeoutMs: 120000, intervalMs: 3000 });
+  }, { timeoutMs: Math.max(15000, Number(process.env.CHIKEN_REMOTE_AGENT_WAIT_MS || 45000) || 45000), intervalMs: 3000 });
   return result || { ok: false, count: 0, connected: 0, rows: [] };
 }
 
@@ -1073,6 +1073,12 @@ async function main() {
   ]);
 
   for (const agent of agentRows) {
+    if (!agent.connected) {
+      for (const name of ["mkdir", "upload", "list", "download", "delete", "cleanup_directory"]) {
+        summary.checks.push(createResult(agent.name || agent.id, "sftp", name, false, { reason: "agent_offline" }));
+      }
+      continue;
+    }
     const sftpChecks = await verifySftp(baseUrl, apiToken, agent);
     summary.checks.push(...sftpChecks);
   }
