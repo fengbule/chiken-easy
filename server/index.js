@@ -47,6 +47,7 @@ const uploadMaxBytes = Math.max(1024 * 1024, (Number(process.env.CHIKEN_UPLOAD_M
 const backupMaxBytes = Math.max(8 * 1024 * 1024, (Number(process.env.CHIKEN_BACKUP_MAX_MB || 128) || 128) * 1024 * 1024);
 const proxyCheckUrl = cleanText(process.env.CHIKEN_PROXY_CHECK_URL || "https://www.gstatic.com/generate_204") || "https://www.gstatic.com/generate_204";
 const stateFlushMs = Math.max(250, Number(process.env.CHIKEN_STATE_FLUSH_MS || 1500) || 1500);
+const heartbeatStateFlushMs = Math.max(60000, Number(process.env.CHIKEN_HEARTBEAT_STATE_FLUSH_MS || 300000) || 300000);
 const allowedUploadTypes = new Set(
   String(process.env.CHIKEN_UPLOAD_TYPES || "image/png,image/jpeg,image/webp,text/plain,application/pdf")
     .split(",")
@@ -119,6 +120,7 @@ const browserSessions = new Map();
 const clients = new Map();
 let stateSaveTimer = null;
 let stateSavePending = false;
+let stateSaveDueAt = 0;
 
 function cleanText(value) {
   return String(value ?? "").trim();
@@ -141,6 +143,7 @@ function flushScheduledStateSave() {
     clearTimeout(stateSaveTimer);
     stateSaveTimer = null;
   }
+  stateSaveDueAt = 0;
   if (!stateSavePending) return;
   stateSavePending = false;
   saveState();
@@ -148,10 +151,14 @@ function flushScheduledStateSave() {
 
 function scheduleStateSave(delayMs = stateFlushMs) {
   stateSavePending = true;
-  if (stateSaveTimer) return;
+  const delay = Math.max(0, Number(delayMs) || 0);
+  const dueAt = Date.now() + delay;
+  if (stateSaveTimer && stateSaveDueAt <= dueAt) return;
+  if (stateSaveTimer) clearTimeout(stateSaveTimer);
+  stateSaveDueAt = dueAt;
   stateSaveTimer = setTimeout(() => {
     flushScheduledStateSave();
-  }, Math.max(0, Number(delayMs) || 0));
+  }, delay);
   stateSaveTimer.unref?.();
 }
 
@@ -3201,7 +3208,7 @@ wss.on("connection", (ws) => {
     if (msg.type === "heartbeat") {
       Object.assign(state.agents[agentId], msg.status, { lastSeen: nowIso() });
       recordMonitorSample(agentId, true);
-      scheduleStateSave();
+      scheduleStateSave(heartbeatStateFlushMs);
     }
 
     if (msg.type === "log") pushLog(agentId, { at: nowIso(), line: sanitizeSensitiveText(msg.line) });
