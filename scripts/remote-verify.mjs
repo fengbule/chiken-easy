@@ -256,7 +256,7 @@ async function verifySftp(baseUrl, token, agent) {
     body: JSON.stringify({ path: directory })
   });
   const mkdirError = String(mkdirResponse.body?.error || "").toLowerCase();
-  const mkdirOk = mkdirResponse.ok || mkdirError.includes("already exists");
+  let mkdirOk = mkdirResponse.ok || mkdirError.includes("already exists");
 
   const boundary = `----remote-verify-${Date.now()}`;
   const multipartBody = Buffer.concat([
@@ -281,6 +281,12 @@ async function verifySftp(baseUrl, token, agent) {
   } catch {}
   const uploadResponse = { ok: uploadRaw.ok, status: uploadRaw.status, body: uploadBody };
   const listResponse = await api(`${baseUrl}/api/agents/${agent.id}/sftp?path=${encodeURIComponent(directory)}`, token);
+  const listOk = listResponse.ok
+    && Array.isArray(listResponse.body?.entries)
+    && listResponse.body.entries.some((item) => item.name === "probe.txt");
+  // Some SFTP servers return only the generic SSH_FX_FAILURE when mkdir targets an
+  // existing directory. A successful upload and listing proves the directory is usable.
+  mkdirOk ||= uploadResponse.ok && listOk;
   const downloadResponse = await fetch(`${baseUrl}/api/agents/${agent.id}/sftp/download?path=${encodeURIComponent(remotePath)}`, {
     headers: { Authorization: `Bearer ${token}` }
   });
@@ -303,7 +309,7 @@ async function verifySftp(baseUrl, token, agent) {
       status: uploadResponse.status,
       reason: uploadResponse.ok ? "" : cleanText(uploadResponse.body?.error || uploadResponse.body)
     }),
-    createResult(role, "sftp", "list", listResponse.ok && Array.isArray(listResponse.body?.entries) && listResponse.body.entries.some((item) => item.name === "probe.txt"), {
+    createResult(role, "sftp", "list", listOk, {
       status: listResponse.status,
       reason: listResponse.ok ? "" : cleanText(listResponse.body?.error || listResponse.body)
     }),
@@ -1106,7 +1112,7 @@ async function main() {
     summary.checks.push(...sftpChecks);
   }
 
-  summary.checks.push(await verifyBatchCommand(baseUrl, apiToken, agentRows));
+  summary.checks.push(await verifyBatchCommand(baseUrl, apiToken, agentRows.filter((agent) => agent.connected)));
   if (mainAgent && servers[0]) summary.checks.push(...(await verifyCommandReliability(baseUrl, apiToken, mainAgent, servers[0])));
   summary.checks.push(...(await verifySubscription(baseUrl, apiToken)));
 
