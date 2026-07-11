@@ -17,7 +17,29 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm run build
+
+  node-compatibility:
+    name: Node ${{ matrix.node }} Compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - name: smoke (json)
+        run: CHIKEN_STORAGE=json npm run smoke
+      - name: smoke (sqlite)
+        run: CHIKEN_STORAGE=sqlite npm run smoke
 
   smoke-json:
     name: Smoke Test (JSON)
