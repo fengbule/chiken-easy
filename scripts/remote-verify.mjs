@@ -50,13 +50,24 @@ function createResult(role, kind, name, ok, detail = {}) {
 }
 
 async function api(url, token, options = {}) {
-  const headers = new Headers(options.headers || {});
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const response = await fetch(url, { ...options, headers });
-  const contentType = response.headers.get("content-type") || "";
-  const body = contentType.includes("application/json") ? await response.json() : await response.text();
-  return { ok: response.ok, status: response.status, body, headers: response.headers };
+  const method = cleanText(options.method || "GET").toUpperCase() || "GET";
+  const attempts = method === "GET" ? 3 : 1;
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const headers = new Headers(options.headers || {});
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    try {
+      const response = await fetch(url, { ...options, method, headers, signal: options.signal || AbortSignal.timeout(30000) });
+      const contentType = response.headers.get("content-type") || "";
+      const body = contentType.includes("application/json") ? await response.json() : await response.text();
+      return { ok: response.ok, status: response.status, body, headers: response.headers };
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) await sleep(500 * attempt);
+    }
+  }
+  throw new Error(`${method} ${new URL(url).pathname} failed: ${lastError?.message || "unknown fetch error"}`);
 }
 
 function tcpPortCheck(server, timeoutMs = 8000) {
