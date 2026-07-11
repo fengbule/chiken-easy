@@ -2791,7 +2791,10 @@ app.delete("/api/agents/:id/sftp", async (req, res) => {
   try {
     const remotePath = normalizeRemotePath(req.query.path || req.body?.path || "");
     await withSftp(req.params.id, {}, (sftp) => new Promise((resolve, reject) => {
-      sftp.unlink(remotePath, (error) => (error ? reject(error) : resolve()));
+      sftp.unlink(remotePath, (unlinkError) => {
+        if (!unlinkError) return resolve();
+        sftp.rmdir(remotePath, (rmdirError) => (rmdirError ? reject(unlinkError) : resolve()));
+      });
     }));
     audit("admin", "sftp_delete", req.params.id, { path: remotePath });
     res.json({ ok: true });

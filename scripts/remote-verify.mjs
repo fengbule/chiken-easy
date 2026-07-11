@@ -243,7 +243,8 @@ async function verifySftp(baseUrl, token, agent) {
     method: "POST",
     body: JSON.stringify({ path: directory })
   });
-  const mkdirOk = mkdirResponse.ok || String(mkdirResponse.body?.error || "").toLowerCase().includes("failure");
+  const mkdirError = String(mkdirResponse.body?.error || "").toLowerCase();
+  const mkdirOk = mkdirResponse.ok || mkdirError.includes("already exists");
 
   const boundary = `----remote-verify-${Date.now()}`;
   const multipartBody = Buffer.concat([
@@ -276,6 +277,10 @@ async function verifySftp(baseUrl, token, agent) {
     method: "DELETE",
     body: JSON.stringify({ path: remotePath })
   });
+  const cleanupResponse = await api(`${baseUrl}/api/agents/${agent.id}/sftp?path=${encodeURIComponent(directory)}`, token, {
+    method: "DELETE",
+    body: JSON.stringify({ path: directory })
+  });
 
   return [
     createResult(role, "sftp", "mkdir", mkdirOk, {
@@ -297,6 +302,10 @@ async function verifySftp(baseUrl, token, agent) {
     createResult(role, "sftp", "delete", deleteResponse.ok, {
       status: deleteResponse.status,
       reason: deleteResponse.ok ? "" : cleanText(deleteResponse.body?.error || deleteResponse.body)
+    }),
+    createResult(role, "sftp", "cleanup_directory", cleanupResponse.ok, {
+      status: cleanupResponse.status,
+      reason: cleanupResponse.ok ? "" : cleanText(cleanupResponse.body?.error || cleanupResponse.body)
     })
   ];
 }
