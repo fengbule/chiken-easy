@@ -1,7 +1,7 @@
 FROM node:24-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY . .
 RUN npm run build
 
@@ -10,7 +10,7 @@ WORKDIR /app
 RUN apk add --no-cache docker-cli openssl
 ENV NODE_ENV=production
 COPY package*.json ./
-RUN npm ci --omit=dev
+COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/server ./server
 COPY --from=build /app/agent ./agent
 COPY --from=build /app/shared ./shared
