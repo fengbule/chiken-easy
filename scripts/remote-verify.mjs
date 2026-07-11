@@ -898,6 +898,66 @@ async function verifyRealityServer(baseUrl, token, agent, server, clientServer) 
   return serverChecks;
 }
 
+async function verifyCommandReliability(baseUrl, token, agent, server) {
+  const results = [];
+  const start = await api(`${baseUrl}/api/agents/${agent.id}/exec`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      command: "sh -c 'echo $$ >/tmp/chiken-verify-cancel.pid; sleep 60'",
+      timeoutMs: 120000
+    })
+  });
+  results.push(createResult(agent.name || agent.id, "command", "cancel_start", start.ok && Boolean(start.body?.commandId), {
+    reason: start.ok ? "" : cleanText(start.body?.error || start.body)
+  }));
+
+  if (start.ok && start.body?.commandId) {
+    await sleep(1500);
+    const cancel = await api(`${baseUrl}/api/agents/${agent.id}/commands/${start.body.commandId}/cancel`, token, { method: "POST" });
+    results.push(createResult(agent.name || agent.id, "command", "cancel_request", cancel.ok, {
+      reason: cancel.ok ? "" : cleanText(cancel.body?.error || cancel.body)
+    }));
+    const cancelled = await waitFor(async () => {
+      const response = await api(`${baseUrl}/api/command-runs`, token);
+      const run = Array.isArray(response.body) ? response.body.find((item) => item.id === start.body.commandId) : null;
+      return { ok: response.ok && run?.status === "cancelled", run };
+    }, { timeoutMs: 15000, intervalMs: 500 });
+    results.push(createResult(agent.name || agent.id, "command", "cancel_state", Boolean(cancelled?.ok), {
+      reason: cancelled?.ok ? "" : cleanText(cancelled?.run?.status || "cancelled state not observed")
+    }));
+    const processCheck = await sshExec(server, agent.name || agent.id, "docker exec chiken-agent sh -lc 'if [ -f /tmp/chiken-verify-cancel.pid ] && kill -0 $(cat /tmp/chiken-verify-cancel.pid) 2>/dev/null; then exit 1; fi; rm -f /tmp/chiken-verify-cancel.pid'");
+    results.push(createResult(agent.name || agent.id, "command", "cancel_process_cleanup", processCheck.ok, {
+      reason: processCheck.ok ? "" : safeOutput(processCheck.output)
+    }));
+  }
+
+  const timeoutStart = await api(`${baseUrl}/api/agents/${agent.id}/exec`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      command: "sh -c 'echo $$ >/tmp/chiken-verify-timeout.pid; sleep 60'",
+      timeoutMs: 1500
+    })
+  });
+  results.push(createResult(agent.name || agent.id, "command", "timeout_start", timeoutStart.ok && Boolean(timeoutStart.body?.commandId), {
+    reason: timeoutStart.ok ? "" : cleanText(timeoutStart.body?.error || timeoutStart.body)
+  }));
+  if (timeoutStart.ok && timeoutStart.body?.commandId) {
+    const timedOut = await waitFor(async () => {
+      const response = await api(`${baseUrl}/api/command-runs`, token);
+      const run = Array.isArray(response.body) ? response.body.find((item) => item.id === timeoutStart.body.commandId) : null;
+      return { ok: response.ok && run?.status === "timeout", run };
+    }, { timeoutMs: 15000, intervalMs: 500 });
+    results.push(createResult(agent.name || agent.id, "command", "timeout_state", Boolean(timedOut?.ok), {
+      reason: timedOut?.ok ? "" : cleanText(timedOut?.run?.status || "timeout state not observed")
+    }));
+    const processCheck = await sshExec(server, agent.name || agent.id, "docker exec chiken-agent sh -lc 'if [ -f /tmp/chiken-verify-timeout.pid ] && kill -0 $(cat /tmp/chiken-verify-timeout.pid) 2>/dev/null; then exit 1; fi; rm -f /tmp/chiken-verify-timeout.pid'");
+    results.push(createResult(agent.name || agent.id, "command", "timeout_process_cleanup", processCheck.ok, {
+      reason: processCheck.ok ? "" : safeOutput(processCheck.output)
+    }));
+  }
+  return results;
+}
+
 async function verifyAudit(baseUrl, token, expectedActions = []) {
   const auditResponse = await api(`${baseUrl}/api/audit?limit=120`, token);
   const rows = Array.isArray(auditResponse.body) ? auditResponse.body : [];
@@ -1008,6 +1068,7 @@ async function main() {
   }
 
   summary.checks.push(await verifyBatchCommand(baseUrl, apiToken, agentRows));
+  if (mainAgent && servers[0]) summary.checks.push(...(await verifyCommandReliability(baseUrl, apiToken, mainAgent, servers[0])));
   summary.checks.push(...(await verifySubscription(baseUrl, apiToken)));
 
   if (mainAgent && checkerAgent) {

@@ -29,6 +29,9 @@ const probeIntervalMs = Math.max(3000, Math.min(30000, (Number(process.env.CHIKE
 const agentVersion = process.env.CHIKEN_AGENT_VERSION || (() => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "../package.json"), "utf8")).version; } catch { return "0.0.0"; } })();
 const collectProbe = createProbeCollector({ hostRoot });
 const proxyCheckStateDir = path.join(stateDir, "proxy-check");
+const activeProcesses = new Map();
+const recentCommandIds = new Map();
+const recentCommandLimit = 500;
 
 fs.mkdirSync(stateDir, { recursive: true });
 fs.mkdirSync(forwardDir, { recursive: true });
@@ -53,10 +56,52 @@ function run(cmd, args = [], options = {}) {
   });
 }
 
+function terminateProcessTree(child, signal = "SIGTERM") {
+  if (!child?.pid || child.exitCode !== null) return false;
+  try {
+    if (process.platform === "win32") child.kill(signal);
+    else process.kill(-child.pid, signal);
+    return true;
+  } catch {
+    try {
+      child.kill(signal);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 function runShell(command, options = {}) {
   return new Promise((resolve) => {
-    exec(command, { timeout: 30000, maxBuffer: 4 * 1024 * 1024, ...options }, (error, stdout, stderr) => {
-      resolve({ ok: !error, output: `${stdout || ""}${stderr || ""}`.trim(), code: error?.code || 0 });
+    const { commandId = "", timeout = 30000, ...execOptions } = options;
+    let timedOut = false;
+    const child = exec(command, {
+      timeout: commandId ? 0 : timeout,
+      maxBuffer: 4 * 1024 * 1024,
+      detached: Boolean(commandId) && process.platform !== "win32",
+      ...execOptions
+    }, (error, stdout, stderr) => {
+      clearTimeout(timeoutTimer);
+      if (commandId) activeProcesses.delete(commandId);
+      resolve({
+        ok: !error && !timedOut,
+        output: timedOut ? `command timeout after ${timeout}ms` : `${stdout || ""}${stderr || ""}`.trim(),
+        code: timedOut ? "timeout" : error?.code || 0,
+        timeout: timedOut
+      });
+    });
+    if (commandId) activeProcesses.set(commandId, child);
+    const timeoutTimer = commandId && timeout > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          terminateProcessTree(child, "SIGTERM");
+          setTimeout(() => terminateProcessTree(child, "SIGKILL"), 1000).unref();
+        }, timeout)
+      : null;
+    if (timeoutTimer) timeoutTimer.unref();
+    child.once("exit", () => {
+      if (timedOut && commandId) activeProcesses.delete(commandId);
     });
   });
 }
@@ -954,7 +999,7 @@ async function handle(ws, msg) {
   if (msg.command === "remove_forward_rule") return { commandId: msg.id, ...(await removeForwardRule(msg.payload.rule || msg.payload)) };
   if (msg.command === "forward_image_probe") return { commandId: msg.id, ...(await probeForwardImage(msg.payload.engine)) };
   if (msg.command === "proxy_check") return { commandId: msg.id, ...(await runProxyCheck(msg.payload || {})) };
-  if (msg.command === "exec") return { commandId: msg.id, ...(await runShell(msg.payload.command)) };
+  if (msg.command === "exec") return { commandId: msg.id, ...(await runShell(msg.payload.command, { commandId: msg.id, timeout: Number(msg.payload?.timeoutMs || 30000) || 30000 })) };
   if (msg.command === "uninstall_agent") {
     if (serviceMode === "docker") {
       const removeSingbox = msg.payload?.removeSingbox ? "docker rm -f chiken-singbox || true;" : "";
@@ -974,7 +1019,20 @@ async function handle(ws, msg) {
     if (msg.payload.type === "logs") return { commandId: msg.id, ...(await tailLogs(msg.payload.lines)) };
     if (msg.payload.type === "config") return { commandId: msg.id, ...(await validateConfig()) };
   }
-  if (msg.command === "cancel") return { commandId: msg.id, ok: true, output: `acknowledged cancel for ${msg.payload?.commandId || "unknown"}`, cancelled: true };
+  if (msg.command === "cancel") {
+    const targetId = cleanText(msg.payload?.commandId);
+    const child = activeProcesses.get(targetId);
+    if (!child) return { commandId: msg.id, ok: false, output: `command ${targetId || "unknown"} is not running`, cancelled: false };
+    const terminated = terminateProcessTree(child, "SIGTERM");
+    if (terminated) setTimeout(() => terminateProcessTree(child, "SIGKILL"), 1000).unref();
+    return {
+      commandId: msg.id,
+      ok: terminated,
+      output: terminated ? `terminated command ${targetId}` : `failed to terminate command ${targetId}`,
+      cancelled: terminated,
+      targetCommandId: targetId
+    };
+  }
   if (msg.command === "ping") return { commandId: msg.id, ok: true, output: "pong", version: agentVersion };
   return { commandId: msg.id, ok: false, output: "unknown command" };
 }
@@ -1049,7 +1107,7 @@ async function connect() {
     if (!msg || !msg.command || typeof msg.command !== "string") return;
     if (!msg.id || typeof msg.id !== "string") return;
 
-    if (runningCommands.has(msg.id)) {
+    if (runningCommands.has(msg.id) || recentCommandIds.has(msg.id)) {
       ws.send(JSON.stringify({ type: "command_result", commandId: msg.id, ok: false, output: "duplicate command id" }));
       return;
     }
@@ -1063,6 +1121,10 @@ async function connect() {
       ws.send(JSON.stringify({ type: "command_result", commandId: msg.id, ok: false, output: error.message }));
     } finally {
       runningCommands.delete(msg.id);
+      recentCommandIds.set(msg.id, Date.now());
+      while (recentCommandIds.size > recentCommandLimit) {
+        recentCommandIds.delete(recentCommandIds.keys().next().value);
+      }
     }
   });
 

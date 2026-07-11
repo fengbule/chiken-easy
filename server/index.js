@@ -114,6 +114,7 @@ const logStreams = new Map();
 const commandWaiters = new Map();
 const configCommandRefs = new Map();
 const forwardCommandRefs = new Map();
+const asyncCommandRefs = new Map();
 const browserSessions = new Map();
 const clients = new Map();
 let stateSaveTimer = null;
@@ -2650,6 +2651,52 @@ app.post("/api/agents/:id/commands/:commandId", (req, res) => {
   }
 });
 
+app.post("/api/agents/:id/exec", (req, res) => {
+  const command = cleanText(req.body?.command);
+  const timeoutMs = Math.max(1000, Math.min(300000, Number(req.body?.timeoutMs || 30000) || 30000));
+  if (!command) return res.status(400).json({ error: "command required" });
+  try {
+    const commandId = sendCommand(req.params.id, "exec", { command, timeoutMs });
+    const run = {
+      id: commandId,
+      commandId,
+      agentId: req.params.id,
+      command,
+      timeoutMs,
+      status: "running",
+      ok: false,
+      output: "",
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+    state.commandRuns ||= {};
+    state.commandRuns[commandId] = run;
+    asyncCommandRefs.set(commandId, { agentId: req.params.id });
+    scheduleStateSave();
+    audit("admin", "remote_command_start", req.params.id, { commandId, timeoutMs, command: command.slice(0, 120) });
+    res.status(202).json({ ok: true, commandId, status: run.status });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.post("/api/agents/:id/commands/:commandId/cancel", (req, res) => {
+  const targetCommandId = cleanText(req.params.commandId);
+  const run = state.commandRuns?.[targetCommandId];
+  if (!run || run.agentId !== req.params.id) return res.status(404).json({ error: "running command not found" });
+  if (run.status !== "running") return res.status(409).json({ error: `command is ${run.status}` });
+  try {
+    const cancelCommandId = sendCommand(req.params.id, "cancel", { commandId: targetCommandId });
+    run.status = "cancelling";
+    run.updatedAt = nowIso();
+    scheduleStateSave();
+    audit("admin", "remote_command_cancel", req.params.id, { commandId: targetCommandId, cancelCommandId });
+    res.status(202).json({ ok: true, commandId: targetCommandId, cancelCommandId, status: run.status });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
 app.post("/api/agents/:id/ssh", async (req, res) => {
   const command = cleanText(req.body?.command);
   if (!command) return res.status(400).json({ error: "command required" });
@@ -3191,6 +3238,26 @@ wss.on("connection", (ws) => {
         }
         scheduleStateSave();
         forwardCommandRefs.delete(msg.commandId);
+      }
+
+      if (asyncCommandRefs.has(msg.commandId)) {
+        const run = state.commandRuns?.[msg.commandId];
+        if (run) {
+          const wasCancelling = run.status === "cancelling";
+          Object.assign(run, {
+            status: wasCancelling ? "cancelled" : msg.timeout ? "timeout" : msg.ok ? "completed" : "failed",
+            ok: Boolean(msg.ok) && !wasCancelling,
+            cancelled: wasCancelling,
+            timeout: Boolean(msg.timeout),
+            output: sanitizeSensitiveText(String(msg.output || "")).slice(0, 20000),
+            updatedAt: nowIso(),
+            completedAt: nowIso()
+          });
+          const rows = Object.values(state.commandRuns || {}).sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
+          for (const stale of rows.slice(500)) delete state.commandRuns[stale.id];
+          scheduleStateSave();
+        }
+        asyncCommandRefs.delete(msg.commandId);
       }
 
       if (msg.command === "proxy_check" && msg.nodeId) {
