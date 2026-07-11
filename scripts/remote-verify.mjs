@@ -91,6 +91,7 @@ function sshBannerCheck(server, timeoutMs = 8000) {
     socket.setTimeout(timeoutMs);
     socket.once("timeout", () => finish(false, "ssh_handshake_failed"));
     socket.once("error", (error) => finish(false, cleanText(error.message) || "unknown"));
+    socket.once("close", () => finish(false, "ssh_handshake_closed"));
     socket.on("data", (chunk) => {
       banner += chunk.toString();
       if (banner.includes("\n")) finish(true, "", { banner: banner.split(/\r?\n/)[0] });
