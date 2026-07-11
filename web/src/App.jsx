@@ -44,11 +44,19 @@ import {
   randPassword,
   randPath,
   randPort,
-  randShortId,
-  renderMarkdownHtml
+  randShortId
 } from "./utils";
 import Layout from "./components/Layout";
 import StatusBadge, { StatusDot } from "./components/StatusBadge";
+import ConsolePage from "./pages/ConsolePage";
+import Dashboard from "./pages/Dashboard";
+import MonitorPage from "./pages/MonitorPage";
+import NodePoolPage from "./pages/NodePoolPage";
+import MemosPage from "./pages/MemosPage";
+import WorkspacePage from "./pages/WorkspacePage";
+import SettingsPage from "./pages/SettingsPage";
+import Audit from "./pages/Audit";
+import Tutorial from "./pages/Tutorial";
 
 const URL_TOKEN_PARAM = "token";
 
@@ -57,25 +65,25 @@ function isPanelApiToken(token) {
 }
 
 const nav = [
-  ["dashboard", Activity, "仪表盘"],
-  ["servers", Monitor, "服务器"],
-  ["console", PlugZap, "终端 / SFTP"],
-  ["nodes", Code2, "节点配置"],
-  ["node-pool", Code2, "节点池"],
-  ["subscriptions", Link2, "订阅聚合"],
-  ["forward", PlugZap, "端口转发"],
-  ["monitor", Activity, "监控告警"],
-  ["workspace", KeyRound, "资产 / 凭据 / 脚本"],
-  ["memos", ClipboardList, "Memos / 文件"],
-  ["tokens", KeyRound, "API 令牌"],
-  ["audit", ClipboardList, "审计日志"],
-  ["settings", Settings, "设置"]
+  ["dashboard", Activity, "浠〃鐩?],
+  ["servers", Monitor, "鏈嶅姟鍣?],
+  ["console", PlugZap, "缁堢 / SFTP"],
+  ["nodes", Code2, "鑺傜偣閰嶇疆"],
+  ["node-pool", Code2, "鑺傜偣姹?],
+  ["subscriptions", Link2, "璁㈤槄鑱氬悎"],
+  ["forward", PlugZap, "绔彛杞彂"],
+  ["monitor", Activity, "鐩戞帶鍛婅"],
+  ["workspace", KeyRound, "璧勪骇 / 鍑嵁 / 鑴氭湰"],
+  ["memos", ClipboardList, "Memos / 鏂囦欢"],
+  ["tokens", KeyRound, "API 浠ょ墝"],
+  ["audit", ClipboardList, "瀹¤鏃ュ織"],
+  ["settings", Settings, "璁剧疆"]
 ];
 
 const protocolDefinitions = {
   "vmess-ws": {
     name: "VMess + WebSocket",
-    note: "适合走 WebSocket 场景，切换到这个协议时会自动生成新的 UUID 和路径。",
+    note: "閫傚悎璧?WebSocket 鍦烘櫙锛屽垏鎹㈠埌杩欎釜鍗忚鏃朵細鑷姩鐢熸垚鏂扮殑 UUID 鍜岃矾寰勩€?,
     defaults: () => ({
       protocol: "vmess-ws",
       port: 20080,
@@ -84,15 +92,15 @@ const protocolDefinitions = {
       path: randPath()
     }),
     fields: [
-      { key: "port", label: "监听端口", type: "number", random: () => randPort() },
+      { key: "port", label: "鐩戝惉绔彛", type: "number", random: () => randPort() },
       { key: "uuid", label: "UUID", random: () => newUuid() },
-      { key: "path", label: "WS 路径", random: () => randPath() },
-      { key: "listen", label: "监听地址", placeholder: "::" }
+      { key: "path", label: "WS 璺緞", random: () => randPath() },
+      { key: "listen", label: "鐩戝惉鍦板潃", placeholder: "::" }
     ]
   },
   "vless-reality": {
     name: "VLESS + Reality",
-    note: "Reality 需要服务端私钥和 short_id。切换协议时会自动刷新这些默认字段，但请替换成你实际可用的密钥。",
+    note: "Reality 闇€瑕佹湇鍔＄绉侀挜鍜?short_id銆傚垏鎹㈠崗璁椂浼氳嚜鍔ㄥ埛鏂拌繖浜涢粯璁ゅ瓧娈碉紝浣嗚鏇挎崲鎴愪綘瀹為檯鍙敤鐨勫瘑閽ャ€?,
     defaults: () => ({
       protocol: "vless-reality",
       port: 443,
@@ -107,21 +115,21 @@ const protocolDefinitions = {
       clientFingerprint: "chrome"
     }),
     fields: [
-      { key: "port", label: "监听端口", type: "number", random: () => 443 },
+      { key: "port", label: "鐩戝惉绔彛", type: "number", random: () => 443 },
       { key: "uuid", label: "UUID", random: () => newUuid() },
-      { key: "serverName", label: "SNI / 握手域名", random: () => ["www.cloudflare.com", "www.microsoft.com", "www.apple.com", "www.yahoo.com"][Math.floor(Math.random() * 4)] },
-      { key: "serverPort", label: "握手端口", type: "number" },
-      { key: "privateKey", label: "Reality 私钥" },
-      { key: "publicKey", label: "Reality 公钥" },
+      { key: "serverName", label: "SNI / 鎻℃墜鍩熷悕", random: () => ["www.cloudflare.com", "www.microsoft.com", "www.apple.com", "www.yahoo.com"][Math.floor(Math.random() * 4)] },
+      { key: "serverPort", label: "鎻℃墜绔彛", type: "number" },
+      { key: "privateKey", label: "Reality 绉侀挜" },
+      { key: "publicKey", label: "Reality 鍏挜" },
       { key: "shortId", label: "Reality short_id", random: () => randShortId() },
       { key: "flow", label: "Flow" },
-      { key: "clientFingerprint", label: "客户端指纹" },
-      { key: "listen", label: "监听地址", placeholder: "::" }
+      { key: "clientFingerprint", label: "瀹㈡埛绔寚绾? },
+      { key: "listen", label: "鐩戝惉鍦板潃", placeholder: "::" }
     ]
   },
   trojan: {
     name: "Trojan + TLS",
-    note: "面板下发时会自动为当前 inbound 生成自签名证书。测试客户端可先用 insecure 模式验证联通性。",
+    note: "闈㈡澘涓嬪彂鏃朵細鑷姩涓哄綋鍓?inbound 鐢熸垚鑷鍚嶈瘉涔︺€傛祴璇曞鎴风鍙厛鐢?insecure 妯″紡楠岃瘉鑱旈€氭€с€?,
     defaults: () => ({
       protocol: "trojan",
       port: 443,
@@ -130,15 +138,15 @@ const protocolDefinitions = {
       serverName: "www.cloudflare.com"
     }),
     fields: [
-      { key: "port", label: "监听端口", type: "number", random: () => 443 },
-      { key: "password", label: "密码", random: () => randPassword() },
-      { key: "serverName", label: "TLS 域名", random: () => ["www.cloudflare.com", "www.microsoft.com", "www.apple.com", "www.yahoo.com"][Math.floor(Math.random() * 4)] },
-      { key: "listen", label: "监听地址", placeholder: "::" }
+      { key: "port", label: "鐩戝惉绔彛", type: "number", random: () => 443 },
+      { key: "password", label: "瀵嗙爜", random: () => randPassword() },
+      { key: "serverName", label: "TLS 鍩熷悕", random: () => ["www.cloudflare.com", "www.microsoft.com", "www.apple.com", "www.yahoo.com"][Math.floor(Math.random() * 4)] },
+      { key: "listen", label: "鐩戝惉鍦板潃", placeholder: "::" }
     ]
   },
   hysteria2: {
     name: "Hysteria2",
-    note: "同样会自动补齐自签名证书，并提供上下行速率字段，便于直接从面板完成可用配置。",
+    note: "鍚屾牱浼氳嚜鍔ㄨˉ榻愯嚜绛惧悕璇佷功锛屽苟鎻愪緵涓婁笅琛岄€熺巼瀛楁锛屼究浜庣洿鎺ヤ粠闈㈡澘瀹屾垚鍙敤閰嶇疆銆?,
     defaults: () => ({
       protocol: "hysteria2",
       port: 8443,
@@ -149,17 +157,17 @@ const protocolDefinitions = {
       downMbps: 100
     }),
     fields: [
-      { key: "port", label: "监听端口", type: "number", random: () => randPort() },
-      { key: "password", label: "密码", random: () => randPassword() },
-      { key: "serverName", label: "TLS 域名", random: () => ["www.cloudflare.com", "www.microsoft.com", "www.apple.com", "www.yahoo.com"][Math.floor(Math.random() * 4)] },
-      { key: "upMbps", label: "上行 Mbps", type: "number" },
-      { key: "downMbps", label: "下行 Mbps", type: "number" },
-      { key: "listen", label: "监听地址", placeholder: "::" }
+      { key: "port", label: "鐩戝惉绔彛", type: "number", random: () => randPort() },
+      { key: "password", label: "瀵嗙爜", random: () => randPassword() },
+      { key: "serverName", label: "TLS 鍩熷悕", random: () => ["www.cloudflare.com", "www.microsoft.com", "www.apple.com", "www.yahoo.com"][Math.floor(Math.random() * 4)] },
+      { key: "upMbps", label: "涓婅 Mbps", type: "number" },
+      { key: "downMbps", label: "涓嬭 Mbps", type: "number" },
+      { key: "listen", label: "鐩戝惉鍦板潃", placeholder: "::" }
     ]
   },
   shadowsocks: {
     name: "Shadowsocks",
-    note: "默认方法改成了更通用的 aes-256-gcm，避免 2022 系列密码长度不匹配导致的直接不可用。",
+    note: "榛樿鏂规硶鏀规垚浜嗘洿閫氱敤鐨?aes-256-gcm锛岄伩鍏?2022 绯诲垪瀵嗙爜闀垮害涓嶅尮閰嶅鑷寸殑鐩存帴涓嶅彲鐢ㄣ€?,
     defaults: () => ({
       protocol: "shadowsocks",
       port: 8388,
@@ -168,10 +176,10 @@ const protocolDefinitions = {
       password: randPassword()
     }),
     fields: [
-      { key: "port", label: "监听端口", type: "number", random: () => randPort() },
+      { key: "port", label: "鐩戝惉绔彛", type: "number", random: () => randPort() },
       {
         key: "method",
-        label: "加密方法",
+        label: "鍔犲瘑鏂规硶",
         type: "select",
         options: [
           ["aes-256-gcm", "aes-256-gcm"],
@@ -179,21 +187,21 @@ const protocolDefinitions = {
           ["2022-blake3-aes-128-gcm", "2022-blake3-aes-128-gcm"]
         ]
       },
-      { key: "password", label: "密码", random: () => randPassword() },
-      { key: "listen", label: "监听地址", placeholder: "::" }
+      { key: "password", label: "瀵嗙爜", random: () => randPassword() },
+      { key: "listen", label: "鐩戝惉鍦板潃", placeholder: "::" }
     ]
   },
   mixed: {
     name: "Mixed HTTP/SOCKS",
-    note: "这是最简单的本地代理入口，适合先做基础联通测试。",
+    note: "杩欐槸鏈€绠€鍗曠殑鏈湴浠ｇ悊鍏ュ彛锛岄€傚悎鍏堝仛鍩虹鑱旈€氭祴璇曘€?,
     defaults: () => ({
       protocol: "mixed",
       port: 2080,
       listen: "::"
     }),
     fields: [
-      { key: "port", label: "监听端口", type: "number", random: () => randPort() },
-      { key: "listen", label: "监听地址", placeholder: "::" }
+      { key: "port", label: "鐩戝惉绔彛", type: "number", random: () => randPort() },
+      { key: "listen", label: "鐩戝惉鍦板潃", placeholder: "::" }
     ]
   }
 };
@@ -260,7 +268,7 @@ function defaultSubscriptionForm() {
 function defaultSubscriptionImport() {
   return {
     id: newUuid(),
-    name: "外部原始内容",
+    name: "澶栭儴鍘熷鍐呭",
     content: ""
   };
 }
@@ -310,7 +318,7 @@ function Field({ label, value, onChange, random, type = "text", placeholder = ""
       <div className="input-row">
         {control}
         {random ? (
-          <button type="button" className="icon-btn" onClick={random} title="随机生成">
+          <button type="button" className="icon-btn" onClick={random} title="闅忔満鐢熸垚">
             <Shuffle size={15} />
           </button>
         ) : null}
@@ -325,12 +333,12 @@ function AccessTokenBar({ tokenDraft, setTokenDraft, saveToken, clearToken, hasT
       <input value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="API Token (ck_xxx)" />
       <button className="primary" onClick={saveToken}>
         <Save size={15} />
-        使用令牌
+        浣跨敤浠ょ墝
       </button>
       {hasToken ? (
         <button onClick={clearToken}>
           <Unplug size={15} />
-          清除
+          娓呴櫎
         </button>
       ) : null}
     </div>
@@ -342,21 +350,21 @@ function AdminAuthGate({ tokenDraft, setTokenDraft, saveToken, loginDraft, setLo
     <div className="login-shell">
       <div className="login-card">
         <p className="eyebrow">ChikenEasy Admin</p>
-        <h1>后台需要登录</h1>
-        <p className="muted">请使用管理员账号登录，或输入 ck_ 开头的 API Token。sess_ 是浏览器会话 ID，不需要手动填入。</p>
+        <h1>鍚庡彴闇€瑕佺櫥褰?/h1>
+        <p className="muted">璇蜂娇鐢ㄧ鐞嗗憳璐﹀彿鐧诲綍锛屾垨杈撳叆 ck_ 寮€澶寸殑 API Token銆俿ess_ 鏄祻瑙堝櫒浼氳瘽 ID锛屼笉闇€瑕佹墜鍔ㄥ～鍏ャ€?/p>
         <div className="form-grid">
-          <Field label="用户名" value={loginDraft.username} onChange={(value) => setLoginDraft((current) => ({ ...current, username: value }))} placeholder="admin" />
-          <Field label="密码" type="password" value={loginDraft.password} onChange={(value) => setLoginDraft((current) => ({ ...current, password: value }))} placeholder="管理员密码" />
+          <Field label="鐢ㄦ埛鍚? value={loginDraft.username} onChange={(value) => setLoginDraft((current) => ({ ...current, username: value }))} placeholder="admin" />
+          <Field label="瀵嗙爜" type="password" value={loginDraft.password} onChange={(value) => setLoginDraft((current) => ({ ...current, password: value }))} placeholder="绠＄悊鍛樺瘑鐮? />
         </div>
         <div className="actions">
-          <button className="primary" onClick={loginAdmin}>登录后台</button>
+          <button className="primary" onClick={loginAdmin}>鐧诲綍鍚庡彴</button>
         </div>
         <div className="login-divider">or API Token</div>
         <div className="form-grid">
           <Field label="API Token" value={tokenDraft} onChange={setTokenDraft} placeholder="ck_xxx" />
         </div>
         <div className="actions">
-          <button className="primary" onClick={saveToken}>使用令牌</button>
+          <button className="primary" onClick={saveToken}>浣跨敤浠ょ墝</button>
         </div>
         {message ? <p className="panel-message">{message}</p> : null}
       </div>
@@ -364,10 +372,10 @@ function AdminAuthGate({ tokenDraft, setTokenDraft, saveToken, loginDraft, setLo
   );
 }
 
-function AgentEmptyState({ title = "没有可选 Agent" }) {
+function AgentEmptyState({ title = "娌℃湁鍙€?Agent" }) {
   return (
     <Panel title={title}>
-      <div className="empty">没有拿到 Agent 列表。请确认后台已登录、右上角不要填写 sess_；如使用 API Token，请填 ck_ 开头的令牌。</div>
+      <div className="empty">娌℃湁鎷垮埌 Agent 鍒楄〃銆傝纭鍚庡彴宸茬櫥褰曘€佸彸涓婅涓嶈濉啓 sess_锛涘浣跨敤 API Token锛岃濉?ck_ 寮€澶寸殑浠ょ墝銆?/div>
     </Panel>
   );
 }
@@ -429,18 +437,18 @@ function TrendChart({ points, color = "#348dff" }) {
 }
 
 function ProbeOverview({ metrics }) {
-  if (!metrics) return <p className="panel-message">探针正在等待首个心跳，通常几秒内会刷新。</p>;
+  if (!metrics) return <p className="panel-message">鎺㈤拡姝ｅ湪绛夊緟棣栦釜蹇冭烦锛岄€氬父鍑犵鍐呬細鍒锋柊銆?/p>;
 
   return (
     <div className="probe-grid">
       <MetricPill label="CPU" value={formatPercent(metrics.cpu?.usage)} accent="cpu" />
-      <MetricPill label="内存" value={`${formatPercent(metrics.memory?.usage)} / ${formatBytes(metrics.memory?.used)} / ${formatBytes(metrics.memory?.total)}`} accent="memory" />
-      <MetricPill label="磁盘" value={`${formatPercent(metrics.disk?.usage)} / ${formatBytes(metrics.disk?.used)} / ${formatBytes(metrics.disk?.total)}`} accent="disk" />
-      <MetricPill label="网络" value={`↓ ${formatSpeed(metrics.network?.rxRate)}  ↑ ${formatSpeed(metrics.network?.txRate)}`} accent="network" />
-      <MetricPill label="累计流量" value={`↓ ${formatBytes(metrics.network?.rxTotal)}  ↑ ${formatBytes(metrics.network?.txTotal)}`} />
-      <MetricPill label="运行时长" value={formatUptime(metrics.uptimeSec)} />
-      <MetricPill label="负载" value={`${metrics.cpu?.load1 || 0} / ${metrics.cpu?.load5 || 0} / ${metrics.cpu?.load15 || 0}`} />
-      <MetricPill label="接口" value={(metrics.network?.interfaces || []).join(", ") || "-"} />
+      <MetricPill label="鍐呭瓨" value={`${formatPercent(metrics.memory?.usage)} / ${formatBytes(metrics.memory?.used)} / ${formatBytes(metrics.memory?.total)}`} accent="memory" />
+      <MetricPill label="纾佺洏" value={`${formatPercent(metrics.disk?.usage)} / ${formatBytes(metrics.disk?.used)} / ${formatBytes(metrics.disk?.total)}`} accent="disk" />
+      <MetricPill label="缃戠粶" value={`鈫?${formatSpeed(metrics.network?.rxRate)}  鈫?${formatSpeed(metrics.network?.txRate)}`} accent="network" />
+      <MetricPill label="绱娴侀噺" value={`鈫?${formatBytes(metrics.network?.rxTotal)}  鈫?${formatBytes(metrics.network?.txTotal)}`} />
+      <MetricPill label="杩愯鏃堕暱" value={formatUptime(metrics.uptimeSec)} />
+      <MetricPill label="璐熻浇" value={`${metrics.cpu?.load1 || 0} / ${metrics.cpu?.load5 || 0} / ${metrics.cpu?.load15 || 0}`} />
+      <MetricPill label="鎺ュ彛" value={(metrics.network?.interfaces || []).join(", ") || "-"} />
     </div>
   );
 }
@@ -457,12 +465,12 @@ function ProbeTrends({ history }) {
   const latest = samples.at(-1) || {};
   const rows = [
     ["CPU", samples.map((item) => item.cpu ?? item.cpuUsage), `${formatPercent(latest.cpu ?? latest.cpuUsage ?? 0)}`],
-    ["内存", samples.map((item) => item.memory ?? item.memoryUsage), `${formatPercent(latest.memory ?? latest.memoryUsage ?? 0)}`],
-    ["下行", samples.map((item) => item.rxRate ?? item.rxSpeed), formatSpeed(latest.rxRate ?? latest.rxSpeed ?? 0)],
-    ["上行", samples.map((item) => item.txRate ?? item.txSpeed), formatSpeed(latest.txRate ?? latest.txSpeed ?? 0)]
+    ["鍐呭瓨", samples.map((item) => item.memory ?? item.memoryUsage), `${formatPercent(latest.memory ?? latest.memoryUsage ?? 0)}`],
+    ["涓嬭", samples.map((item) => item.rxRate ?? item.rxSpeed), formatSpeed(latest.rxRate ?? latest.rxSpeed ?? 0)],
+    ["涓婅", samples.map((item) => item.txRate ?? item.txSpeed), formatSpeed(latest.txRate ?? latest.txSpeed ?? 0)]
   ];
 
-  if (!samples.length) return <p className="panel-message">暂时还没有足够的实时样本用于绘图。</p>;
+  if (!samples.length) return <p className="panel-message">鏆傛椂杩樻病鏈夎冻澶熺殑瀹炴椂鏍锋湰鐢ㄤ簬缁樺浘銆?/p>;
 
   return (
     <div className="trend-grid">
@@ -480,7 +488,7 @@ function ProbeTrends({ history }) {
 }
 
 function AgentMetricSummary({ metrics }) {
-  if (!metrics) return <span className="muted">等待探针</span>;
+  if (!metrics) return <span className="muted">绛夊緟鎺㈤拡</span>;
   return (
     <div className="metric-inline">
       <span>CPU {formatPercent(metrics.cpu?.usage)}</span>
@@ -491,11 +499,11 @@ function AgentMetricSummary({ metrics }) {
 }
 
 function AgentTrafficSummary({ metrics }) {
-  if (!metrics) return <span className="muted">等待探针</span>;
+  if (!metrics) return <span className="muted">绛夊緟鎺㈤拡</span>;
   return (
     <div className="metric-inline">
-      <span>↓ {formatSpeed(metrics.network?.rxRate)}</span>
-      <span>↑ {formatSpeed(metrics.network?.txRate)}</span>
+      <span>鈫?{formatSpeed(metrics.network?.rxRate)}</span>
+      <span>鈫?{formatSpeed(metrics.network?.txRate)}</span>
     </div>
   );
 }
@@ -507,9 +515,9 @@ function formatPublicUptime(seconds) {
   const hours = Math.floor((total % 86400) / 3600);
   const minutes = Math.floor((total % 3600) / 60);
   const sec = total % 60;
-  if (days) return `${days} 天 ${hours} 时 ${minutes} 分 ${sec} 秒`;
-  if (hours) return `${hours} 时 ${minutes} 分 ${sec} 秒`;
-  return `${minutes} 分 ${sec} 秒`;
+  if (days) return `${days} 澶?${hours} 鏃?${minutes} 鍒?${sec} 绉抈;
+  if (hours) return `${hours} 鏃?${minutes} 鍒?${sec} 绉抈;
+  return `${minutes} 鍒?${sec} 绉抈;
 }
 
 function usageTone(value) {
@@ -542,28 +550,28 @@ function PublicProbeCard({ probe }) {
     <article className="public-probe-card">
       <div className="public-probe-head">
         <div className="public-probe-title">
-          <strong><span className="probe-flag">{probe.flag || "🌐"}</span>{probe.name}</strong>
+          <strong><span className="probe-flag">{probe.flag || "馃寪"}</span>{probe.name}</strong>
           <span>{probe.price ? <em>{probe.price}</em> : null}{probe.expireAt ? <em>{probe.expireAt}</em> : null}</span>
         </div>
-        <StatusBadge ok={probe.online} text={probe.online ? "在线" : "离线"} />
+        <StatusBadge ok={probe.online} text={probe.online ? "鍦ㄧ嚎" : "绂荤嚎"} />
       </div>
       <div className="komari-os-row">
         <span>OS</span>
         <strong>{osText}</strong>
       </div>
       <UsageLine label="CPU" percent={metrics.cpuUsage} detail={`${metrics.cpuCores || 0} cores / load ${metrics.load1 ?? 0}`} />
-      <UsageLine label="内存" percent={metrics.memoryUsage} detail={`${formatBytes(metrics.memoryUsed)} / ${formatBytes(metrics.memoryTotal)}`} />
-      <UsageLine label="磁盘" percent={metrics.diskUsage} detail={`${formatBytes(metrics.diskUsed)} / ${formatBytes(metrics.diskTotal)}`} />
+      <UsageLine label="鍐呭瓨" percent={metrics.memoryUsage} detail={`${formatBytes(metrics.memoryUsed)} / ${formatBytes(metrics.memoryTotal)}`} />
+      <UsageLine label="纾佺洏" percent={metrics.diskUsage} detail={`${formatBytes(metrics.diskUsed)} / ${formatBytes(metrics.diskTotal)}`} />
       <div className="komari-kv-row">
-        <span>总流量</span>
-        <strong>↑ {formatBytes(metrics.txBytes)} ↓ {formatBytes(metrics.rxBytes)}</strong>
+        <span>鎬绘祦閲?/span>
+        <strong>鈫?{formatBytes(metrics.txBytes)} 鈫?{formatBytes(metrics.rxBytes)}</strong>
       </div>
       <div className="komari-kv-row">
-        <span>网络</span>
-        <strong>↑ {formatSpeed(metrics.txSpeed)} ↓ {formatSpeed(metrics.rxSpeed)}</strong>
+        <span>缃戠粶</span>
+        <strong>鈫?{formatSpeed(metrics.txSpeed)} 鈫?{formatSpeed(metrics.rxSpeed)}</strong>
       </div>
       <div className="komari-kv-row">
-        <span>运行时间</span>
+        <span>杩愯鏃堕棿</span>
         <strong>{formatPublicUptime(metrics.uptime)}</strong>
       </div>
     </article>
@@ -608,7 +616,7 @@ function PublicStatusPage() {
   }, []);
 
   const online = probes.filter((probe) => probe.online).length;
-  const groups = ["所有", ...Array.from(new Set(probes.map((probe) => probe.group).filter(Boolean)))];
+  const groups = ["鎵€鏈?, ...Array.from(new Set(probes.map((probe) => probe.group).filter(Boolean)))];
   const filteredProbes = probes.filter((probe) =>
     [probe.name, probe.group, probe.region, probe.os, probe.arch, ...(probe.tags || [])].join(" ").toLowerCase().includes(query.toLowerCase())
   );
@@ -621,29 +629,29 @@ function PublicStatusPage() {
           <span className="public-brand-mark">CE</span>
           <div>
             <h1>Chiken Easy</h1>
-            <p>节点观测台 · Agent Fleet Status</p>
+            <p>鑺傜偣瑙傛祴鍙?路 Agent Fleet Status</p>
           </div>
         </div>
         <div className="public-actions">
-          <a className="admin-link" href="/admin">后台</a>
+          <a className="admin-link" href="/admin">鍚庡彴</a>
         </div>
       </div>
 
       <div className="public-stats">
-        <Card label="当前时间" value={nowText} />
-        <Card label="当前在线" value={`${summary?.online ?? online} / ${summary?.total ?? probes.length}`} green />
-        <Card label="点亮地区" value={summary?.regions ?? 0} blue />
-        <Card label="流量概览" value={`↑ ${formatBytes(summary?.totalTraffic || 0)}`} />
-        <Card label="网络速率" value={`↑ ${formatSpeed(summary?.totalTxSpeed || 0)} / ↓ ${formatSpeed(summary?.totalRxSpeed || 0)}`} />
+        <Card label="褰撳墠鏃堕棿" value={nowText} />
+        <Card label="褰撳墠鍦ㄧ嚎" value={`${summary?.online ?? online} / ${summary?.total ?? probes.length}`} green />
+        <Card label="鐐逛寒鍦板尯" value={summary?.regions ?? 0} blue />
+        <Card label="娴侀噺姒傝" value={`鈫?${formatBytes(summary?.totalTraffic || 0)}`} />
+        <Card label="缃戠粶閫熺巼" value={`鈫?${formatSpeed(summary?.totalTxSpeed || 0)} / 鈫?${formatSpeed(summary?.totalRxSpeed || 0)}`} />
       </div>
 
       <div className="public-filter">
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索节点名称、地区、系统..." />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="鎼滅储鑺傜偣鍚嶇О銆佸湴鍖恒€佺郴缁?.." />
         <div className="public-groups">
-          <span>分组</span>
+          <span>鍒嗙粍</span>
           {groups.slice(0, 6).map((group) => <button key={group}>{group}</button>)}
         </div>
-        <p>共 {probes.length} 个服务器，{online} 个在线</p>
+        <p>鍏?{probes.length} 涓湇鍔″櫒锛寋online} 涓湪绾?/p>
       </div>
 
       <div className="public-probe-grid">
@@ -651,7 +659,7 @@ function PublicStatusPage() {
       </div>
 
       <div className="public-events">
-        <h2>最近事件</h2>
+        <h2>鏈€杩戜簨浠?/h2>
         {events.length ? (
           events.slice(0, 8).map((event) => (
             <div className="public-event" key={event.id || `${event.agentId}-${event.updatedAt}`}>
@@ -661,7 +669,7 @@ function PublicStatusPage() {
             </div>
           ))
         ) : (
-          <div className="empty">暂无公开事件。</div>
+          <div className="empty">鏆傛棤鍏紑浜嬩欢銆?/div>
         )}
       </div>
       {message ? <p className="panel-message">{message}</p> : null}
@@ -669,35 +677,6 @@ function PublicStatusPage() {
   );
 }
 
-function Dashboard({ openAgent, openSsh }) {
-  const [data, setData] = useState(null);
-
-  useEffect(() => {
-    const load = () => api("/api/dashboard").then(setData).catch(() => {});
-    load();
-    const timer = setInterval(load, 5000);
-    return () => clearInterval(timer);
-  }, []);
-
-  if (!data) return <Panel title="Dashboard"><div className="empty">Loading dashboard data...</div></Panel>;
-
-  return (
-    <section>
-      <div className="stats">
-        <Card label="服务器总数" value={data.total} />
-        <Card label="在线" value={data.online} green />
-        <Card label="离线" value={data.offline} />
-        <Card label="sing-box 活跃" value={data.activeSingbox} blue />
-        <Card label="平均 CPU" value={formatPercent(data.averageCpu)} />
-        <Card label="总下行" value={formatSpeed(data.totalRxRate)} />
-        <Card label="总上行" value={formatSpeed(data.totalTxRate)} />
-      </div>
-      <Panel title="最近接入">
-        <AgentTable agents={data.recent} openAgent={openAgent} openSsh={openSsh} />
-      </Panel>
-    </section>
-  );
-}
 
 function TokenButton() {
   const [token, setToken] = useState("");
@@ -717,7 +696,7 @@ function TokenButton() {
     <div className="toolbar-inline">
       <button className="primary" onClick={create}>
         <Save size={16} />
-        生成接入 Token
+        鐢熸垚鎺ュ叆 Token
       </button>
       {token ? <code>{token}</code> : null}
       {error ? <span className="error-text">{error}</span> : null}
@@ -743,10 +722,10 @@ function Servers({ openAgent, openSsh }) {
   return (
     <section>
       <div className="toolbar">
-        <input placeholder="按名称 / 主机 / IP / 标签筛选" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <input placeholder="鎸夊悕绉?/ 涓绘満 / IP / 鏍囩绛涢€? value={query} onChange={(event) => setQuery(event.target.value)} />
         <TokenButton />
       </div>
-      <Panel title="服务器">
+      <Panel title="鏈嶅姟鍣?>
         <AgentTable agents={filtered} openAgent={openAgent} openSsh={openSsh} />
       </Panel>
     </section>
@@ -762,18 +741,18 @@ function AgentTable({ agents, openAgent, openSsh }) {
     <table>
       <thead>
         <tr>
-          <th>名称</th>
-          <th>主机</th>
+          <th>鍚嶇О</th>
+          <th>涓绘満</th>
           <th>IP</th>
-          <th>架构</th>
-          <th>在线</th>
+          <th>鏋舵瀯</th>
+          <th>鍦ㄧ嚎</th>
           <th>sing-box</th>
-          <th>版本</th>
+          <th>鐗堟湰</th>
           <th>SSH</th>
-          <th>监控</th>
-          <th>网络</th>
-          <th>最近心跳</th>
-          <th>操作</th>
+          <th>鐩戞帶</th>
+          <th>缃戠粶</th>
+          <th>鏈€杩戝績璺?/th>
+          <th>鎿嶄綔</th>
         </tr>
       </thead>
       <tbody>
@@ -792,7 +771,7 @@ function AgentTable({ agents, openAgent, openSsh }) {
               {agent.singboxStatus}
             </td>
             <td>{agent.singboxVersion}</td>
-            <td>{agent.sshConfigured ? `${agent.sshMode}@${agent.sshPort}` : "未配置"}</td>
+            <td>{agent.sshConfigured ? `${agent.sshMode}@${agent.sshPort}` : "鏈厤缃?}</td>
             <td>
               <AgentMetricSummary metrics={agent.metrics} />
             </td>
@@ -802,7 +781,7 @@ function AgentTable({ agents, openAgent, openSsh }) {
             <td>{agent.lastSeen || "-"}</td>
             <td className="actions-cell">
               <button className="link" onClick={() => openAgent(agent.id)}>
-                详情
+                璇︽儏
               </button>
               {openSsh ? (
                 <button className="link" onClick={() => openSsh(agent.id)}>
@@ -836,7 +815,7 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh, openConsole, ope
   };
 
   const uninstall = async () => {
-    if (!window.confirm("确认卸载这台机器上的 Agent 吗？卸载后它会离线，需要重新安装后才能接入。")) return;
+    if (!window.confirm("纭鍗歌浇杩欏彴鏈哄櫒涓婄殑 Agent 鍚楋紵鍗歌浇鍚庡畠浼氱绾匡紝闇€瑕侀噸鏂板畨瑁呭悗鎵嶈兘鎺ュ叆銆?)) return;
     const response = await api(`/api/agents/${id}/uninstall`, { method: "POST", body: JSON.stringify({ removeSingbox: false }) });
     setResult(JSON.stringify(response, null, 2));
   };
@@ -847,50 +826,50 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh, openConsole, ope
   return (
     <section>
       <div className="toolbar">
-        <button onClick={back}>返回</button>
+        <button onClick={back}>杩斿洖</button>
         <h1>
           {agent.name} <StatusDot on={agent.connected} />
           {agent.connected ? "online" : "offline"}
         </h1>
-        <button onClick={() => service("status")}>查询状态</button>
-        <button onClick={openConfig}>配置</button>
-        <button onClick={openLogs}>日志</button>
+        <button onClick={() => service("status")}>鏌ヨ鐘舵€?/button>
+        <button onClick={openConfig}>閰嶇疆</button>
+        <button onClick={openLogs}>鏃ュ織</button>
         <button onClick={openSsh}>SSH</button>
         <button onClick={openConsole}>SFTP</button>
-        <button onClick={openMemos}>关联笔记</button>
+        <button onClick={openMemos}>鍏宠仈绗旇</button>
         <button className="red-bg" onClick={uninstall}>
-          卸载 Agent
+          鍗歌浇 Agent
         </button>
       </div>
 
       <div className="grid2">
-        <Panel title="实时探针">
+        <Panel title="瀹炴椂鎺㈤拡">
           <ProbeOverview metrics={agent.metrics} />
         </Panel>
 
-        <Panel title="服务控制">
+        <Panel title="鏈嶅姟鎺у埗">
           <div className="actions">
             <button className="green-bg" onClick={() => service("start")}>
-              启动
+              鍚姩
             </button>
             <button className="blue-bg" onClick={() => service("restart")}>
-              重启
+              閲嶅惎
             </button>
             <button className="red-bg" onClick={() => service("stop")}>
-              停止
+              鍋滄
             </button>
-            <button onClick={() => service("status")}>刷新状态</button>
+            <button onClick={() => service("status")}>鍒锋柊鐘舵€?/button>
           </div>
           <pre>{result}</pre>
         </Panel>
       </div>
 
-      <Panel title="监控趋势">
+      <Panel title="鐩戞帶瓒嬪娍">
         <ProbeTrends history={agent.metricsHistory} />
       </Panel>
 
       <div className="grid2">
-        <Panel title="基本信息">
+        <Panel title="鍩烘湰淇℃伅">
           <dl>
             {infoEntries.map(([key, value]) => (
               <React.Fragment key={key}>
@@ -901,26 +880,26 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh, openConsole, ope
           </dl>
         </Panel>
 
-        <Panel title="探针摘要">
+        <Panel title="鎺㈤拡鎽樿">
           <div className="panel-stack">
             <p className="muted">CPU: {formatPercent(agent.metrics?.cpu?.usage)}</p>
-            <p className="muted">内存: {formatBytes(agent.metrics?.memory?.used)} / {formatBytes(agent.metrics?.memory?.total)}</p>
-            <p className="muted">磁盘: {formatBytes(agent.metrics?.disk?.used)} / {formatBytes(agent.metrics?.disk?.total)}</p>
-            <p className="muted">下行: {formatSpeed(agent.metrics?.network?.rxRate)}</p>
-            <p className="muted">上行: {formatSpeed(agent.metrics?.network?.txRate)}</p>
-            <p className="muted">累计流量: ↓ {formatBytes(agent.metrics?.network?.rxTotal)} / ↑ {formatBytes(agent.metrics?.network?.txTotal)}</p>
+            <p className="muted">鍐呭瓨: {formatBytes(agent.metrics?.memory?.used)} / {formatBytes(agent.metrics?.memory?.total)}</p>
+            <p className="muted">纾佺洏: {formatBytes(agent.metrics?.disk?.used)} / {formatBytes(agent.metrics?.disk?.total)}</p>
+            <p className="muted">涓嬭: {formatSpeed(agent.metrics?.network?.rxRate)}</p>
+            <p className="muted">涓婅: {formatSpeed(agent.metrics?.network?.txRate)}</p>
+            <p className="muted">绱娴侀噺: 鈫?{formatBytes(agent.metrics?.network?.rxTotal)} / 鈫?{formatBytes(agent.metrics?.network?.txTotal)}</p>
           </div>
         </Panel>
       </div>
 
-      <Panel title="关联笔记">
+      <Panel title="鍏宠仈绗旇">
         {agent.memos?.length ? (
           <table>
             <thead>
               <tr>
-                <th>标题</th>
-                <th>标签</th>
-                <th>更新时间</th>
+                <th>鏍囬</th>
+                <th>鏍囩</th>
+                <th>鏇存柊鏃堕棿</th>
               </tr>
             </thead>
             <tbody>
@@ -934,7 +913,7 @@ function AgentDetail({ id, back, openConfig, openLogs, openSsh, openConsole, ope
             </tbody>
           </table>
         ) : (
-          <div className="empty">这台服务器还没有关联备忘录。</div>
+          <div className="empty">杩欏彴鏈嶅姟鍣ㄨ繕娌℃湁鍏宠仈澶囧繕褰曘€?/div>
         )}
       </Panel>
     </section>
@@ -1008,7 +987,7 @@ function TerminalPanel({ agentId, agentName, mode, connectNonce, fallbackToAgent
         term.writeln("\r\n[connection closed]");
       };
       ws.onerror = () => {
-        setError("终端 WebSocket 连接失败，请检查会话、反向代理或刷新后重试。");
+        setError("缁堢 WebSocket 杩炴帴澶辫触锛岃妫€鏌ヤ細璇濄€佸弽鍚戜唬鐞嗘垨鍒锋柊鍚庨噸璇曘€?);
       };
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data);
@@ -1016,7 +995,7 @@ function TerminalPanel({ agentId, agentName, mode, connectNonce, fallbackToAgent
         if (message.type === "status" && message.status === "connected") setConnected(true);
         if (message.type === "error") {
           setCloseReason(message.reason || "terminal_error");
-          setError(message.output || message.reason || "终端连接失败");
+          setError(message.output || message.reason || "缁堢杩炴帴澶辫触");
         }
       };
 
@@ -1031,7 +1010,7 @@ function TerminalPanel({ agentId, agentName, mode, connectNonce, fallbackToAgent
         term.dispose();
       };
     })().catch(() => {
-      if (!disposed) setError("终端初始化失败。");
+      if (!disposed) setError("缁堢鍒濆鍖栧け璐ャ€?);
     });
 
     return () => {
@@ -1047,7 +1026,7 @@ function TerminalPanel({ agentId, agentName, mode, connectNonce, fallbackToAgent
 
   return (
     <Panel
-      title={`${mode === "ssh" ? "SSH 终端" : "Agent 执行"} - ${agentName}`}
+      title={`${mode === "ssh" ? "SSH 缁堢" : "Agent 鎵ц"} - ${agentName}`}
       right={
         <span>
           <StatusDot on={connected} />
@@ -1056,17 +1035,17 @@ function TerminalPanel({ agentId, agentName, mode, connectNonce, fallbackToAgent
       }
     >
       <div className="terminal-toolbar">
-        {mode === "ssh" ? <button onClick={fallbackToAgent}>改用 Agent 执行</button> : null}
+        {mode === "ssh" ? <button onClick={fallbackToAgent}>鏀圭敤 Agent 鎵ц</button> : null}
         <button onClick={() => sendControl("\u0003")} disabled={!connected}>
           Ctrl+C
         </button>
         <button onClick={() => sendControl("\u000c")} disabled={!connected}>
           Clear
         </button>
-        <span className="muted">支持原始按键、粘贴和窗口自动调整大小。</span>
+        <span className="muted">鏀寔鍘熷鎸夐敭銆佺矘璐村拰绐楀彛鑷姩璋冩暣澶у皬銆?/span>
       </div>
       <div className="terminal-shell" ref={boxRef} />
-      {closeReason ? <p className="panel-message">关闭原因：{closeReason}</p> : null}
+      {closeReason ? <p className="panel-message">鍏抽棴鍘熷洜锛歿closeReason}</p> : null}
       {error ? <p className="panel-message">{error}</p> : null}
     </Panel>
   );
@@ -1119,7 +1098,7 @@ function SshPage({ id, back }) {
         })
       });
       setProfile((current) => ({ ...current, ...response, password: "", privateKey: "" }));
-      setMessage("SSH 配置已保存。");
+      setMessage("SSH 閰嶇疆宸蹭繚瀛樸€?);
       setMode("ssh");
       setConnectNonce((value) => value + 1);
     } catch (error) {
@@ -1134,7 +1113,7 @@ function SshPage({ id, back }) {
         body: JSON.stringify(type === "password" ? { clearPassword: true, mode: profile.mode } : { clearPrivateKey: true, mode: profile.mode })
       });
       setProfile((current) => ({ ...current, ...response, password: "", privateKey: "" }));
-      setMessage(type === "password" ? "SSH 密码已清除。" : "SSH 私钥已清除。");
+      setMessage(type === "password" ? "SSH 瀵嗙爜宸叉竻闄ゃ€? : "SSH 绉侀挜宸叉竻闄ゃ€?);
     } catch (error) {
       setMessage(error.message);
     }
@@ -1153,7 +1132,7 @@ function SshPage({ id, back }) {
           privateKey: profile.privateKey
         })
       });
-      setMessage(response.output || "SSH 连接测试通过。");
+      setMessage(response.output || "SSH 杩炴帴娴嬭瘯閫氳繃銆?);
       setMode("ssh");
       setConnectNonce((value) => value + 1);
     } catch (error) {
@@ -1168,7 +1147,7 @@ function SshPage({ id, back }) {
         body: JSON.stringify({ mode: deployMode, appDir: deployAppDir })
       });
       setDeployPreview(response.command);
-      setDeployResult(`脚本地址：${response.scriptUrl}\n过期时间：${response.expiresAt}\n连接地址：${response.wsUrl}`);
+      setDeployResult(`鑴氭湰鍦板潃锛?{response.scriptUrl}\n杩囨湡鏃堕棿锛?{response.expiresAt}\n杩炴帴鍦板潃锛?{response.wsUrl}`);
     } catch (error) {
       setDeployResult(error.message);
     }
@@ -1180,7 +1159,7 @@ function SshPage({ id, back }) {
       return;
     }
     await navigator.clipboard.writeText(deployPreview);
-    setDeployResult("部署命令已复制到剪贴板。");
+    setDeployResult("閮ㄧ讲鍛戒护宸插鍒跺埌鍓创鏉裤€?);
   };
 
   const deploy = async () => {
@@ -1191,7 +1170,7 @@ function SshPage({ id, back }) {
         body: JSON.stringify({ mode: deployMode, appDir: deployAppDir })
       });
       setDeployPreview(response.command || "");
-      setDeployResult(response.output || "部署命令执行完成。");
+      setDeployResult(response.output || "閮ㄧ讲鍛戒护鎵ц瀹屾垚銆?);
     } catch (error) {
       setDeployResult(error.message);
     } finally {
@@ -1204,55 +1183,55 @@ function SshPage({ id, back }) {
   return (
     <section>
       <div className="toolbar">
-        <button onClick={back}>返回</button>
+        <button onClick={back}>杩斿洖</button>
         <h1>SSH - {agent.name}</h1>
         <button onClick={() => setConnectNonce((value) => value + 1)}>
           <RefreshCw size={16} />
-          重连
+          閲嶈繛
         </button>
       </div>
 
       <TerminalPanel agentId={id} agentName={agent.name} mode={mode} connectNonce={connectNonce} fallbackToAgent={() => { setMode("agent"); setConnectNonce((value) => value + 1); }} />
 
       <div className="grid2 ssh-grid">
-        <Panel title="SSH 配置" right={<span className="muted">列表里的 SSH 现在会直接进入这个终端</span>}>
+        <Panel title="SSH 閰嶇疆" right={<span className="muted">鍒楄〃閲岀殑 SSH 鐜板湪浼氱洿鎺ヨ繘鍏ヨ繖涓粓绔?/span>}>
           <div className="form-grid">
-            <Field label="主机" value={profile.host} onChange={(value) => patch("host", value)} />
-            <Field label="端口" type="number" value={profile.port} onChange={(value) => patch("port", value)} />
-            <Field label="用户名" value={profile.username} onChange={(value) => patch("username", value)} />
+            <Field label="涓绘満" value={profile.host} onChange={(value) => patch("host", value)} />
+            <Field label="绔彛" type="number" value={profile.port} onChange={(value) => patch("port", value)} />
+            <Field label="鐢ㄦ埛鍚? value={profile.username} onChange={(value) => patch("username", value)} />
             <Field
-              label="认证方式"
+              label="璁よ瘉鏂瑰紡"
               type="select"
               value={profile.mode}
               onChange={(value) => patch("mode", value)}
               options={[
-                ["password", "密码"],
-                ["privateKey", "私钥"]
+                ["password", "瀵嗙爜"],
+                ["privateKey", "绉侀挜"]
               ]}
             />
-            {profile.mode === "password" ? <Field label="密码" type="password" value={profile.password} onChange={(value) => patch("password", value)} /> : null}
-            {profile.mode === "privateKey" ? <Field label="私钥" type="textarea" rows={6} value={profile.privateKey} onChange={(value) => patch("privateKey", value)} /> : null}
+            {profile.mode === "password" ? <Field label="瀵嗙爜" type="password" value={profile.password} onChange={(value) => patch("password", value)} /> : null}
+            {profile.mode === "privateKey" ? <Field label="绉侀挜" type="textarea" rows={6} value={profile.privateKey} onChange={(value) => patch("privateKey", value)} /> : null}
           </div>
 
           <div className="actions">
             <button className="primary" onClick={save}>
-              保存 SSH
+              淇濆瓨 SSH
             </button>
-            <button onClick={test}>测试连接</button>
+            <button onClick={test}>娴嬭瘯杩炴帴</button>
             <button onClick={() => setMode("ssh")} disabled={!profile.ready && !profile.password && !profile.privateKey}>
-              用 SSH 连接
+              鐢?SSH 杩炴帴
             </button>
-            <button onClick={() => setMode("agent")}>改用 Agent 执行</button>
-            {profile.mode === "password" && profile.hasPassword ? <button onClick={() => clearSecret("password")}>清除已存密码</button> : null}
-            {profile.mode === "privateKey" && profile.hasPrivateKey ? <button onClick={() => clearSecret("privateKey")}>清除已存私钥</button> : null}
+            <button onClick={() => setMode("agent")}>鏀圭敤 Agent 鎵ц</button>
+            {profile.mode === "password" && profile.hasPassword ? <button onClick={() => clearSecret("password")}>娓呴櫎宸插瓨瀵嗙爜</button> : null}
+            {profile.mode === "privateKey" && profile.hasPrivateKey ? <button onClick={() => clearSecret("privateKey")}>娓呴櫎宸插瓨绉侀挜</button> : null}
           </div>
           {message ? <pre>{message}</pre> : null}
         </Panel>
 
-        <Panel title="一键部署 Agent" right={<span className="muted">支持 systemd 和 Docker，两种方式都会复用当前 SSH 凭据</span>}>
+        <Panel title="涓€閿儴缃?Agent" right={<span className="muted">鏀寔 systemd 鍜?Docker锛屼袱绉嶆柟寮忛兘浼氬鐢ㄥ綋鍓?SSH 鍑嵁</span>}>
           <div className="form-grid">
             <Field
-              label="部署方式"
+              label="閮ㄧ讲鏂瑰紡"
               type="select"
               value={deployMode}
               onChange={(value) => setDeployMode(value)}
@@ -1261,17 +1240,17 @@ function SshPage({ id, back }) {
                 ["docker", "Docker Compose"]
               ]}
             />
-            <Field label="安装目录" value={deployAppDir} onChange={setDeployAppDir} />
+            <Field label="瀹夎鐩綍" value={deployAppDir} onChange={setDeployAppDir} />
           </div>
-          <p className="panel-tip">`systemd` 更适合机器上已经有 sing-box 服务的场景；`Docker` 会同时准备 agent 容器、sing-box 容器和探针挂载。</p>
+          <p className="panel-tip">`systemd` 鏇撮€傚悎鏈哄櫒涓婂凡缁忔湁 sing-box 鏈嶅姟鐨勫満鏅紱`Docker` 浼氬悓鏃跺噯澶?agent 瀹瑰櫒銆乻ing-box 瀹瑰櫒鍜屾帰閽堟寕杞姐€?/p>
           <div className="actions">
-            <button onClick={previewDeploy}>生成命令</button>
-            <button onClick={copyDeploy}>复制命令</button>
+            <button onClick={previewDeploy}>鐢熸垚鍛戒护</button>
+            <button onClick={copyDeploy}>澶嶅埗鍛戒护</button>
             <button className="primary" onClick={deploy} disabled={deployBusy || !profile.ready}>
-              {deployBusy ? "部署中..." : "通过 SSH 立即部署"}
+              {deployBusy ? "閮ㄧ讲涓?.." : "閫氳繃 SSH 绔嬪嵆閮ㄧ讲"}
             </button>
           </div>
-          <pre>{deployPreview || "先点击“生成命令”，可以拿到可直接粘贴执行的一键部署命令。"}</pre>
+          <pre>{deployPreview || "鍏堢偣鍑烩€滅敓鎴愬懡浠も€濓紝鍙互鎷垮埌鍙洿鎺ョ矘璐存墽琛岀殑涓€閿儴缃插懡浠ゃ€?}</pre>
           {deployResult ? <pre>{deployResult}</pre> : null}
         </Panel>
       </div>
@@ -1320,29 +1299,29 @@ function NodeWizard({ agents }) {
     }
   };
 
-  if (!agents.length) return <AgentEmptyState title="节点配置需要先选择 Agent" />;
+  if (!agents.length) return <AgentEmptyState title="鑺傜偣閰嶇疆闇€瑕佸厛閫夋嫨 Agent" />;
 
   return (
     <section>
       <div className="grid2">
-        <Panel title="节点配置" right={<button onClick={renderPreview}>预览 JSON</button>}>
+        <Panel title="鑺傜偣閰嶇疆" right={<button onClick={renderPreview}>棰勮 JSON</button>}>
           <div className="form-grid">
             <Field
-              label="服务器"
+              label="鏈嶅姟鍣?
               type="select"
               value={form.agentId}
               onChange={(value) => patch("agentId", value)}
               options={agents.map((agent) => [agent.id, `${agent.name} - ${agent.ip}`])}
             />
             <Field
-              label="协议"
+              label="鍗忚"
               type="select"
               value={form.protocol}
               onChange={switchProtocol}
               options={Object.entries(protocolDefinitions).map(([id, item]) => [id, item.name])}
             />
-            <Field label="订阅节点名称" value={form.exportName || ""} onChange={(value) => patch("exportName", value)} placeholder="默认用服务器名 + 协议名" />
-            <Field label="订阅出口地址" value={form.exportHost || ""} onChange={(value) => patch("exportHost", value)} placeholder="默认使用该服务器 IP" />
+            <Field label="璁㈤槄鑺傜偣鍚嶇О" value={form.exportName || ""} onChange={(value) => patch("exportName", value)} placeholder="榛樿鐢ㄦ湇鍔″櫒鍚?+ 鍗忚鍚? />
+            <Field label="璁㈤槄鍑哄彛鍦板潃" value={form.exportHost || ""} onChange={(value) => patch("exportHost", value)} placeholder="榛樿浣跨敤璇ユ湇鍔″櫒 IP" />
             {definition.fields.map((field) => (
               <Field
                 key={field.key}
@@ -1358,17 +1337,17 @@ function NodeWizard({ agents }) {
             ))}
           </div>
           <div className="panel-tip">{definition.note}</div>
-          <div className="panel-tip">这里填写的“订阅出口地址”会用于订阅聚合导出；`VLESS + Reality` 想让订阅可直接用，还要把对应公钥一起填进去。</div>
+          <div className="panel-tip">杩欓噷濉啓鐨勨€滆闃呭嚭鍙ｅ湴鍧€鈥濅細鐢ㄤ簬璁㈤槄鑱氬悎瀵煎嚭锛沗VLESS + Reality` 鎯宠璁㈤槄鍙洿鎺ョ敤锛岃繕瑕佹妸瀵瑰簲鍏挜涓€璧峰～杩涘幓銆?/div>
           <div className="actions">
             <button className="primary" onClick={apply}>
-              下发并重启
+              涓嬪彂骞堕噸鍚?
             </button>
           </div>
           <pre>{result}</pre>
         </Panel>
 
-        <Panel title="生成预览">
-          <pre className="preview">{preview || "点击预览 JSON 查看 sing-box 配置"}</pre>
+        <Panel title="鐢熸垚棰勮">
+          <pre className="preview">{preview || "鐐瑰嚮棰勮 JSON 鏌ョ湅 sing-box 閰嶇疆"}</pre>
         </Panel>
       </div>
     </section>
@@ -1376,19 +1355,19 @@ function NodeWizard({ agents }) {
 }
 
 function ForwardRuleTable({ rules, removeRule }) {
-  if (!rules.length) return <div className="empty">当前没有独立转发规则</div>;
+  if (!rules.length) return <div className="empty">褰撳墠娌℃湁鐙珛杞彂瑙勫垯</div>;
 
   return (
     <table>
       <thead>
         <tr>
-          <th>名称</th>
-          <th>引擎</th>
-          <th>网络</th>
-          <th>监听</th>
-          <th>目标</th>
-          <th>状态</th>
-          <th>操作</th>
+          <th>鍚嶇О</th>
+          <th>寮曟搸</th>
+          <th>缃戠粶</th>
+          <th>鐩戝惉</th>
+          <th>鐩爣</th>
+          <th>鐘舵€?/th>
+          <th>鎿嶄綔</th>
         </tr>
       </thead>
       <tbody>
@@ -1406,7 +1385,7 @@ function ForwardRuleTable({ rules, removeRule }) {
             <td>{rule.status || "-"}</td>
             <td>
               <button className="link" onClick={() => removeRule(rule)}>
-                删除
+                鍒犻櫎
               </button>
             </td>
           </tr>
@@ -1459,7 +1438,7 @@ function ForwardWizard({ agents }) {
   };
 
   const removeRule = async (rule) => {
-    if (!window.confirm(`确认删除转发规则 ${rule.name} 吗？`)) return;
+    if (!window.confirm(`纭鍒犻櫎杞彂瑙勫垯 ${rule.name} 鍚楋紵`)) return;
     try {
       const response = await api(`/api/agents/${form.agentId}/forwards/${rule.id}`, { method: "DELETE" });
       setResult(JSON.stringify(response, null, 2));
@@ -1469,43 +1448,43 @@ function ForwardWizard({ agents }) {
     }
   };
 
-  if (!agents.length) return <AgentEmptyState title="端口转发需要先选择 Agent" />;
+  if (!agents.length) return <AgentEmptyState title="绔彛杞彂闇€瑕佸厛閫夋嫨 Agent" />;
 
   return (
     <section>
       <div className="grid2">
-        <Panel title="端口转发" right={<button onClick={renderPreview}>预览 JSON</button>}>
+        <Panel title="绔彛杞彂" right={<button onClick={renderPreview}>棰勮 JSON</button>}>
           <div className="form-grid">
             <Field
-              label="服务器"
+              label="鏈嶅姟鍣?
               type="select"
               value={form.agentId}
               onChange={(value) => patch("agentId", value)}
               options={agents.map((agent) => [agent.id, `${agent.name} - ${agent.ip}`])}
             />
-            <Field label="规则名称" value={form.name} onChange={(value) => patch("name", value)} placeholder="留空会自动生成" />
-            <Field label="转发引擎" type="select" value={form.engine} onChange={(value) => patch("engine", value)} options={forwardEngineOptions} />
-            <Field label="网络" type="select" value={form.network} onChange={(value) => patch("network", value)} options={forwardNetworkOptions} />
-            <Field label="监听地址" value={form.listen} onChange={(value) => patch("listen", value)} placeholder="0.0.0.0" />
-            <Field label="公网监听端口" type="number" value={form.port} onChange={(value) => patch("port", value)} random={() => patch("port", randPort())} />
-            <Field label="目标地址" value={form.targetHost} onChange={(value) => patch("targetHost", value)} />
-            <Field label="目标端口" type="number" value={form.targetPort} onChange={(value) => patch("targetPort", value)} />
+            <Field label="瑙勫垯鍚嶇О" value={form.name} onChange={(value) => patch("name", value)} placeholder="鐣欑┖浼氳嚜鍔ㄧ敓鎴? />
+            <Field label="杞彂寮曟搸" type="select" value={form.engine} onChange={(value) => patch("engine", value)} options={forwardEngineOptions} />
+            <Field label="缃戠粶" type="select" value={form.network} onChange={(value) => patch("network", value)} options={forwardNetworkOptions} />
+            <Field label="鐩戝惉鍦板潃" value={form.listen} onChange={(value) => patch("listen", value)} placeholder="0.0.0.0" />
+            <Field label="鍏綉鐩戝惉绔彛" type="number" value={form.port} onChange={(value) => patch("port", value)} random={() => patch("port", randPort())} />
+            <Field label="鐩爣鍦板潃" value={form.targetHost} onChange={(value) => patch("targetHost", value)} />
+            <Field label="鐩爣绔彛" type="number" value={form.targetPort} onChange={(value) => patch("targetPort", value)} />
           </div>
-          <div className="panel-tip">转发现在会以独立容器运行，不再覆盖当前节点配置。你可以按需在 sing-box、Realm、GOST 之间切换。</div>
+          <div className="panel-tip">杞彂鐜板湪浼氫互鐙珛瀹瑰櫒杩愯锛屼笉鍐嶈鐩栧綋鍓嶈妭鐐归厤缃€備綘鍙互鎸夐渶鍦?sing-box銆丷ealm銆丟OST 涔嬮棿鍒囨崲銆?/div>
           <div className="actions">
             <button className="primary" onClick={apply}>
-              下发并启动
+              涓嬪彂骞跺惎鍔?
             </button>
           </div>
           <pre>{result}</pre>
         </Panel>
 
-        <Panel title="生成预览">
-          <pre className="preview">{preview || "点击预览 JSON 查看转发计划"}</pre>
+        <Panel title="鐢熸垚棰勮">
+          <pre className="preview">{preview || "鐐瑰嚮棰勮 JSON 鏌ョ湅杞彂璁″垝"}</pre>
         </Panel>
       </div>
 
-      <Panel title="当前转发规则" right={<button onClick={() => loadRules(form.agentId)}>刷新</button>}>
+      <Panel title="褰撳墠杞彂瑙勫垯" right={<button onClick={() => loadRules(form.agentId)}>鍒锋柊</button>}>
         <ForwardRuleTable rules={rules} removeRule={removeRule} />
       </Panel>
     </section>
@@ -1562,7 +1541,7 @@ function SubscriptionsPage() {
 
   const addImport = () => {
     if (!draftImport.content.trim()) {
-      setMessage("请先粘贴外部原始订阅内容。");
+      setMessage("璇峰厛绮樿创澶栭儴鍘熷璁㈤槄鍐呭銆?);
       return;
     }
     setForm((current) => ({
@@ -1571,12 +1550,12 @@ function SubscriptionsPage() {
         ...current.imports,
         {
           ...draftImport,
-          name: draftImport.name.trim() || `导入 ${current.imports.length + 1}`
+          name: draftImport.name.trim() || `瀵煎叆 ${current.imports.length + 1}`
         }
       ]
     }));
     setDraftImport(defaultSubscriptionImport());
-    setMessage("外部原始内容已加入当前订阅草稿。");
+    setMessage("澶栭儴鍘熷鍐呭宸插姞鍏ュ綋鍓嶈闃呰崏绋裤€?);
   };
 
   const removeImport = (id) => {
@@ -1595,7 +1574,7 @@ function SubscriptionsPage() {
       setUriPreview("");
       setWarnings([]);
       setLink(profile.url || "");
-      setMessage(`已载入订阅：${profile.name}`);
+      setMessage(`宸茶浇鍏ヨ闃咃細${profile.name}`);
     } catch (error) {
       setMessage(error.message);
     }
@@ -1611,7 +1590,7 @@ function SubscriptionsPage() {
       });
       setForm(response);
       setLink(response.url || "");
-      setMessage(regenerateToken ? "订阅已保存，并重新生成了新的订阅链接。" : "订阅已保存。");
+      setMessage(regenerateToken ? "璁㈤槄宸蹭繚瀛橈紝骞堕噸鏂扮敓鎴愪簡鏂扮殑璁㈤槄閾炬帴銆? : "璁㈤槄宸蹭繚瀛樸€?);
       loadProfiles().catch(() => {});
     } catch (error) {
       setMessage(error.message);
@@ -1623,11 +1602,11 @@ function SubscriptionsPage() {
       resetComposer();
       return;
     }
-    if (!window.confirm(`确认删除订阅 ${form.name} 吗？`)) return;
+    if (!window.confirm(`纭鍒犻櫎璁㈤槄 ${form.name} 鍚楋紵`)) return;
     try {
       await api(`/api/subscriptions/${form.id}`, { method: "DELETE" });
       resetComposer();
-      setMessage("订阅已删除。");
+      setMessage("璁㈤槄宸插垹闄ゃ€?);
       loadProfiles().catch(() => {});
     } catch (error) {
       setMessage(error.message);
@@ -1644,7 +1623,7 @@ function SubscriptionsPage() {
       setUriPreview(response.uriContent || "");
       setWarnings(response.warnings || []);
       setLink(form.id ? response.profile?.url || "" : "");
-      setMessage(form.id ? `已生成 ${response.proxyCount} 个节点的订阅预览。` : `已生成 ${response.proxyCount} 个节点的订阅预览。保存后订阅链接才会正式生效。`);
+      setMessage(form.id ? `宸茬敓鎴?${response.proxyCount} 涓妭鐐圭殑璁㈤槄棰勮銆俙 : `宸茬敓鎴?${response.proxyCount} 涓妭鐐圭殑璁㈤槄棰勮銆備繚瀛樺悗璁㈤槄閾炬帴鎵嶄細姝ｅ紡鐢熸晥銆俙);
     } catch (error) {
       setMessage(error.message);
     }
@@ -1652,16 +1631,16 @@ function SubscriptionsPage() {
 
   const copyLink = async () => {
     if (!form.id) {
-      setMessage("先保存订阅，公开订阅链接才会真正生效。");
+      setMessage("鍏堜繚瀛樿闃咃紝鍏紑璁㈤槄閾炬帴鎵嶄細鐪熸鐢熸晥銆?);
       return;
     }
     const nextLink = link || profiles.find((item) => item.id === form.id)?.url || "";
     if (!nextLink) {
-      setMessage("先预览或保存一次，拿到订阅链接后再复制。");
+      setMessage("鍏堥瑙堟垨淇濆瓨涓€娆★紝鎷垮埌璁㈤槄閾炬帴鍚庡啀澶嶅埗銆?);
       return;
     }
     await navigator.clipboard.writeText(nextLink);
-    setMessage("订阅链接已复制。");
+    setMessage("璁㈤槄閾炬帴宸插鍒躲€?);
   };
 
   const copyUri = async () => {
@@ -1670,13 +1649,13 @@ function SubscriptionsPage() {
       return;
     }
     await navigator.clipboard.writeText(uriPreview);
-    setMessage("原始 URI 列表已复制。");
+    setMessage("鍘熷 URI 鍒楄〃宸插鍒躲€?);
   };
 
   return (
     <section>
       <div className="grid2 subscription-grid">
-        <Panel title="订阅列表" right={<button onClick={resetComposer}>新建订阅</button>}>
+        <Panel title="璁㈤槄鍒楄〃" right={<button onClick={resetComposer}>鏂板缓璁㈤槄</button>}>
           <div className="subscription-list">
             {profiles.length ? (
               profiles.map((profile) => (
@@ -1684,23 +1663,23 @@ function SubscriptionsPage() {
                   <strong>{profile.name}</strong>
                   <span>{profile.template}</span>
                   <span>
-                    {profile.localNodeCount} 个本地节点 / {profile.importCount} 份外部导入
+                    {profile.localNodeCount} 涓湰鍦拌妭鐐?/ {profile.importCount} 浠藉閮ㄥ鍏?
                   </span>
                 </button>
               ))
             ) : (
-              <div className="empty">还没有订阅聚合配置。</div>
+              <div className="empty">杩樻病鏈夎闃呰仛鍚堥厤缃€?/div>
             )}
           </div>
         </Panel>
 
         <div className="panel-stack">
-          <Panel title="订阅编排" right={<span className="muted">支持本地节点、外部原始内容和模板切换</span>}>
+          <Panel title="璁㈤槄缂栨帓" right={<span className="muted">鏀寔鏈湴鑺傜偣銆佸閮ㄥ師濮嬪唴瀹瑰拰妯℃澘鍒囨崲</span>}>
             <div className="form-grid">
-              <Field label="订阅名称" value={form.name || ""} onChange={(value) => patch("name", value)} placeholder="例如：办公机房聚合" />
-              <Field label="订阅模板" type="select" value={form.template || "clash-basic"} onChange={(value) => patch("template", value)} options={templateOptions} />
+              <Field label="璁㈤槄鍚嶇О" value={form.name || ""} onChange={(value) => patch("name", value)} placeholder="渚嬪锛氬姙鍏満鎴胯仛鍚? />
+              <Field label="璁㈤槄妯℃澘" type="select" value={form.template || "clash-basic"} onChange={(value) => patch("template", value)} options={templateOptions} />
             </div>
-            <div className="panel-tip">本地节点来自你已经在“节点配置”里下发过的服务器；外部内容可以直接粘贴 Clash YAML、URI 列表，或者 Base64 订阅正文。</div>
+            <div className="panel-tip">鏈湴鑺傜偣鏉ヨ嚜浣犲凡缁忓湪鈥滆妭鐐归厤缃€濋噷涓嬪彂杩囩殑鏈嶅姟鍣紱澶栭儴鍐呭鍙互鐩存帴绮樿创 Clash YAML銆乁RI 鍒楄〃锛屾垨鑰?Base64 璁㈤槄姝ｆ枃銆?/div>
             <div className="subscription-node-grid">
               {meta.nodes.length ? (
                 meta.nodes.map((node) => {
@@ -1711,52 +1690,52 @@ function SubscriptionsPage() {
                       <div>
                         <strong>{node.name}</strong>
                         <span>
-                          {node.protocolLabel} · {node.server}:{node.port || "-"}
+                          {node.protocolLabel} 路 {node.server}:{node.port || "-"}
                         </span>
-                        <span>{node.ready ? "可直接导出到订阅" : node.reason}</span>
+                        <span>{node.ready ? "鍙洿鎺ュ鍑哄埌璁㈤槄" : node.reason}</span>
                       </div>
                     </label>
                   );
                 })
               ) : (
-                <div className="empty">先去“节点配置”页面至少下发一次节点，订阅聚合这里才会出现可选项。</div>
+                <div className="empty">鍏堝幓鈥滆妭鐐归厤缃€濋〉闈㈣嚦灏戜笅鍙戜竴娆¤妭鐐癸紝璁㈤槄鑱氬悎杩欓噷鎵嶄細鍑虹幇鍙€夐」銆?/div>
               )}
             </div>
             <div className="actions">
               <button className="primary" onClick={() => saveProfile(false)}>
-                保存订阅
+                淇濆瓨璁㈤槄
               </button>
-              <button onClick={renderPreview}>生成预览</button>
-              <button onClick={copyLink}>复制订阅链接</button>
-              <button onClick={copyUri}>复制原始 URI</button>
+              <button onClick={renderPreview}>鐢熸垚棰勮</button>
+              <button onClick={copyLink}>澶嶅埗璁㈤槄閾炬帴</button>
+              <button onClick={copyUri}>澶嶅埗鍘熷 URI</button>
               <button onClick={() => saveProfile(true)} disabled={!form.id}>
-                重置订阅链接
+                閲嶇疆璁㈤槄閾炬帴
               </button>
               <button className="red-bg" onClick={deleteProfile}>
-                {form.id ? "删除订阅" : "清空草稿"}
+                {form.id ? "鍒犻櫎璁㈤槄" : "娓呯┖鑽夌"}
               </button>
             </div>
             {message ? <p className="panel-message">{message}</p> : null}
           </Panel>
 
-          <Panel title="外部原始内容导入" right={<span className="muted">不是订阅链接，而是直接粘贴订阅正文</span>}>
+          <Panel title="澶栭儴鍘熷鍐呭瀵煎叆" right={<span className="muted">涓嶆槸璁㈤槄閾炬帴锛岃€屾槸鐩存帴绮樿创璁㈤槄姝ｆ枃</span>}>
             <div className="form-grid">
-              <Field label="导入名称" value={draftImport.name} onChange={(value) => setDraftImport((current) => ({ ...current, name: value }))} />
+              <Field label="瀵煎叆鍚嶇О" value={draftImport.name} onChange={(value) => setDraftImport((current) => ({ ...current, name: value }))} />
             </div>
             <div className="subscription-editor">
               <label>
-                原始内容
+                鍘熷鍐呭
                 <textarea
                   className="inline-textarea"
                   rows={10}
                   value={draftImport.content}
                   onChange={(event) => setDraftImport((current) => ({ ...current, content: event.target.value }))}
-                  placeholder="支持三种格式：1. Clash YAML（至少含 proxies:）；2. 纯 URI 列表；3. Base64 编码后的订阅正文。"
+                  placeholder="鏀寔涓夌鏍煎紡锛?. Clash YAML锛堣嚦灏戝惈 proxies:锛夛紱2. 绾?URI 鍒楄〃锛?. Base64 缂栫爜鍚庣殑璁㈤槄姝ｆ枃銆?
                 />
               </label>
             </div>
             <div className="actions">
-              <button onClick={addImport}>加入当前订阅</button>
+              <button onClick={addImport}>鍔犲叆褰撳墠璁㈤槄</button>
             </div>
             <div className="subscription-import-list">
               {form.imports.length ? (
@@ -1765,19 +1744,19 @@ function SubscriptionsPage() {
                     <div className="subscription-import-head">
                       <strong>{item.name}</strong>
                       <button className="link" onClick={() => removeImport(item.id)}>
-                        移除
+                        绉婚櫎
                       </button>
                     </div>
                     <pre>{item.content.slice(0, 420)}{item.content.length > 420 ? "\n..." : ""}</pre>
                   </div>
                 ))
               ) : (
-                <div className="empty">暂时还没有外部原始内容导入。</div>
+                <div className="empty">鏆傛椂杩樻病鏈夊閮ㄥ師濮嬪唴瀹瑰鍏ャ€?/div>
               )}
             </div>
           </Panel>
 
-          <Panel title="订阅预览" right={form.id && link ? <span className="muted">{link}</span> : <span className="muted">保存后会生成可访问的订阅链接</span>}>
+          <Panel title="璁㈤槄棰勮" right={form.id && link ? <span className="muted">{link}</span> : <span className="muted">淇濆瓨鍚庝細鐢熸垚鍙闂殑璁㈤槄閾炬帴</span>}>
             {warnings.length ? (
               <div className="subscription-warnings">
                 {warnings.map((warning) => (
@@ -1785,7 +1764,7 @@ function SubscriptionsPage() {
                 ))}
               </div>
             ) : null}
-            <pre className="preview subscription-preview">{preview || "点击“生成预览”后，这里会显示渲染后的 Clash 模板内容。"}</pre>
+            <pre className="preview subscription-preview">{preview || "鐐瑰嚮鈥滅敓鎴愰瑙堚€濆悗锛岃繖閲屼細鏄剧ず娓叉煋鍚庣殑 Clash 妯℃澘鍐呭銆?}</pre>
           </Panel>
         </div>
       </div>
@@ -1808,7 +1787,7 @@ function ConfigPage({ id, back }) {
     try {
       const first = await api(`/api/agents/${id}/config`);
       if (first.config) setText(JSON.stringify(first.config, null, 2));
-      setMessage(first.config ? "已读取当前缓存配置。" : "已请求 Agent 读取配置，稍后再点一次可拿到最新结果。");
+      setMessage(first.config ? "宸茶鍙栧綋鍓嶇紦瀛橀厤缃€? : "宸茶姹?Agent 璇诲彇閰嶇疆锛岀◢鍚庡啀鐐逛竴娆″彲鎷垮埌鏈€鏂扮粨鏋溿€?);
     } catch (error) {
       setMessage(error.message);
     }
@@ -1832,30 +1811,30 @@ function ConfigPage({ id, back }) {
   return (
     <section>
       <div className="toolbar">
-        <button onClick={back}>返回</button>
-        <h1>sing-box 配置</h1>
-        <button onClick={readCurrent}>读取当前</button>
-        <button onClick={format}>格式化</button>
+        <button onClick={back}>杩斿洖</button>
+        <h1>sing-box 閰嶇疆</h1>
+        <button onClick={readCurrent}>璇诲彇褰撳墠</button>
+        <button onClick={format}>鏍煎紡鍖?/button>
         <button
           onClick={() => {
             JSON.parse(text);
-            setMessage("JSON 校验通过");
+            setMessage("JSON 鏍￠獙閫氳繃");
           }}
         >
-          校验
+          鏍￠獙
         </button>
         <button className="primary" onClick={apply}>
-          应用并重启
+          搴旂敤骞堕噸鍚?
         </button>
       </div>
 
       <div className="grid-config">
-        <Panel title="JSON 编辑器" right={<span>{new Blob([text]).size} bytes</span>}>
+        <Panel title="JSON 缂栬緫鍣? right={<span>{new Blob([text]).size} bytes</span>}>
           <textarea value={text} onChange={(event) => setText(event.target.value)} spellCheck={false} />
           <p className="panel-message">{message}</p>
         </Panel>
 
-        <Panel title="历史版本" right={<button onClick={loadVersions}>刷新</button>}>
+        <Panel title="鍘嗗彶鐗堟湰" right={<button onClick={loadVersions}>鍒锋柊</button>}>
           {versions.length ? (
             versions.map((version) => (
               <div className="version" key={version.id}>
@@ -1866,16 +1845,16 @@ function ConfigPage({ id, back }) {
                 <button
                   onClick={async () => {
                     await api(`/api/agents/${id}/config/rollback/${version.id}`, { method: "POST" });
-                    setMessage("已请求回滚。");
+                    setMessage("宸茶姹傚洖婊氥€?);
                   }}
                 >
                   <RotateCcw size={15} />
-                  回滚
+                  鍥炴粴
                 </button>
               </div>
             ))
           ) : (
-            <div className="empty">暂无数据</div>
+            <div className="empty">鏆傛棤鏁版嵁</div>
           )}
         </Panel>
       </div>
@@ -1906,53 +1885,24 @@ function LogsPage({ id, back }) {
   return (
     <section>
       <div className="toolbar">
-        <button onClick={back}>返回</button>
-        <h1>sing-box 日志</h1>
+        <button onClick={back}>杩斿洖</button>
+        <h1>sing-box 鏃ュ織</h1>
         <button onClick={() => setCount(Math.max(50, count - 50))}>-</button>
         <input className="small" value={count} onChange={(event) => setCount(Number(event.target.value) || 200)} />
         <button onClick={() => setCount(count + 50)}>+</button>
         <button className="red-bg" onClick={() => setLines([])}>
           <Trash2 size={16} />
-          清屏
+          娓呭睆
         </button>
       </div>
 
-      <Panel title={<><StatusDot on />实时日志</>} right={<span>{lines.length} 行</span>}>
+      <Panel title={<><StatusDot on />瀹炴椂鏃ュ織</>} right={<span>{lines.length} 琛?/span>}>
         <pre className="logs">{lines.join("\n")}</pre>
       </Panel>
     </section>
   );
 }
 
-function MonitorPage({ openAgent }) {
-  const [summary, setSummary] = useState(null);
-  const [probes, setProbes] = useState([]);
-  const [events, setEvents] = useState([]);
-  const [selectedAgentId, setSelectedAgentId] = useState("");
-  const [history, setHistory] = useState({ raw: [], aggregated: [] });
-  const [message, setMessage] = useState("");
-
-  const load = async () => {
-    try {
-      const [summaryData, probesData, eventData] = await Promise.all([api("/api/monitor/summary"), api("/api/public/probes"), api("/api/public/events")]);
-      setSummary(summaryData);
-      setProbes(probesData);
-      setEvents(eventData);
-      const fallbackId = selectedAgentId || probesData[0]?.id || "";
-      if (fallbackId && fallbackId !== selectedAgentId) setSelectedAgentId(fallbackId);
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  useEffect(() => {
-    load().catch(() => {});
-    const timer = setInterval(() => load().catch(() => {}), 10000);
-    return () => clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    if (!selectedAgentId) return;
     api(`/api/public/probes/history?agentId=${encodeURIComponent(selectedAgentId)}`)
       .then(setHistory)
       .catch((error) => setMessage(error.message));
@@ -1961,16 +1911,16 @@ function MonitorPage({ openAgent }) {
   return (
     <section>
       <div className="stats">
-        <Card label="公开探针" value={summary?.total || 0} />
-        <Card label="在线" value={summary?.online || 0} green />
-        <Card label="离线" value={summary?.offline || 0} />
-        <Card label="地区数" value={summary?.regions || 0} blue />
-        <Card label="总流量" value={formatBytes(summary?.totalTraffic || 0)} />
-        <Card label="实时下行" value={formatSpeed(summary?.totalRxSpeed || 0)} />
-        <Card label="实时上行" value={formatSpeed(summary?.totalTxSpeed || 0)} />
+        <Card label="鍏紑鎺㈤拡" value={summary?.total || 0} />
+        <Card label="鍦ㄧ嚎" value={summary?.online || 0} green />
+        <Card label="绂荤嚎" value={summary?.offline || 0} />
+        <Card label="鍦板尯鏁? value={summary?.regions || 0} blue />
+        <Card label="鎬绘祦閲? value={formatBytes(summary?.totalTraffic || 0)} />
+        <Card label="瀹炴椂涓嬭" value={formatSpeed(summary?.totalRxSpeed || 0)} />
+        <Card label="瀹炴椂涓婅" value={formatSpeed(summary?.totalTxSpeed || 0)} />
       </div>
 
-      <Panel title="公开探针卡片" right={<button onClick={() => load().catch(() => {})}>刷新</button>}>
+      <Panel title="鍏紑鎺㈤拡鍗＄墖" right={<button onClick={() => load().catch(() => {})}>鍒锋柊</button>}>
         {probes.length ? (
           <div className="card-grid">
             {probes.map((probe) => (
@@ -1979,24 +1929,24 @@ function MonitorPage({ openAgent }) {
                   <strong>{probe.flag ? `${probe.flag} ` : ""}{probe.name}</strong>
                   <span>{probe.online ? "online" : "offline"}</span>
                 </div>
-                <p className="muted">{probe.group || "未分组"} / {probe.region || "未标注地区"}</p>
+                <p className="muted">{probe.group || "鏈垎缁?} / {probe.region || "鏈爣娉ㄥ湴鍖?}</p>
                 <p className="muted">CPU {formatPercent(probe.metrics?.cpuUsage)} / MEM {formatPercent(probe.metrics?.memoryUsage)} / DISK {formatPercent(probe.metrics?.diskUsage)}</p>
-                <p className="muted">↓ {formatSpeed(probe.metrics?.rxSpeed)} / ↑ {formatSpeed(probe.metrics?.txSpeed)}</p>
+                <p className="muted">鈫?{formatSpeed(probe.metrics?.rxSpeed)} / 鈫?{formatSpeed(probe.metrics?.txSpeed)}</p>
                 <div className="actions">
-                  <button onClick={() => setSelectedAgentId(probe.id)}>看历史</button>
-                  <button onClick={() => openAgent(probe.id)}>详情</button>
+                  <button onClick={() => setSelectedAgentId(probe.id)}>鐪嬪巻鍙?/button>
+                  <button onClick={() => openAgent(probe.id)}>璇︽儏</button>
                 </div>
               </div>
             ))}
           </div>
         ) : (
-          <div className="empty">暂时没有公开探针数据。</div>
+          <div className="empty">鏆傛椂娌℃湁鍏紑鎺㈤拡鏁版嵁銆?/div>
         )}
       </Panel>
 
       <div className="grid2">
         <Panel
-          title="历史趋势"
+          title="鍘嗗彶瓒嬪娍"
           right={
             probes.length ? (
               <select value={selectedAgentId} onChange={(event) => setSelectedAgentId(event.target.value)}>
@@ -2012,7 +1962,7 @@ function MonitorPage({ openAgent }) {
           <ProbeTrends history={history} />
         </Panel>
 
-        <Panel title="最近事件">
+        <Panel title="鏈€杩戜簨浠?>
           <CompactEvents events={events} />
         </Panel>
       </div>
@@ -2021,58 +1971,11 @@ function MonitorPage({ openAgent }) {
   );
 }
 
-function NodePoolPage() {
-  const [nodes, setNodes] = useState([]);
-  const [sources, setSources] = useState([]);
-  const [accessRows, setAccessRows] = useState([]);
-  const [selectedIds, setSelectedIds] = useState([]);
-  const [importName, setImportName] = useState("manual-import");
-  const [importContent, setImportContent] = useState("");
-  const [sourceForm, setSourceForm] = useState({ name: "", url: "", username: "", password: "", removeMissing: false });
-  const [message, setMessage] = useState("");
-  const [checks, setChecks] = useState([]);
-
-  const load = async () => {
-    try {
-      const [nodeRows, sourceRows, accessLogRows] = await Promise.all([api("/api/node-pool"), api("/api/subscription-sources"), api("/api/subscription-access")]);
-      setNodes(nodeRows);
-      setSources(sourceRows);
-      setAccessRows(accessLogRows);
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  useEffect(() => {
-    load().catch(() => {});
-  }, []);
-
-  const toggleSelected = (id) => {
-    setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
-  };
-
-  const importNodes = async () => {
-    try {
-      const response = await api("/api/node-pool/import", {
-        method: "POST",
-        body: JSON.stringify({ source: importName || "manual", content: importContent })
-      });
-      setMessage(`导入完成，节点池当前 ${response.nodes.length} 条，变更 ${response.changed} 条。`);
-      setImportContent("");
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const createSource = async () => {
-    try {
-      await api("/api/subscription-sources", {
         method: "POST",
         body: JSON.stringify(sourceForm)
       });
       setSourceForm({ name: "", url: "", username: "", password: "", removeMissing: false });
-      setMessage("订阅源已保存。");
+      setMessage("璁㈤槄婧愬凡淇濆瓨銆?);
       load().catch(() => {});
     } catch (error) {
       setMessage(error.message);
@@ -2082,7 +1985,7 @@ function NodePoolPage() {
   const syncSource = async (id) => {
     try {
       const response = await api(`/api/subscription-sources/${id}/sync`, { method: "POST" });
-      setMessage(`同步完成，导入 ${response.count} 条，变更 ${response.changed} 条。`);
+      setMessage(`鍚屾瀹屾垚锛屽鍏?${response.count} 鏉★紝鍙樻洿 ${response.changed} 鏉°€俙);
       load().catch(() => {});
     } catch (error) {
       setMessage(error.message);
@@ -2096,7 +1999,7 @@ function NodePoolPage() {
         body: JSON.stringify({ nodeIds: selectedIds, checkedBy: "server", timeoutMs: 5000 })
       });
       setChecks(response.results || []);
-      setMessage(`探测完成，共 ${response.results?.length || 0} 个节点。`);
+      setMessage(`鎺㈡祴瀹屾垚锛屽叡 ${response.results?.length || 0} 涓妭鐐广€俙);
       load().catch(() => {});
     } catch (error) {
       setMessage(error.message);
@@ -2107,17 +2010,17 @@ function NodePoolPage() {
     try {
       const body = await fetchText(`/api/node-pool/export?format=${encodeURIComponent(format)}`);
       await copyText(body);
-      setMessage(`${format} 导出结果已复制到剪贴板。`);
+      setMessage(`${format} 瀵煎嚭缁撴灉宸插鍒跺埌鍓创鏉裤€俙);
     } catch (error) {
       setMessage(error.message);
     }
   };
 
   const removeNode = async (id) => {
-    if (!window.confirm("确认删除这个节点吗？")) return;
+    if (!window.confirm("纭鍒犻櫎杩欎釜鑺傜偣鍚楋紵")) return;
     try {
       await api(`/api/node-pool/${id}`, { method: "DELETE" });
-      setMessage("节点已删除。");
+      setMessage("鑺傜偣宸插垹闄ゃ€?);
       load().catch(() => {});
     } catch (error) {
       setMessage(error.message);
@@ -2127,37 +2030,37 @@ function NodePoolPage() {
   return (
     <section>
       <div className="grid2">
-        <Panel title="节点导入">
+        <Panel title="鑺傜偣瀵煎叆">
           <div className="form-grid">
-            <Field label="来源名称" value={importName} onChange={setImportName} />
-            <Field label="原始内容" type="textarea" rows={10} value={importContent} onChange={setImportContent} placeholder="支持 vmess/vless/trojan/ss/hysteria2 URI、Clash/Mihomo YAML、sing-box outbound JSON、base64 订阅。" />
+            <Field label="鏉ユ簮鍚嶇О" value={importName} onChange={setImportName} />
+            <Field label="鍘熷鍐呭" type="textarea" rows={10} value={importContent} onChange={setImportContent} placeholder="鏀寔 vmess/vless/trojan/ss/hysteria2 URI銆丆lash/Mihomo YAML銆乻ing-box outbound JSON銆乥ase64 璁㈤槄銆? />
           </div>
           <div className="actions">
-            <button className="primary" onClick={importNodes}>导入节点</button>
-            <button onClick={() => exportNodes("base64")}>复制 Base64</button>
-            <button onClick={() => exportNodes("clash")}>复制 Clash</button>
-            <button onClick={() => exportNodes("sing-box")}>复制 sing-box</button>
+            <button className="primary" onClick={importNodes}>瀵煎叆鑺傜偣</button>
+            <button onClick={() => exportNodes("base64")}>澶嶅埗 Base64</button>
+            <button onClick={() => exportNodes("clash")}>澶嶅埗 Clash</button>
+            <button onClick={() => exportNodes("sing-box")}>澶嶅埗 sing-box</button>
           </div>
         </Panel>
 
-        <Panel title="订阅源同步">
+        <Panel title="璁㈤槄婧愬悓姝?>
           <div className="form-grid">
-            <Field label="名称" value={sourceForm.name} onChange={(value) => setSourceForm((current) => ({ ...current, name: value }))} />
+            <Field label="鍚嶇О" value={sourceForm.name} onChange={(value) => setSourceForm((current) => ({ ...current, name: value }))} />
             <Field label="URL" value={sourceForm.url} onChange={(value) => setSourceForm((current) => ({ ...current, url: value }))} />
-            <Field label="用户名" value={sourceForm.username} onChange={(value) => setSourceForm((current) => ({ ...current, username: value }))} />
-            <Field label="密码" type="password" value={sourceForm.password} onChange={(value) => setSourceForm((current) => ({ ...current, password: value }))} />
+            <Field label="鐢ㄦ埛鍚? value={sourceForm.username} onChange={(value) => setSourceForm((current) => ({ ...current, username: value }))} />
+            <Field label="瀵嗙爜" type="password" value={sourceForm.password} onChange={(value) => setSourceForm((current) => ({ ...current, password: value }))} />
           </div>
           <div className="actions">
-            <button className="primary" onClick={createSource}>保存订阅源</button>
+            <button className="primary" onClick={createSource}>淇濆瓨璁㈤槄婧?/button>
           </div>
           {sources.length ? (
             <table>
               <thead>
                 <tr>
-                  <th>名称</th>
+                  <th>鍚嶇О</th>
                   <th>URL</th>
-                  <th>更新时间</th>
-                  <th>操作</th>
+                  <th>鏇存柊鏃堕棿</th>
+                  <th>鎿嶄綔</th>
                 </tr>
               </thead>
               <tbody>
@@ -2166,32 +2069,32 @@ function NodePoolPage() {
                     <td>{source.name}</td>
                     <td>{source.url || "-"}</td>
                     <td>{formatDateTime(source.updatedAt)}</td>
-                    <td><button className="link" onClick={() => syncSource(source.id)}>立即同步</button></td>
+                    <td><button className="link" onClick={() => syncSource(source.id)}>绔嬪嵆鍚屾</button></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           ) : (
-            <div className="empty">还没有订阅源。</div>
+            <div className="empty">杩樻病鏈夎闃呮簮銆?/div>
           )}
         </Panel>
       </div>
 
-      <Panel title="节点池" right={<button onClick={runChecks} disabled={!nodes.length}>批量 Proxy Check</button>}>
+      <Panel title="鑺傜偣姹? right={<button onClick={runChecks} disabled={!nodes.length}>鎵归噺 Proxy Check</button>}>
         {nodes.length ? (
           <table>
             <thead>
               <tr>
                 <th></th>
-                <th>名称</th>
-                <th>协议</th>
-                <th>地址</th>
-                <th>标签</th>
-                <th>地区</th>
-                <th>健康</th>
-                <th>分数</th>
-                <th>最近检查</th>
-                <th>操作</th>
+                <th>鍚嶇О</th>
+                <th>鍗忚</th>
+                <th>鍦板潃</th>
+                <th>鏍囩</th>
+                <th>鍦板尯</th>
+                <th>鍋ュ悍</th>
+                <th>鍒嗘暟</th>
+                <th>鏈€杩戞鏌?/th>
+                <th>鎿嶄綔</th>
               </tr>
             </thead>
             <tbody>
@@ -2206,27 +2109,27 @@ function NodePoolPage() {
                   <td>{node.health}</td>
                   <td>{node.score}</td>
                   <td>{formatDateTime(node.lastCheckAt)}</td>
-                  <td><button className="link" onClick={() => removeNode(node.id)}>删除</button></td>
+                  <td><button className="link" onClick={() => removeNode(node.id)}>鍒犻櫎</button></td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : (
-          <div className="empty">还没有节点。</div>
+          <div className="empty">杩樻病鏈夎妭鐐广€?/div>
         )}
       </Panel>
 
       <div className="grid2">
-        <Panel title="最近检查结果">
+        <Panel title="鏈€杩戞鏌ョ粨鏋?>
           {checks.length ? (
             <table>
               <thead>
                 <tr>
-                  <th>节点</th>
-                  <th>结果</th>
-                  <th>延迟</th>
-                  <th>检查者</th>
-                  <th>错误</th>
+                  <th>鑺傜偣</th>
+                  <th>缁撴灉</th>
+                  <th>寤惰繜</th>
+                  <th>妫€鏌ヨ€?/th>
+                  <th>閿欒</th>
                 </tr>
               </thead>
               <tbody>
@@ -2242,18 +2145,18 @@ function NodePoolPage() {
               </tbody>
             </table>
           ) : (
-            <div className="empty">还没有探测结果。</div>
+            <div className="empty">杩樻病鏈夋帰娴嬬粨鏋溿€?/div>
           )}
         </Panel>
 
-        <Panel title="订阅访问日志">
+        <Panel title="璁㈤槄璁块棶鏃ュ織">
           {accessRows.length ? (
             <table>
               <thead>
                 <tr>
-                  <th>时间</th>
-                  <th>订阅</th>
-                  <th>来源 IP</th>
+                  <th>鏃堕棿</th>
+                  <th>璁㈤槄</th>
+                  <th>鏉ユ簮 IP</th>
                   <th>User-Agent</th>
                 </tr>
               </thead>
@@ -2269,7 +2172,7 @@ function NodePoolPage() {
               </tbody>
             </table>
           ) : (
-            <div className="empty">还没有访问记录。</div>
+            <div className="empty">杩樻病鏈夎闂褰曘€?/div>
           )}
         </Panel>
       </div>
@@ -2278,1074 +2181,10 @@ function NodePoolPage() {
   );
 }
 
-function MemoPreview({ content }) {
-  return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdownHtml(content) }} />;
-}
 
-function MemosPage({ agents, agentFilter = "", onClearAgentFilter }) {
-  const [rows, setRows] = useState([]);
-  const [files, setFiles] = useState([]);
-  const [query, setQuery] = useState("");
-  const [tag, setTag] = useState("");
-  const [form, setForm] = useState({
-    id: "",
-    title: "",
-    content: "",
-    tags: "",
-    visibility: "private",
-    pinned: false,
-    archived: false,
-    agentId: agentFilter || "",
-    nodeId: "",
-    forwardRuleId: ""
-  });
-  const [message, setMessage] = useState("");
-  const [uploading, setUploading] = useState(false);
 
-  const load = async () => {
-    try {
-      const queryParams = new URLSearchParams();
-      if (query) queryParams.set("q", query);
-      if (tag) queryParams.set("tag", tag);
-      if (agentFilter) queryParams.set("agentId", agentFilter);
-      const memoUrl = queryParams.size ? `/api/memos?${queryParams}` : "/api/memos";
-      const [memoRows, fileRows] = await Promise.all([api(memoUrl), api("/api/files")]);
-      setRows(memoRows);
-      setFiles(fileRows);
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
 
-  useEffect(() => {
-    load().catch(() => {});
-  }, [query, tag, agentFilter]);
-
-  useEffect(() => {
-    if (agentFilter) setForm((current) => ({ ...current, agentId: agentFilter }));
-  }, [agentFilter]);
-
-  const resetForm = () => {
-    setForm({
-      id: "",
-      title: "",
-      content: "",
-      tags: "",
-      visibility: "private",
-      pinned: false,
-      archived: false,
-      agentId: agentFilter || "",
-      nodeId: "",
-      forwardRuleId: ""
-    });
-  };
-
-  const openMemo = (memo) => {
-    setForm({
-      id: memo.id,
-      title: memo.title,
-      content: memo.content,
-      tags: joinTags(memo.tags),
-      visibility: memo.visibility || "private",
-      pinned: Boolean(memo.pinned),
-      archived: Boolean(memo.archived),
-      agentId: memo.agentId || agentFilter || "",
-      nodeId: memo.nodeId || "",
-      forwardRuleId: memo.forwardRuleId || ""
-    });
-  };
-
-  const saveMemo = async () => {
-    try {
-      const payload = {
-        ...form,
-        tags: parseCommaList(form.tags)
-      };
-      const url = form.id ? `/api/memos/${form.id}` : "/api/memos";
-      const method = form.id ? "PUT" : "POST";
-      await api(url, { method, body: JSON.stringify(payload) });
-      setMessage(form.id ? "备忘录已更新。" : "备忘录已创建。");
-      resetForm();
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const deleteMemo = async () => {
-    if (!form.id) return;
-    if (!window.confirm("确认删除这条备忘录吗？")) return;
-    try {
-      await api(`/api/memos/${form.id}`, { method: "DELETE" });
-      setMessage("备忘录已删除。");
-      resetForm();
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const uploadAttachment = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file || !form.id) return;
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("memoId", form.id);
-    formData.append("visibility", form.visibility);
-    formData.append("tags", form.tags);
-    try {
-      setUploading(true);
-      await uploadForm("/api/files/upload", formData);
-      setMessage("附件已上传。");
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    } finally {
-      setUploading(false);
-      event.target.value = "";
-    }
-  };
-
-  const downloadAttachment = async (file) => {
-    try {
-      await ensureTokenSession();
-      await downloadBinary(`/api/files/${file.id}/download`, file.name);
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const removeAttachment = async (fileId) => {
-    if (!window.confirm("确认删除附件吗？")) return;
-    try {
-      await api(`/api/files/${fileId}`, { method: "DELETE" });
-      setMessage("附件已删除。");
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  return (
-    <section>
-      <div className="toolbar">
-        <input placeholder="搜索标题 / 正文 / 标签" value={query} onChange={(event) => setQuery(event.target.value)} />
-        <input placeholder="按标签筛选" value={tag} onChange={(event) => setTag(event.target.value)} />
-        {agentFilter ? <button onClick={onClearAgentFilter}>清除服务器筛选</button> : null}
-        <button onClick={resetForm}>新建备忘录</button>
-      </div>
-
-      <div className="grid2">
-        <Panel title="备忘录列表">
-          {rows.length ? (
-            <div className="list-stack">
-              {rows.map((memo) => (
-                <button className={`list-card ${form.id === memo.id ? "active" : ""}`} key={memo.id} onClick={() => openMemo(memo)}>
-                  <strong>{memo.pinned ? "置顶 · " : ""}{memo.title}</strong>
-                  <span>{joinTags(memo.tags) || "无标签"} / {memo.visibility}</span>
-                  <span>{formatDateTime(memo.updatedAt)}</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="empty">还没有备忘录。</div>
-          )}
-        </Panel>
-
-        <Panel title="编辑备忘录">
-          <div className="form-grid">
-            <Field label="标题" value={form.title} onChange={(value) => setForm((current) => ({ ...current, title: value }))} />
-            <Field label="标签" value={form.tags} onChange={(value) => setForm((current) => ({ ...current, tags: value }))} placeholder="ops, server, renewal" />
-            <Field label="可见性" type="select" value={form.visibility} onChange={(value) => setForm((current) => ({ ...current, visibility: value }))} options={[["private", "私有"], ["public", "公开"], ["link", "仅链接可见"]]} />
-            <Field label="关联服务器" type="select" value={form.agentId} onChange={(value) => setForm((current) => ({ ...current, agentId: value }))} options={[["", "未关联"], ...agents.map((agent) => [agent.id, agent.name])]} />
-            <label>
-              <span>置顶</span>
-              <input type="checkbox" checked={form.pinned} onChange={(event) => setForm((current) => ({ ...current, pinned: event.target.checked }))} />
-            </label>
-            <label>
-              <span>归档</span>
-              <input type="checkbox" checked={form.archived} onChange={(event) => setForm((current) => ({ ...current, archived: event.target.checked }))} />
-            </label>
-          </div>
-          <div className="subscription-editor">
-            <label>
-              Markdown
-              <textarea className="inline-textarea" rows={14} value={form.content} onChange={(event) => setForm((current) => ({ ...current, content: event.target.value }))} />
-            </label>
-          </div>
-          <div className="actions">
-            <button className="primary" onClick={saveMemo}>保存</button>
-            <button className="red-bg" onClick={deleteMemo} disabled={!form.id}>删除</button>
-            <label className="upload-label">
-              <input type="file" onChange={uploadAttachment} disabled={!form.id || uploading} />
-              {uploading ? "上传中..." : "上传附件"}
-            </label>
-          </div>
-          {message ? <p className="panel-message">{message}</p> : null}
-        </Panel>
-      </div>
-
-      <div className="grid2">
-        <Panel title="Markdown 预览">
-          <MemoPreview content={form.content} />
-        </Panel>
-
-        <Panel title="附件与文件">
-          {form.id ? (
-            form.id && rows.find((memo) => memo.id === form.id)?.attachments?.length ? (
-              <table>
-                <thead>
-                  <tr>
-                    <th>名称</th>
-                    <th>类型</th>
-                    <th>大小</th>
-                    <th>时间</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.find((memo) => memo.id === form.id)?.attachments?.map((file) => (
-                    <tr key={file.id}>
-                      <td>{file.name}</td>
-                      <td>{file.mimeType}</td>
-                      <td>{formatBytes(file.size)}</td>
-                      <td>{formatDateTime(file.uploadedAt)}</td>
-                      <td className="actions-cell">
-                        <button className="link" onClick={() => downloadAttachment(file)}>下载</button>
-                        <button className="link" onClick={() => removeAttachment(file.id)}>删除</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="empty">当前备忘录还没有附件。</div>
-            )
-          ) : (
-            <div className="empty">先保存一条备忘录，才能上传附件。</div>
-          )}
-
-          <div className="sub-panel">
-            <h3>全部文件</h3>
-            {files.length ? (
-              <table>
-                <thead>
-                  <tr>
-                    <th>名称</th>
-                    <th>关联 Memo</th>
-                    <th>标签</th>
-                    <th>引用</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {files.slice(0, 20).map((file) => (
-                    <tr key={file.id}>
-                      <td>{file.name}</td>
-                      <td>{file.memoId || "-"}</td>
-                      <td>{joinTags(file.tags) || "-"}</td>
-                      <td>{file.refCount}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="empty">还没有文件。</div>
-            )}
-          </div>
-        </Panel>
-      </div>
-    </section>
-  );
-}
-
-function WorkspacePage({ agents, openSsh, openConsole }) {
-  const [assets, setAssets] = useState([]);
-  const [credentials, setCredentials] = useState([]);
-  const [scripts, setScripts] = useState([]);
-  const [runs, setRuns] = useState([]);
-  const [assetForm, setAssetForm] = useState({ id: "", agentId: "", displayName: "", host: "", ip: "", port: 22, username: "root", group: "", tags: "", provider: "", region: "", note: "", public: true, publicName: "", publicGroup: "", publicRegion: "", publicFlag: "" });
-  const [credentialForm, setCredentialForm] = useState({ name: "", host: "", port: 22, username: "root", mode: "password", password: "", privateKey: "", note: "" });
-  const [scriptForm, setScriptForm] = useState({ id: "", name: "uptime", content: "uptime", category: "ops", tags: "uptime", timeoutMs: 30000 });
-  const [batchAgentIds, setBatchAgentIds] = useState([]);
-  const [message, setMessage] = useState("");
-
-  const load = async () => {
-    try {
-      const [assetRows, credentialRows, scriptRows, runRows] = await Promise.all([api("/api/assets"), api("/api/credentials"), api("/api/scripts"), api("/api/command-runs")]);
-      setAssets(assetRows);
-      setCredentials(credentialRows);
-      setScripts(scriptRows);
-      setRuns(runRows);
-      if (!batchAgentIds.length) setBatchAgentIds(agents.map((agent) => agent.id));
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  useEffect(() => {
-    load().catch(() => {});
-  }, [agents.length]);
-
-  const saveAsset = async () => {
-    try {
-      const payload = { ...assetForm, tags: parseCommaList(assetForm.tags) };
-      const url = assetForm.id ? `/api/assets/${assetForm.id}` : "/api/assets";
-      const method = assetForm.id ? "PUT" : "POST";
-      await api(url, { method, body: JSON.stringify(payload) });
-      setMessage("服务器资产已保存。");
-      setAssetForm({ id: "", agentId: "", displayName: "", host: "", ip: "", port: 22, username: "root", group: "", tags: "", provider: "", region: "", note: "", public: true, publicName: "", publicGroup: "", publicRegion: "", publicFlag: "" });
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const saveCredential = async () => {
-    try {
-      await api("/api/credentials", { method: "POST", body: JSON.stringify(credentialForm) });
-      setMessage("凭据已保存。");
-      setCredentialForm({ name: "", host: "", port: 22, username: "root", mode: "password", password: "", privateKey: "", note: "" });
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const testCredential = async (id) => {
-    try {
-      const response = await api(`/api/credentials/${id}/test`, { method: "POST" });
-      setMessage(response.output || "凭据测试通过。");
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const revokeCredential = async (id) => {
-    if (!window.confirm("确认撤销这份凭据吗？")) return;
-    try {
-      await api(`/api/credentials/${id}`, { method: "DELETE" });
-      setMessage("凭据已撤销。");
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const saveScript = async () => {
-    try {
-      const payload = { ...scriptForm, tags: parseCommaList(scriptForm.tags) };
-      const url = scriptForm.id ? `/api/scripts/${scriptForm.id}` : "/api/scripts";
-      const method = scriptForm.id ? "PUT" : "POST";
-      await api(url, { method, body: JSON.stringify(payload) });
-      setMessage("脚本已保存。");
-      setScriptForm({ id: "", name: "uptime", content: "uptime", category: "ops", tags: "uptime", timeoutMs: 30000 });
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const runBatch = async () => {
-    try {
-      const script = scripts.find((item) => item.name === scriptForm.name) || scripts.find((item) => item.id === scriptForm.id);
-      const response = await api("/api/scripts/run-batch", {
-        method: "POST",
-        body: JSON.stringify({
-          scriptId: script?.id || "",
-          command: script ? "" : scriptForm.content,
-          agentIds: batchAgentIds,
-          concurrency: 2,
-          timeoutMs: Number(scriptForm.timeoutMs || 30000)
-        })
-      });
-      setMessage(`批量命令已执行，共 ${response.results?.length || 0} 台。`);
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  return (
-    <section>
-      <div className="grid2">
-        <Panel title="服务器资产">
-          <div className="form-grid">
-            <Field label="关联 Agent" type="select" value={assetForm.agentId} onChange={(value) => setAssetForm((current) => ({ ...current, agentId: value }))} options={[["", "不关联"], ...agents.map((agent) => [agent.id, agent.name])]} />
-            <Field label="显示名称" value={assetForm.displayName} onChange={(value) => setAssetForm((current) => ({ ...current, displayName: value }))} />
-            <Field label="Host" value={assetForm.host} onChange={(value) => setAssetForm((current) => ({ ...current, host: value }))} />
-            <Field label="IP" value={assetForm.ip} onChange={(value) => setAssetForm((current) => ({ ...current, ip: value }))} />
-            <Field label="用户名" value={assetForm.username} onChange={(value) => setAssetForm((current) => ({ ...current, username: value }))} />
-            <Field label="标签" value={assetForm.tags} onChange={(value) => setAssetForm((current) => ({ ...current, tags: value }))} />
-          </div>
-          <div className="actions">
-            <button className="primary" onClick={saveAsset}>保存资产</button>
-          </div>
-          {assets.length ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>Agent</th>
-                  <th>地址</th>
-                  <th>标签</th>
-                </tr>
-              </thead>
-              <tbody>
-                {assets.map((asset) => (
-                  <tr key={asset.id}>
-                    <td>{asset.displayName}</td>
-                    <td>{asset.agentId || "-"}</td>
-                    <td>{asset.host || asset.ip || "-"}</td>
-                    <td>{joinTags(asset.tags) || "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="empty">还没有服务器资产。</div>
-          )}
-        </Panel>
-
-        <Panel title="凭据托管">
-          <div className="form-grid">
-            <Field label="名称" value={credentialForm.name} onChange={(value) => setCredentialForm((current) => ({ ...current, name: value }))} />
-            <Field label="Host" value={credentialForm.host} onChange={(value) => setCredentialForm((current) => ({ ...current, host: value }))} />
-            <Field label="用户名" value={credentialForm.username} onChange={(value) => setCredentialForm((current) => ({ ...current, username: value }))} />
-            <Field label="认证方式" type="select" value={credentialForm.mode} onChange={(value) => setCredentialForm((current) => ({ ...current, mode: value }))} options={[["password", "密码"], ["privateKey", "私钥"]]} />
-            {credentialForm.mode === "password" ? <Field label="密码" type="password" value={credentialForm.password} onChange={(value) => setCredentialForm((current) => ({ ...current, password: value }))} /> : null}
-            {credentialForm.mode === "privateKey" ? <Field label="私钥" type="textarea" rows={6} value={credentialForm.privateKey} onChange={(value) => setCredentialForm((current) => ({ ...current, privateKey: value }))} /> : null}
-          </div>
-          <div className="actions">
-            <button className="primary" onClick={saveCredential}>保存凭据</button>
-          </div>
-          {credentials.length ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>Host</th>
-                  <th>认证</th>
-                  <th>状态</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {credentials.map((credential) => (
-                  <tr key={credential.id}>
-                    <td>{credential.name}</td>
-                    <td>{credential.host}:{credential.port}</td>
-                    <td>{credential.mode}</td>
-                    <td>{credential.revokedAt ? "revoked" : "active"}</td>
-                    <td className="actions-cell">
-                      <button className="link" onClick={() => testCredential(credential.id)}>测试</button>
-                      <button className="link" onClick={() => revokeCredential(credential.id)}>撤销</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="empty">还没有凭据。</div>
-          )}
-        </Panel>
-      </div>
-
-      <div className="grid2">
-        <Panel title="脚本库与批量命令">
-          <div className="form-grid">
-            <Field label="脚本名称" value={scriptForm.name} onChange={(value) => setScriptForm((current) => ({ ...current, name: value }))} />
-            <Field label="分类" value={scriptForm.category} onChange={(value) => setScriptForm((current) => ({ ...current, category: value }))} />
-            <Field label="标签" value={scriptForm.tags} onChange={(value) => setScriptForm((current) => ({ ...current, tags: value }))} />
-            <Field label="超时毫秒" type="number" value={scriptForm.timeoutMs} onChange={(value) => setScriptForm((current) => ({ ...current, timeoutMs: value }))} />
-            <Field label="命令内容" type="textarea" rows={10} value={scriptForm.content} onChange={(value) => setScriptForm((current) => ({ ...current, content: value }))} />
-          </div>
-          <div className="actions">
-            <button className="primary" onClick={saveScript}>保存脚本</button>
-            <button onClick={runBatch}>对选中服务器批量执行</button>
-          </div>
-          <div className="choice-grid">
-            {agents.map((agent) => (
-              <label key={agent.id} className="subscription-node">
-                <input type="checkbox" checked={batchAgentIds.includes(agent.id)} onChange={() => setBatchAgentIds((current) => (current.includes(agent.id) ? current.filter((item) => item !== agent.id) : [...current, agent.id]))} />
-                <div>
-                  <strong>{agent.name}</strong>
-                  <span>{agent.host || agent.ip}</span>
-                </div>
-              </label>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel title="脚本结果与快捷入口">
-          <div className="actions">
-            {agents.map((agent) => (
-              <React.Fragment key={agent.id}>
-                <button onClick={() => openSsh(agent.id)}>SSH {agent.name}</button>
-                <button onClick={() => openConsole(agent.id)}>SFTP {agent.name}</button>
-              </React.Fragment>
-            ))}
-          </div>
-          {runs.length ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>时间</th>
-                  <th>脚本 / 命令</th>
-                  <th>目标</th>
-                  <th>结果</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.slice(0, 20).map((run) => (
-                  <tr key={run.id}>
-                    <td>{formatDateTime(run.createdAt || run.at)}</td>
-                    <td>{run.scriptId || run.command}</td>
-                    <td>{joinTags(run.agentIds || (run.agentId ? [run.agentId] : []))}</td>
-                    <td><code>{JSON.stringify(run.results || run.output).slice(0, 240)}</code></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="empty">还没有执行记录。</div>
-          )}
-        </Panel>
-      </div>
-      {message ? <p className="panel-message">{message}</p> : null}
-    </section>
-  );
-}
-
-function ConsolePage({ agents, agentId, setAgentId, openSsh }) {
-  const [panes, setPanes] = useState({
-    left: { agentId: "", path: "/", rows: [], loading: false },
-    right: { agentId: "", path: "/", rows: [], loading: false }
-  });
-  const [message, setMessage] = useState("");
-  const [renameForm, setRenameForm] = useState({ agentId: "", oldPath: "", newPath: "" });
-  const [transferring, setTransferring] = useState("");
-  const [backupBusy, setBackupBusy] = useState(false);
-
-  const sideLabel = (side) => (side === "left" ? "左侧" : "右侧");
-  const otherSide = (side) => (side === "left" ? "right" : "left");
-  const getAgent = (id) => agents.find((item) => item.id === id);
-  const sortedRows = (rows = []) => [...rows].sort((left, right) => {
-    if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
-    return String(left.name || "").localeCompare(String(right.name || ""), "zh-CN", { numeric: true, sensitivity: "base" });
-  });
-  const entryPath = (pane, entry) => (pane.path === "/" ? `/${entry.name}` : `${pane.path}/${entry.name}`);
-  const parentTarget = (panePath) => {
-    const parent = panePath && panePath !== "/" ? panePath.split("/").filter(Boolean).slice(0, -1).join("/") : "";
-    return parent ? `/${parent}` : "/";
-  };
-
-  const patchPane = (side, patch) => {
-    setPanes((current) => ({ ...current, [side]: { ...current[side], ...patch } }));
-  };
-
-  const loadPane = async (side, nextPath = panes[side].path, nextAgentId = panes[side].agentId) => {
-    if (!nextAgentId) return;
-    patchPane(side, { loading: true, agentId: nextAgentId });
-    try {
-      const response = await api(`/api/agents/${nextAgentId}/sftp?path=${encodeURIComponent(nextPath || "/")}`);
-      patchPane(side, {
-        agentId: nextAgentId,
-        path: response.path || nextPath || "/",
-        rows: response.entries || [],
-        loading: false
-      });
-      setMessage("");
-    } catch (error) {
-      patchPane(side, { loading: false });
-      setMessage(`${sideLabel(side)}读取失败：${error.message}`);
-    }
-  };
-
-  useEffect(() => {
-    if (!agents.length) return;
-    setPanes((current) => {
-      const leftAgentId = agentId || current.left.agentId || agents[0].id;
-      const rightAgentId = current.right.agentId || agents.find((agent) => agent.id !== leftAgentId)?.id || leftAgentId;
-      return {
-        left: { ...current.left, agentId: leftAgentId, rows: current.left.agentId === leftAgentId ? current.left.rows : [] },
-        right: { ...current.right, agentId: rightAgentId, rows: current.right.agentId === rightAgentId ? current.right.rows : [] }
-      };
-    });
-    if (!agentId && agents[0]) setAgentId(agents[0].id);
-  }, [agents.length, agentId]);
-
-  useEffect(() => {
-    if (panes.left.agentId && !panes.left.rows.length && !panes.left.loading) loadPane("left", "/", panes.left.agentId).catch(() => {});
-  }, [panes.left.agentId]);
-
-  useEffect(() => {
-    if (panes.right.agentId && !panes.right.rows.length && !panes.right.loading) loadPane("right", "/", panes.right.agentId).catch(() => {});
-  }, [panes.right.agentId]);
-
-  const changePaneAgent = (side, nextAgentId) => {
-    patchPane(side, { agentId: nextAgentId, path: "/", rows: [] });
-    if (side === "left") setAgentId(nextAgentId);
-    loadPane(side, "/", nextAgentId).catch(() => {});
-  };
-
-  const jumpToPath = (side, index) => {
-    const pane = panes[side];
-    const parts = pane.path.split("/").filter(Boolean);
-    const target = index < 0 ? "/" : `/${parts.slice(0, index + 1).join("/")}`;
-    loadPane(side, target, pane.agentId).catch(() => {});
-  };
-
-  const goTo = (side, entry) => {
-    if (!entry.isDirectory) return;
-    const pane = panes[side];
-    loadPane(side, entryPath(pane, entry), pane.agentId).catch(() => {});
-  };
-
-  const uploadRemote = async (side, event) => {
-    const file = event.target.files?.[0];
-    const pane = panes[side];
-    if (!file || !pane.agentId) return;
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("directory", pane.path);
-    try {
-      await uploadForm(`/api/agents/${pane.agentId}/sftp/upload`, formData);
-      setMessage(`${sideLabel(side)}上传完成：${file.name}`);
-      loadPane(side, pane.path, pane.agentId).catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    } finally {
-      event.target.value = "";
-    }
-  };
-
-  const downloadRemote = async (side, entry) => {
-    const pane = panes[side];
-    try {
-      await ensureTokenSession();
-      await downloadBinary(`/api/agents/${pane.agentId}/sftp/download?path=${encodeURIComponent(entryPath(pane, entry))}`, entry.name);
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const deleteRemote = async (side, entry) => {
-    const pane = panes[side];
-    const fullPath = entryPath(pane, entry);
-    if (!window.confirm(`确认删除 ${fullPath} 吗？`)) return;
-    try {
-      await api(`/api/agents/${pane.agentId}/sftp?path=${encodeURIComponent(fullPath)}`, { method: "DELETE" });
-      setMessage(`${sideLabel(side)}已删除：${fullPath}`);
-      loadPane(side, pane.path, pane.agentId).catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const mkdirRemote = async (side) => {
-    const pane = panes[side];
-    const name = window.prompt(`在${sideLabel(side)}创建目录`);
-    if (!name) return;
-    try {
-      const nextPath = pane.path === "/" ? `/${name}` : `${pane.path}/${name}`;
-      await api(`/api/agents/${pane.agentId}/sftp/mkdir`, { method: "POST", body: JSON.stringify({ path: nextPath }) });
-      setMessage(`${sideLabel(side)}目录已创建：${nextPath}`);
-      loadPane(side, pane.path, pane.agentId).catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const transferEntry = async (side, entry) => {
-    if (entry.isDirectory) return;
-    const source = panes[side];
-    const target = panes[otherSide(side)];
-    if (!source.agentId || !target.agentId) return;
-    const sourcePath = entryPath(source, entry);
-    const targetPath = target.path === "/" ? `/${entry.name}` : `${target.path}/${entry.name}`;
-    const transferKey = `${side}:${sourcePath}`;
-    setTransferring(transferKey);
-    try {
-      const response = await api("/api/sftp/transfer", {
-        method: "POST",
-        body: JSON.stringify({
-          sourceAgentId: source.agentId,
-          sourcePath,
-          targetAgentId: target.agentId,
-          targetPath
-        })
-      });
-      setMessage(`对传完成：${formatBytes(response.size)}，${sourcePath} → ${targetPath}`);
-      loadPane(otherSide(side), target.path, target.agentId).catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    } finally {
-      setTransferring("");
-    }
-  };
-
-  const renameRemote = async () => {
-    const targetAgentId = renameForm.agentId || panes.left.agentId;
-    if (!targetAgentId || !renameForm.oldPath || !renameForm.newPath) return;
-    try {
-      await api(`/api/agents/${targetAgentId}/sftp/rename`, { method: "POST", body: JSON.stringify(renameForm) });
-      setMessage("重命名完成。");
-      setRenameForm({ agentId: targetAgentId, oldPath: "", newPath: "" });
-      for (const side of ["left", "right"]) {
-        if (panes[side].agentId === targetAgentId) loadPane(side, panes[side].path, targetAgentId).catch(() => {});
-      }
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const downloadBackup = async () => {
-    setBackupBusy(true);
-    try {
-      await ensureTokenSession();
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      await downloadBinary("/api/backups/download", `chiken-easy-backup-${stamp}.json.gz`);
-      setMessage("备份压缩包已开始下载。迁移到新服务器时，请同时确保 CHIKEN_MASTER_KEY 与旧服务器一致。");
-    } catch (error) {
-      setMessage(error.message);
-    } finally {
-      setBackupBusy(false);
-    }
-  };
-
-  const restoreBackup = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!window.confirm("恢复会覆盖当前 data/ 中同名运行数据；系统会先自动生成恢复前快照。继续吗？")) {
-      event.target.value = "";
-      return;
-    }
-    const formData = new FormData();
-    formData.append("backup", file);
-    setBackupBusy(true);
-    try {
-      const response = await uploadForm("/api/backups/restore", formData);
-      setMessage(`恢复完成：${response.fileCount} 个文件，恢复前快照 ${response.preRestoreBackup}`);
-      for (const side of ["left", "right"]) loadPane(side, panes[side].path, panes[side].agentId).catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    } finally {
-      setBackupBusy(false);
-      event.target.value = "";
-    }
-  };
-
-  const renderPane = (side, title) => {
-    const pane = panes[side];
-    const agent = getAgent(pane.agentId);
-    const rows = sortedRows(pane.rows);
-    const pathParts = pane.path.split("/").filter(Boolean);
-    return (
-      <Panel
-        title={title}
-        right={<span className="panel-muted">{rows.length} 项 · {pane.loading ? "读取中" : "目录优先"}</span>}
-      >
-        <div className="sftp-pane">
-          <div className="sftp-pane-toolbar">
-            <label>
-              Agent
-              <select value={pane.agentId} onChange={(event) => changePaneAgent(side, event.target.value)}>
-                {agents.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name} · {item.connected ? "online" : "offline"}</option>
-                ))}
-              </select>
-            </label>
-            <label className="sftp-pane-path">
-              路径
-              <div className="path-input-row">
-                <input value={pane.path} onChange={(event) => patchPane(side, { path: event.target.value })} onKeyDown={(event) => {
-                  if (event.key === "Enter") loadPane(side, pane.path, pane.agentId).catch(() => {});
-                }} />
-                <button onClick={() => loadPane(side, pane.path, pane.agentId).catch(() => {})}>前往</button>
-              </div>
-            </label>
-          </div>
-          <div className="sftp-pane-actions">
-            <button onClick={() => loadPane(side, pane.path, pane.agentId).catch(() => {})}>刷新</button>
-            <button onClick={() => loadPane(side, parentTarget(pane.path), pane.agentId).catch(() => {})} disabled={pane.path === "/"}>上级</button>
-            <button onClick={() => openSsh(pane.agentId)} disabled={!pane.agentId}>SSH</button>
-            <button onClick={() => mkdirRemote(side)}>新建目录</button>
-            <label className="upload-label">
-              <input type="file" onChange={(event) => uploadRemote(side, event)} />
-              上传
-            </label>
-          </div>
-          <div className="sftp-current compact">
-            <div className="sftp-current-main">
-              <strong>{agent?.name || "Agent"}</strong>
-              <StatusBadge ok={agent?.connected} text={agent?.connected ? "online" : "offline"} />
-            </div>
-            <div className="path-crumbs">
-              <button onClick={() => jumpToPath(side, -1)}>/</button>
-              {pathParts.map((part, index) => (
-                <button key={`${side}-${part}-${index}`} onClick={() => jumpToPath(side, index)}>{part}</button>
-              ))}
-            </div>
-          </div>
-          <div className="sftp-file-list">
-            <div className="file-row file-head">
-              <span>名称</span>
-              <span>大小</span>
-              <span>修改日期</span>
-              <span>操作</span>
-            </div>
-            <div className="sftp-file-scroll">
-              <button className="file-row file-up" onClick={() => loadPane(side, parentTarget(pane.path), pane.agentId).catch(() => {})} disabled={pane.path === "/"}>
-                <span className="file-title">
-                  <span className="file-icon">UP</span>
-                  <span className="file-label">[上级目录]</span>
-                </span>
-                <span />
-                <span />
-                <span>{pane.path === "/" ? "根目录" : parentTarget(pane.path)}</span>
-              </button>
-              {rows.length ? rows.map((entry) => {
-                const transferKey = `${side}:${entryPath(pane, entry)}`;
-                return (
-                  <div className={`file-row ${entry.isDirectory ? "directory" : "file"}`} key={`${entry.name}-${entry.modifiedAt}`}>
-                    <button className="file-name" onClick={() => (entry.isDirectory ? goTo(side, entry) : downloadRemote(side, entry))}>
-                      <span className="file-icon">{entry.isDirectory ? "DIR" : "FILE"}</span>
-                      <span className="file-label" title={entry.name}>{entry.name}{entry.isDirectory ? "/" : ""}</span>
-                    </button>
-                    <span>{entry.isDirectory ? "" : formatBytes(entry.size)}</span>
-                    <span>{formatDateTime(entry.modifiedAt)}</span>
-                    <span className="file-actions">
-                      {entry.isDirectory ? <button onClick={() => goTo(side, entry)}>进入</button> : <button onClick={() => downloadRemote(side, entry)}>下载</button>}
-                      {!entry.isDirectory ? <button onClick={() => transferEntry(side, entry)} disabled={Boolean(transferring)}>{transferring === transferKey ? "传输中" : side === "left" ? "传到右侧" : "传到左侧"}</button> : null}
-                      {!entry.isDirectory ? <button className="link danger-link" onClick={() => deleteRemote(side, entry)}>删除</button> : null}
-                    </span>
-                  </div>
-                );
-              }) : <div className="empty compact-empty">{pane.loading ? "正在读取目录..." : "目录为空或尚未读取。"}</div>}
-            </div>
-          </div>
-        </div>
-      </Panel>
-    );
-  };
-
-  if (!agents.length) return <AgentEmptyState title="SFTP / 终端需要先选择 Agent" />;
-
-  return (
-    <section>
-      <div className="sftp-shell">
-        <div>
-          <h1>双栏 SFTP 对传</h1>
-          <p className="muted">左右两边都是可视化文件管理器。进入目录后直接点文件行的“传到右侧/左侧”，不需要手动复制路径。</p>
-        </div>
-        <div className="sftp-hero-actions">
-          <button className="primary" onClick={downloadBackup} disabled={backupBusy}>
-            {backupBusy ? "处理中..." : "一键下载备份"}
-          </button>
-          <label className="upload-label">
-            <input type="file" accept=".gz,.json,.backup,application/gzip,application/json" onChange={restoreBackup} />
-            上传备份恢复
-          </label>
-        </div>
-      </div>
-
-      <div className="sftp-dual-grid">
-        {renderPane("left", "左侧文件")}
-        {renderPane("right", "右侧文件")}
-      </div>
-
-      <div className="grid2 sftp-lower-grid">
-        <Panel title="一键备份 / 迁移恢复">
-          <div className="backup-actions">
-            <button className="primary" onClick={downloadBackup} disabled={backupBusy}>
-              {backupBusy ? "处理中..." : "下载备份压缩包"}
-            </button>
-            <label className="upload-label">
-              <input type="file" accept=".gz,.json,.backup,application/gzip,application/json" onChange={restoreBackup} />
-              上传备份并恢复
-            </label>
-          </div>
-          <div className="panel-tip">备份包含 data/ 运行状态、审计、SQLite 文件和上传附件，不包含 .env、.local、私钥、node_modules、dist。迁移到新服务器时请先部署相同版本，并设置同一个 CHIKEN_MASTER_KEY。</div>
-        </Panel>
-
-        <Panel title="路径工具">
-          <div className="form-grid">
-            <label>
-              Agent
-              <select value={renameForm.agentId || panes.left.agentId} onChange={(event) => setRenameForm((current) => ({ ...current, agentId: event.target.value }))}>
-                {agents.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name} · {item.connected ? "online" : "offline"}</option>
-                ))}
-              </select>
-            </label>
-            <Field label="旧路径" value={renameForm.oldPath} onChange={(value) => setRenameForm((current) => ({ ...current, oldPath: value }))} placeholder="/tmp/a.txt" />
-            <Field label="新路径" value={renameForm.newPath} onChange={(value) => setRenameForm((current) => ({ ...current, newPath: value }))} placeholder="/tmp/b.txt" />
-          </div>
-          <div className="actions">
-            <button className="primary" onClick={renameRemote}>执行重命名</button>
-          </div>
-          {message ? <pre>{message}</pre> : null}
-        </Panel>
-      </div>
-    </section>
-  );
-}
-
-function SettingsPage() {
-  const [settings, setSettings] = useState(null);
-  const [message, setMessage] = useState("");
-
-  const load = () => api("/api/settings").then(setSettings).catch((error) => setMessage(error.message));
-
-  useEffect(() => {
-    load().catch(() => {});
-  }, []);
-
-  const save = async () => {
-    try {
-      const response = await api("/api/settings", { method: "PUT", body: JSON.stringify(settings) });
-      setSettings(response);
-      setMessage("设置已保存。");
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const testNotification = async () => {
-    try {
-      await api("/api/settings/notifications/test", { method: "POST" });
-      setMessage("测试通知已发送。");
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  if (!settings) return null;
-
-  return (
-    <section>
-      <div className="grid2">
-        <Panel title="监控与告警设置">
-          <div className="form-grid">
-            <Field label="公开页刷新秒数" type="number" value={settings.publicProbeRefreshSec} onChange={(value) => setSettings((current) => ({ ...current, publicProbeRefreshSec: Number(value || 10) }))} />
-            <Field label="CPU 阈值" type="number" value={settings.alerts?.cpuThreshold || 90} onChange={(value) => setSettings((current) => ({ ...current, alerts: { ...current.alerts, cpuThreshold: Number(value || 90) } }))} />
-            <Field label="内存阈值" type="number" value={settings.alerts?.memoryThreshold || 90} onChange={(value) => setSettings((current) => ({ ...current, alerts: { ...current.alerts, memoryThreshold: Number(value || 90) } }))} />
-            <Field label="磁盘阈值" type="number" value={settings.alerts?.diskThreshold || 90} onChange={(value) => setSettings((current) => ({ ...current, alerts: { ...current.alerts, diskThreshold: Number(value || 90) } }))} />
-            <Field label="冷却分钟" type="number" value={settings.alerts?.cooldownMinutes || 30} onChange={(value) => setSettings((current) => ({ ...current, alerts: { ...current.alerts, cooldownMinutes: Number(value || 30) } }))} />
-            <Field label="Telegram Chat ID" value={settings.telegramChatId || ""} onChange={(value) => setSettings((current) => ({ ...current, telegramChatId: value }))} />
-          </div>
-          <div className="actions">
-            <button className="primary" onClick={save}>保存设置</button>
-            <button onClick={testNotification}>测试通知</button>
-          </div>
-        </Panel>
-
-        <Panel title="安全状态">
-          <div className="panel-stack">
-            <p className="muted">Query token: {settings.queryTokenEnabled ? "enabled" : "disabled"}</p>
-            <p className="muted">Master key: {settings.masterKeySet ? "set" : "missing"}</p>
-            <p className="muted">Storage mode: {settings.storageMode}</p>
-            {settings.hasTelegramToken ? <p className="muted">Telegram token 已配置</p> : <p className="muted">Telegram token 未配置</p>}
-            {settings.hasWebhookUrl ? <p className="muted">Webhook 已配置</p> : <p className="muted">Webhook 未配置</p>}
-          </div>
-          {settings.warnings?.length ? (
-            <div className="warning-list">
-              {settings.warnings.map((warning) => (
-                <p key={warning}>{warning}</p>
-              ))}
-            </div>
-          ) : (
-            <div className="empty">当前没有额外警告。</div>
-          )}
-        </Panel>
-      </div>
-      {message ? <p className="panel-message">{message}</p> : null}
-    </section>
-  );
-}
-
-function ApiTokens({ tokenDraft, setTokenDraft, saveToken, clearToken, activeToken }) {
-  const [rows, setRows] = useState([]);
-  const [created, setCreated] = useState("");
-  const [name, setName] = useState("automation");
-  const [message, setMessage] = useState("");
-
-  const load = () => api("/api/api-tokens").then(setRows);
-
-  useEffect(() => {
-    load().catch(() => {});
-  }, []);
-
-  const create = async () => {
-    try {
-      const response = await api("/api/api-tokens", { method: "POST", body: JSON.stringify({ name }) });
-      setCreated(response.token);
-      setTokenDraft(response.token);
-      setMessage("新令牌已生成，可以直接点“使用令牌”写入当前面板。");
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const revoke = async (id) => {
-    try {
-      await api(`/api/api-tokens/${id}`, { method: "DELETE" });
-      setMessage("令牌已撤销。");
-      load().catch(() => {});
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  return (
-    <section>
-      <div className="grid2">
-        <Panel title="创建与注入令牌">
-          <div className="form-grid">
-            <Field label="令牌名称" value={name} onChange={setName} />
-            <Field label="当前面板令牌" value={tokenDraft} onChange={setTokenDraft} placeholder="ck_xxx" />
-          </div>
-          <div className="actions">
-            <button className="primary" onClick={create}>
-              生成 API Token
-            </button>
-            <button onClick={saveToken}>使用令牌</button>
-            <button onClick={clearToken}>清除本地令牌</button>
-          </div>
-          <pre>{created || activeToken || "保存后的令牌会自动附带到 API、日志 SSE 和终端 WebSocket，方便 AI 直接接管主控。"} </pre>
-          {message ? <p className="panel-message">{message}</p> : null}
-        </Panel>
-
-        <Panel title="令牌说明">
-          <div className="panel-tip">
-            API Token 的定位就是“拿到令牌即可进入主控并修改配置”。你可以把它给自动化脚本、浏览器收藏链接或 AI 代理使用。
-          </div>
-          <div className="panel-tip">浏览器地址支持带上 `?token=ck_xxx`，页面会自动保存并用于后续请求。</div>
-        </Panel>
-      </div>
-
-      <Panel title="令牌列表">
-        <table>
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th>Token</th>
-              <th>创建时间</th>
-              <th>状态</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id || row.name}>
-                <td>{row.name}</td>
-                <td>
-                  <code>{row.token}</code>
-                </td>
-                <td>{row.createdAt}</td>
-                <td>{row.revoked ? "revoked" : "active"}</td>
-                <td>{row.revoked ? null : <button className="link" onClick={() => revoke(row.id)}>撤销</button>}</td>
+                <td>{row.revoked ? null : <button className="link" onClick={() => revoke(row.id)}>鎾ら攢</button>}</td>
               </tr>
             ))}
           </tbody>
@@ -3355,87 +2194,7 @@ function ApiTokens({ tokenDraft, setTokenDraft, saveToken, clearToken, activeTok
   );
 }
 
-function Audit() {
-  const [rows, setRows] = useState([]);
 
-  useEffect(() => {
-    api("/api/audit").then(setRows).catch(() => {});
-  }, []);
-
-  return (
-    <Panel title="审计日志">
-      <table>
-        <thead>
-          <tr>
-            <th>时间</th>
-            <th>操作者</th>
-            <th>动作</th>
-            <th>目标</th>
-            <th>详情</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.id}>
-              <td>{row.at}</td>
-              <td>{row.actor}</td>
-              <td>{row.action}</td>
-              <td>{row.target}</td>
-              <td>
-                <code>{JSON.stringify(row.detail)}</code>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Panel>
-  );
-}
-
-function Tutorial() {
-  const cards = [
-    ["节点配置", "切换协议时表单会自动更新为该协议的字段与默认值，不再保留上一种协议的残留参数。"],
-    ["订阅聚合", "可以把已经下发过的本地节点聚合成订阅链接，也能直接导入外部原始内容，并切换内置 Clash 模板。"],
-    ["真实 SSH", "服务器列表右侧现在有 SSH 入口。保存好该机器的 SSH 配置后，点一下就会直接进入交互式 WebSSH 终端。"],
-    ["一键部署", "SSH 页面可以直接生成 systemd 或 Docker 的一键部署命令，也可以复用当前 SSH 凭据直接执行部署。"],
-    ["实时探针", "Agent 会持续上报 CPU、内存、磁盘、网络速率和累计流量，效果更接近 Komari / 哪吒这类监控面板。"],
-    ["独立转发", "端口转发支持 sing-box、Realm、GOST 三种引擎，并且通过独立容器运行，不再覆盖节点配置。"],
-    ["TLS 自动补齐", "Trojan 和 Hysteria2 首次下发时会自动生成自签名证书，先把服务端跑起来，再做客户端验证。"],
-    ["API Token", "把 token 放进地址栏 `?token=ck_xxx` 或面板顶部，即可让 API、日志和终端请求都自动带认证。"]
-  ];
-
-  return (
-    <section>
-      <div className="guide-grid">
-        {cards.map(([title, body]) => (
-          <div className="guide-card" key={title}>
-            <h3>{title}</h3>
-            <p>{body}</p>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function sampleConfig() {
-  return {
-    log: { level: "info" },
-    dns: { servers: [{ tag: "cloudflare", type: "udp", server: "1.1.1.1" }], final: "cloudflare" },
-    inbounds: [],
-    outbounds: [{ type: "direct", tag: "direct" }],
-    route: { final: "direct" }
-  };
-}
-
-function App() {
-  const isAdminPath = window.location.pathname.startsWith("/admin");
-  const [page, setPage] = useState("dashboard");
-  const [agentId, setAgentId] = useState("");
-  const [agents, setAgents] = useState([]);
-  const [tokenDraft, setTokenDraft] = useState("");
-  const [tokenReady, setTokenReady] = useState(false);
-  const [authReady, setAuthReady] = useState(false);
   const [authorized, setAuthorized] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
   const [loginDraft, setLoginDraft] = useState({ username: "admin", password: "" });
@@ -3445,7 +2204,7 @@ function App() {
     try {
       const status = await api("/api/auth/status");
       setAuthorized(Boolean(status.authorized));
-      setAuthMessage(status.authorized ? "" : "请使用后台登录态或 ck_ API Token。");
+      setAuthMessage(status.authorized ? "" : "璇蜂娇鐢ㄥ悗鍙扮櫥褰曟€佹垨 ck_ API Token銆?);
       setAuthReady(true);
       return Boolean(status.authorized);
     } catch (error) {
@@ -3585,7 +2344,7 @@ function App() {
 
   if (!isAdminPath) return <PublicStatusPage />;
 
-  if (!authReady) return <div className="login-shell"><div className="login-card">正在检查后台会话...</div></div>;
+  if (!authReady) return <div className="login-shell"><div className="login-card">姝ｅ湪妫€鏌ュ悗鍙颁細璇?..</div></div>;
   if (!authorized) return <AdminAuthGate tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} saveToken={saveToken} loginDraft={loginDraft} setLoginDraft={setLoginDraft} loginAdmin={loginAdmin} message={authMessage} />;
 
   return (
@@ -3601,3 +2360,5 @@ function App() {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+

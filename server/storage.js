@@ -154,9 +154,35 @@ function queryAuditJsonl(auditFilePath, options = {}) {
 function openSqlite(sqlitePath) {
   ensureDir(path.dirname(sqlitePath));
   const db = new DatabaseSync(sqlitePath);
+
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
+    PRAGMA busy_timeout = 5000;
+    PRAGMA cache_size = -4000;
+    CREATE TABLE IF NOT EXISTS schema_version (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL default (datetime('now'))
+    );
+  `);
+
+  const currentVersion = db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_version").get()?.version || 0;
+
+  function runMigration(version, sql) {
+    if (currentVersion < version) {
+      db.exec("BEGIN EXCLUSIVE");
+      try {
+        db.exec(sql);
+        db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(version);
+        db.exec("COMMIT");
+      } catch (error) {
+        try { db.exec("ROLLBACK"); } catch {}
+        throw error;
+      }
+    }
+  }
+
+  runMigration(1, `
     CREATE TABLE IF NOT EXISTS audit_logs (
       id TEXT PRIMARY KEY,
       at TEXT NOT NULL,
@@ -168,7 +194,9 @@ function openSqlite(sqlitePath) {
     CREATE INDEX IF NOT EXISTS idx_audit_logs_at ON audit_logs(at DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target);
+  `);
 
+  runMigration(2, `
     CREATE TABLE IF NOT EXISTS probe_samples (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
@@ -177,7 +205,9 @@ function openSqlite(sqlitePath) {
       sample_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_probe_samples_agent_at ON probe_samples(agent_id, collected_at DESC);
+  `);
 
+  runMigration(3, `
     CREATE TABLE IF NOT EXISTS subscription_access_logs (
       id TEXT PRIMARY KEY,
       profile_id TEXT NOT NULL,
@@ -189,7 +219,9 @@ function openSqlite(sqlitePath) {
       detail_json TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_subscription_access_logs_profile_at ON subscription_access_logs(profile_id, at DESC);
+  `);
 
+  runMigration(4, `
     CREATE TABLE IF NOT EXISTS node_quality_history (
       id TEXT PRIMARY KEY,
       node_id TEXT NOT NULL,
@@ -201,11 +233,57 @@ function openSqlite(sqlitePath) {
       exit_ip TEXT,
       exit_country TEXT,
       error TEXT,
+      error_type TEXT,
       checked_at TEXT NOT NULL,
       detail_json TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_node_quality_history_node_at ON node_quality_history(node_id, checked_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_node_quality_history_agent_at ON node_quality_history(agent_id, checked_at DESC);
   `);
+
+  runMigration(5, `
+    CREATE TABLE IF NOT EXISTS monitor_events (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'info',
+      message TEXT,
+      detail_json TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitor_events_agent_at ON monitor_events(agent_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_monitor_events_type ON monitor_events(event_type);
+  `);
+
+  runMigration(6, `
+    CREATE TABLE IF NOT EXISTS command_runs (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      script_id TEXT,
+      script_name TEXT,
+      command TEXT,
+      ok INTEGER NOT NULL DEFAULT 0,
+      output TEXT,
+      error TEXT,
+      stdout_bytes INTEGER DEFAULT 0,
+      stderr_bytes INTEGER DEFAULT 0,
+      exit_code INTEGER,
+      duration_ms INTEGER,
+      started_at TEXT,
+      finished_at TEXT NOT NULL,
+      detail_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_command_runs_agent_at ON command_runs(agent_id, finished_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_command_runs_script ON command_runs(script_id);
+  `);
+
+  try {
+    const colCheck = db.prepare("SELECT error_type FROM node_quality_history LIMIT 0").run();
+  } catch {
+    db.exec("ALTER TABLE node_quality_history ADD COLUMN error_type TEXT DEFAULT ''");
+    db.prepare("INSERT INTO schema_version (version) VALUES (7)").run();
+  }
+
   return db;
 }
 
@@ -287,52 +365,129 @@ export function saveState(state, { dataDir, masterKey, backupLimit = DEFAULT_BAC
 }
 
 function createSqliteAdapter({ dataDir, auditFilePath, sqlitePath }) {
-  const db = openSqlite(sqlitePath);
-  migrateLegacyAudit(auditFilePath, db);
+  let db;
+  try {
+    db = openSqlite(sqlitePath);
+    migrateLegacyAudit(auditFilePath, db);
+  } catch (error) {
+    return createFallbackSqliteAdapter(auditFilePath, error.message);
+  }
 
-  const statements = {
-    insertAudit: db.prepare(
-      "INSERT OR REPLACE INTO audit_logs (id, at, actor, action, target, detail_json) VALUES (?, ?, ?, ?, ?, ?)"
-    ),
-    queryAuditBase: db.prepare(
-      "SELECT id, at, actor, action, target, detail_json FROM audit_logs ORDER BY at DESC LIMIT ?"
-    ),
-    insertProbeSample: db.prepare(
-      "INSERT OR REPLACE INTO probe_samples (id, agent_id, collected_at, online, sample_json) VALUES (?, ?, ?, ?, ?)"
-    ),
-    selectProbeSamples: db.prepare(
-      "SELECT id, agent_id, collected_at, online, sample_json FROM probe_samples WHERE agent_id = ? ORDER BY collected_at DESC LIMIT ?"
-    ),
-    insertSubscriptionAccess: db.prepare(
-      "INSERT OR REPLACE INTO subscription_access_logs (id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-    ),
-    selectSubscriptionAccess: db.prepare(
-      "SELECT id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json FROM subscription_access_logs WHERE profile_id = ? ORDER BY at DESC LIMIT ?"
-    ),
-    selectSubscriptionAccessAll: db.prepare(
-      "SELECT id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json FROM subscription_access_logs ORDER BY at DESC LIMIT ?"
-    ),
-    insertNodeQualityHistory: db.prepare(
-      "INSERT OR REPLACE INTO node_quality_history (id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, checked_at, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ),
-    selectNodeQualityHistory: db.prepare(
-      "SELECT id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, checked_at, detail_json FROM node_quality_history WHERE node_id = ? ORDER BY checked_at DESC LIMIT ?"
-    )
-  };
+  let statements;
+  try {
+    statements = {
+      insertAudit: db.prepare(
+        "INSERT OR REPLACE INTO audit_logs (id, at, actor, action, target, detail_json) VALUES (?, ?, ?, ?, ?, ?)"
+      ),
+      queryAuditBase: db.prepare(
+        "SELECT id, at, actor, action, target, detail_json FROM audit_logs ORDER BY at DESC LIMIT ?"
+      ),
+      insertProbeSample: db.prepare(
+        "INSERT OR REPLACE INTO probe_samples (id, agent_id, collected_at, online, sample_json) VALUES (?, ?, ?, ?, ?)"
+      ),
+      selectProbeSamples: db.prepare(
+        "SELECT id, agent_id, collected_at, online, sample_json FROM probe_samples WHERE agent_id = ? ORDER BY collected_at DESC LIMIT ?"
+      ),
+      insertSubscriptionAccess: db.prepare(
+        "INSERT OR REPLACE INTO subscription_access_logs (id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      ),
+      selectSubscriptionAccess: db.prepare(
+        "SELECT id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json FROM subscription_access_logs WHERE profile_id = ? ORDER BY at DESC LIMIT ?"
+      ),
+      selectSubscriptionAccessAll: db.prepare(
+        "SELECT id, profile_id, token_masked, ip_masked, user_agent, format, at, detail_json FROM subscription_access_logs ORDER BY at DESC LIMIT ?"
+      ),
+      insertNodeQualityHistory: db.prepare(
+        "INSERT OR REPLACE INTO node_quality_history (id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, error_type, checked_at, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ),
+      selectNodeQualityHistory: db.prepare(
+        "SELECT id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, error_type, checked_at, detail_json FROM node_quality_history WHERE node_id = ? ORDER BY checked_at DESC LIMIT ?"
+      ),
+      selectAllNodeQualityHistory: db.prepare(
+        "SELECT id, node_id, protocol, agent_id, ok, score, latency_ms, exit_ip, exit_country, error, error_type, checked_at FROM node_quality_history ORDER BY checked_at DESC LIMIT ?"
+      ),
+      insertMonitorEvent: db.prepare(
+        "INSERT OR REPLACE INTO monitor_events (id, agent_id, event_type, severity, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ),
+      selectMonitorEvents: db.prepare(
+        "SELECT id, agent_id, event_type, severity, message, detail_json, created_at FROM monitor_events ORDER BY created_at DESC LIMIT ?"
+      ),
+      selectMonitorEventsByAgent: db.prepare(
+        "SELECT id, agent_id, event_type, severity, message, detail_json, created_at FROM monitor_events WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?"
+      ),
+      insertCommandRun: db.prepare(
+        "INSERT OR REPLACE INTO command_runs (id, agent_id, script_id, script_name, command, ok, output, error, stdout_bytes, stderr_bytes, exit_code, duration_ms, started_at, finished_at, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ),
+      selectCommandRuns: db.prepare(
+        "SELECT id, agent_id, script_id, script_name, command, ok, output, error, stdout_bytes, stderr_bytes, exit_code, duration_ms, started_at, finished_at, detail_json FROM command_runs ORDER BY finished_at DESC LIMIT ?"
+      ),
+      selectCommandRunsByAgent: db.prepare(
+        "SELECT id, agent_id, script_id, script_name, command, ok, output, error, stdout_bytes, stderr_bytes, exit_code, duration_ms, started_at, finished_at, detail_json FROM command_runs WHERE agent_id = ? ORDER BY finished_at DESC LIMIT ?"
+      ),
+      deleteOldAudit: db.prepare("DELETE FROM audit_logs WHERE at < ?"),
+      deleteOldProbeSamples: db.prepare("DELETE FROM probe_samples WHERE collected_at < ?"),
+      deleteOldSubscriptionAccess: db.prepare("DELETE FROM subscription_access_logs WHERE at < ?"),
+      deleteOldNodeQualityHistory: db.prepare("DELETE FROM node_quality_history WHERE checked_at < ?"),
+      deleteOldMonitorEvents: db.prepare("DELETE FROM monitor_events WHERE created_at < ?"),
+      deleteOldCommandRuns: db.prepare("DELETE FROM command_runs WHERE finished_at < ?")
+    };
+  } catch (prepareError) {
+    try { db.close(); } catch {}
+    return createFallbackSqliteAdapter(auditFilePath, `prepare failed: ${prepareError.message}`);
+  }
+
+  function safeRun(statement, ...args) {
+    try {
+      return statement.run(...args);
+    } catch (error) {
+      return null;
+    }
+  }
 
   function queryAudit(options = {}) {
-    const { limit = 300, action, target, actor } = options;
-    const rows = listRows(statements.queryAuditBase, [limit * 5]).filter(
-      (row) => (!action || row.action === action) && (!target || row.target === target) && (!actor || row.actor === actor)
-    );
-    return rows.slice(0, limit).map((row) => ({
-      id: row.id,
-      at: row.at,
-      actor: row.actor,
-      action: row.action,
-      target: row.target,
-      detail: normalizeJsonField(row.detail_json) || {}
-    }));
+    try {
+      const { limit = 300, action, target, actor } = options;
+      const rows = listRows(statements.queryAuditBase, [limit * 5]).filter(
+        (row) => (!action || row.action === action) && (!target || row.target === target) && (!actor || row.actor === actor)
+      );
+      return rows.slice(0, limit).map((row) => ({
+        id: row.id,
+        at: row.at,
+        actor: row.actor,
+        action: row.action,
+        target: row.target,
+        detail: normalizeJsonField(row.detail_json) || {}
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  function cleanupHistory(retentionDays = {}) {
+    const now = new Date();
+    const defaults = {
+      audit: Math.max(7, Number(retentionDays.auditDays || 90) || 90),
+      probe: Math.max(1, Number(retentionDays.probeDays || 7) || 7),
+      subscription: Math.max(1, Number(retentionDays.subscriptionDays || 30) || 30),
+      nodeQuality: Math.max(1, Number(retentionDays.nodeQualityDays || 30) || 30),
+      monitorEvents: Math.max(1, Number(retentionDays.monitorEventsDays || 30) || 30),
+      commandRuns: Math.max(1, Number(retentionDays.commandRunsDays || 60) || 60)
+    };
+    const cutoffs = {};
+    for (const [key, days] of Object.entries(defaults)) {
+      cutoffs[key] = new Date(now.getTime() - days * 86400000).toISOString();
+    }
+    try {
+      safeRun(statements.deleteOldAudit, cutoffs.audit);
+      safeRun(statements.deleteOldProbeSamples, cutoffs.probe);
+      safeRun(statements.deleteOldSubscriptionAccess, cutoffs.subscription);
+      safeRun(statements.deleteOldNodeQualityHistory, cutoffs.nodeQuality);
+      safeRun(statements.deleteOldMonitorEvents, cutoffs.monitorEvents);
+      safeRun(statements.deleteOldCommandRuns, cutoffs.commandRuns);
+      return { ok: true, cutoffs };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
   }
 
   return {
@@ -340,7 +495,7 @@ function createSqliteAdapter({ dataDir, auditFilePath, sqlitePath }) {
     path: sqlitePath,
     db,
     appendAudit(row) {
-      statements.insertAudit.run(row.id, row.at, row.actor, row.action, row.target, toJsonText(row.detail || {}));
+      safeRun(statements.insertAudit, row.id, row.at, row.actor, row.action, row.target, toJsonText(row.detail || {}));
       appendAuditJsonl(auditFilePath, row);
       return row;
     },
@@ -353,19 +508,24 @@ function createSqliteAdapter({ dataDir, auditFilePath, sqlitePath }) {
         online: sample.online ? 1 : 0,
         sample
       };
-      statements.insertProbeSample.run(row.id, row.agentId, row.collectedAt, row.online, toJsonText(row.sample));
+      safeRun(statements.insertProbeSample, row.id, row.agentId, row.collectedAt, row.online, toJsonText(row.sample));
       return row;
     },
     queryProbeHistory(agentId, options = {}) {
-      const limit = Math.max(1, Number(options.limit || 500) || 500);
-      return listRows(statements.selectProbeSamples, [agentId, limit]).map((row) => normalizeJsonField(row.sample_json) || {
-        id: row.id,
-        updatedAt: row.collected_at,
-        online: Boolean(row.online)
-      });
+      try {
+        const limit = Math.max(1, Number(options.limit || 500) || 500);
+        return listRows(statements.selectProbeSamples, [agentId, limit]).map((row) => normalizeJsonField(row.sample_json) || {
+          id: row.id,
+          updatedAt: row.collected_at,
+          online: Boolean(row.online)
+        });
+      } catch {
+        return [];
+      }
     },
     writeSubscriptionAccess(row) {
-      statements.insertSubscriptionAccess.run(
+      safeRun(
+        statements.insertSubscriptionAccess,
         row.id || nanoid(),
         row.profileId,
         row.token || row.tokenMasked || "",
@@ -378,23 +538,29 @@ function createSqliteAdapter({ dataDir, auditFilePath, sqlitePath }) {
       return row;
     },
     querySubscriptionAccess(options = {}) {
-      const limit = Math.max(1, Number(options.limit || 200) || 200);
-      const rows = options.profileId
-        ? listRows(statements.selectSubscriptionAccess, [options.profileId, limit])
-        : listRows(statements.selectSubscriptionAccessAll, [limit]);
-      return rows.map((row) => ({
-        id: row.id,
-        profileId: row.profile_id,
-        token: row.token_masked,
-        ip: row.ip_masked,
-        userAgent: row.user_agent,
-        format: row.format,
-        at: row.at,
-        detail: normalizeJsonField(row.detail_json) || {}
-      }));
+      try {
+        const limit = Math.max(1, Number(options.limit || 200) || 200);
+        const rows = options.profileId
+          ? listRows(statements.selectSubscriptionAccess, [options.profileId, limit])
+          : listRows(statements.selectSubscriptionAccessAll, [limit]);
+        return rows.map((row) => ({
+          id: row.id,
+          profileId: row.profile_id,
+          token: row.token_masked,
+          ip: row.ip_masked,
+          userAgent: row.user_agent,
+          format: row.format,
+          at: row.at,
+          detail: normalizeJsonField(row.detail_json) || {}
+        }));
+      } catch {
+        return [];
+      }
     },
     writeNodeQualityHistory(row) {
-      statements.insertNodeQualityHistory.run(
+      const errType = row.errorType || row.detail?.errorType || "";
+      safeRun(
+        statements.insertNodeQualityHistory,
         row.id || nanoid(),
         row.nodeId,
         row.protocol || "",
@@ -405,58 +571,185 @@ function createSqliteAdapter({ dataDir, auditFilePath, sqlitePath }) {
         row.exitIp || "",
         row.exitCountry || "",
         row.error || "",
+        errType,
         row.checkedAt || row.at || nowIso(),
         toJsonText(row.detail || row)
       );
       return row;
     },
     queryNodeQualityHistory(nodeId, options = {}) {
-      const limit = Math.max(1, Number(options.limit || 100) || 100);
-      return listRows(statements.selectNodeQualityHistory, [nodeId, limit]).map((row) => ({
-        id: row.id,
-        nodeId: row.node_id,
-        protocol: row.protocol,
-        agentId: row.agent_id,
-        ok: Boolean(row.ok),
-        score: row.score,
-        latencyMs: row.latency_ms,
-        exitIp: row.exit_ip,
-        exitCountry: row.exit_country,
-        error: row.error,
-        checkedAt: row.checked_at,
-        detail: normalizeJsonField(row.detail_json) || {}
-      }));
-    }
+      try {
+        const limit = Math.max(1, Number(options.limit || 100) || 100);
+        return listRows(statements.selectNodeQualityHistory, [nodeId, limit]).map((row) => ({
+          id: row.id,
+          nodeId: row.node_id,
+          protocol: row.protocol,
+          agentId: row.agent_id,
+          ok: Boolean(row.ok),
+          score: row.score,
+          latencyMs: row.latency_ms,
+          exitIp: row.exit_ip,
+          exitCountry: row.exit_country,
+          error: row.error,
+          errorType: row.error_type || "",
+          checkedAt: row.checked_at,
+          detail: normalizeJsonField(row.detail_json) || {}
+        }));
+      } catch {
+        return [];
+      }
+    },
+    queryAllNodeQualityHistory(options = {}) {
+      try {
+        const limit = Math.max(1, Number(options.limit || 2000) || 2000);
+        return listRows(statements.selectAllNodeQualityHistory, [limit]).map((row) => ({
+          id: row.id,
+          nodeId: row.node_id,
+          protocol: row.protocol,
+          agentId: row.agent_id,
+          ok: Boolean(row.ok),
+          score: row.score,
+          latencyMs: row.latency_ms,
+          exitIp: row.exit_ip,
+          exitCountry: row.exit_country,
+          error: row.error,
+          errorType: row.error_type || "",
+          checkedAt: row.checked_at
+        }));
+      } catch {
+        return [];
+      }
+    },
+    writeMonitorEvent(row) {
+      safeRun(
+        statements.insertMonitorEvent,
+        row.id || nanoid(),
+        row.agentId || "",
+        row.eventType || "info",
+        row.severity || "info",
+        row.message || "",
+        toJsonText(row.detail || {}),
+        row.createdAt || nowIso()
+      );
+      return row;
+    },
+    queryMonitorEvents(options = {}) {
+      try {
+        const limit = Math.max(1, Number(options.limit || 200) || 200);
+        const rows = options.agentId
+          ? listRows(statements.selectMonitorEventsByAgent, [options.agentId, limit])
+          : listRows(statements.selectMonitorEvents, [limit]);
+        return rows.map((row) => ({
+          id: row.id,
+          agentId: row.agent_id,
+          eventType: row.event_type,
+          severity: row.severity,
+          message: row.message,
+          detail: normalizeJsonField(row.detail_json) || {},
+          createdAt: row.created_at
+        }));
+      } catch {
+        return [];
+      }
+    },
+    writeCommandRun(row) {
+      safeRun(
+        statements.insertCommandRun,
+        row.id || nanoid(),
+        row.agentId || "",
+        row.scriptId || "",
+        row.scriptName || "",
+        row.command || "",
+        row.ok ? 1 : 0,
+        row.output || "",
+        row.error || "",
+        Number.isFinite(Number(row.stdoutBytes)) ? Number(row.stdoutBytes) : 0,
+        Number.isFinite(Number(row.stderrBytes)) ? Number(row.stderrBytes) : 0,
+        Number.isFinite(Number(row.exitCode)) ? Number(row.exitCode) : null,
+        Number.isFinite(Number(row.durationMs)) ? Number(row.durationMs) : null,
+        row.startedAt || "",
+        row.finishedAt || nowIso(),
+        toJsonText(row.detail || {})
+      );
+      return row;
+    },
+    queryCommandRuns(options = {}) {
+      try {
+        const limit = Math.max(1, Number(options.limit || 200) || 200);
+        const rows = options.agentId
+          ? listRows(statements.selectCommandRunsByAgent, [options.agentId, limit])
+          : listRows(statements.selectCommandRuns, [limit]);
+        return rows.map((row) => ({
+          id: row.id,
+          agentId: row.agent_id,
+          scriptId: row.script_id,
+          scriptName: row.script_name,
+          command: row.command,
+          ok: Boolean(row.ok),
+          output: row.output,
+          error: row.error,
+          stdoutBytes: row.stdout_bytes,
+          stderrBytes: row.stderr_bytes,
+          exitCode: row.exit_code,
+          durationMs: row.duration_ms,
+          startedAt: row.started_at,
+          finishedAt: row.finished_at,
+          detail: normalizeJsonField(row.detail_json) || {}
+        }));
+      } catch {
+        return [];
+      }
+    },
+    cleanupHistory: (retentionDays = {}) => cleanupHistory(retentionDays),
+    close() {
+      try { db.close(); } catch {}
+    },
+    isOk() { return true; }
   };
 }
 
-function createJsonAdapter(auditFilePath) {
+function createFallbackSqliteAdapter(auditFilePath, errorMessage) {
+  const base = createJsonAdapter(auditFilePath, errorMessage);
+  return {
+    ...base,
+    mode: "sqlite_fallback",
+    writeNodeQualityHistory() { return base.writeNodeQualityHistory(); },
+    queryNodeQualityHistory() { return base.queryNodeQualityHistory(); },
+    queryAllNodeQualityHistory() { return []; },
+    writeMonitorEvent() { return null; },
+    queryMonitorEvents() { return []; },
+    writeCommandRun() { return null; },
+    queryCommandRuns() { return []; },
+    cleanupHistory() { return { ok: false, error: errorMessage || "sqlite unavailable" }; },
+    close() {},
+    isOk() { return false; }
+  };
+}
+
+function createJsonAdapter(auditFilePath, sqliteError = "") {
   return {
     mode: "json",
     path: null,
+    sqliteError,
     appendAudit(row) {
       appendAuditJsonl(auditFilePath, row);
       return row;
     },
     queryAudit: (options = {}) => queryAuditJsonl(auditFilePath, options),
-    writeProbeSample() {
-      return null;
-    },
-    queryProbeHistory() {
-      return [];
-    },
-    writeSubscriptionAccess() {
-      return null;
-    },
-    querySubscriptionAccess() {
-      return [];
-    },
-    writeNodeQualityHistory() {
-      return null;
-    },
-    queryNodeQualityHistory() {
-      return [];
-    }
+    writeProbeSample() { return null; },
+    queryProbeHistory() { return []; },
+    writeSubscriptionAccess() { return null; },
+    querySubscriptionAccess() { return []; },
+    writeNodeQualityHistory() { return null; },
+    queryNodeQualityHistory() { return []; },
+    queryAllNodeQualityHistory() { return []; },
+    writeMonitorEvent() { return null; },
+    queryMonitorEvents() { return []; },
+    writeCommandRun() { return null; },
+    queryCommandRuns() { return []; },
+    cleanupHistory() { return { ok: true, mode: "json" }; },
+    close() {},
+    isOk() { return true; }
   };
 }
 
@@ -487,7 +780,13 @@ export function createStorage({ rootDir, defaults = {}, masterKey } = {}) {
 
   if (!hasMasterKey(masterKey)) warnings.push("CHIKEN_MASTER_KEY is not set.");
 
-  const eventStore = storageMode === "sqlite" ? createSqliteAdapter({ dataDir, auditFilePath, sqlitePath }) : createJsonAdapter(auditFilePath);
+  const eventStore = storageMode === "sqlite"
+    ? createSqliteAdapter({ dataDir, auditFilePath, sqlitePath })
+    : createJsonAdapter(auditFilePath);
+
+  if (!eventStore.isOk()) {
+    warnings.push(`SQLite initialization failed: ${eventStore.sqliteError || "unknown error"}, falling back to JSON audit logging`);
+  }
 
   return {
     mode: storageMode,
@@ -519,6 +818,13 @@ export function createStorage({ rootDir, defaults = {}, masterKey } = {}) {
     querySubscriptionAccess: (options = {}) => eventStore.querySubscriptionAccess(options),
     writeNodeQualityHistory: (row) => eventStore.writeNodeQualityHistory(clone(row)),
     queryNodeQualityHistory: (nodeId, options = {}) => eventStore.queryNodeQualityHistory(nodeId, options),
+    queryAllNodeQualityHistory: (options = {}) => eventStore.queryAllNodeQualityHistory(options),
+    writeMonitorEvent: (row) => eventStore.writeMonitorEvent(clone(row)),
+    queryMonitorEvents: (options = {}) => eventStore.queryMonitorEvents(options),
+    writeCommandRun: (row) => eventStore.writeCommandRun(clone(row)),
+    queryCommandRuns: (options = {}) => eventStore.queryCommandRuns(options),
+    cleanupHistory: (retentionDays = {}) => eventStore.cleanupHistory(retentionDays),
+    close: () => eventStore.close(),
     summarizeWarnings: () => warnings.map((line) => sanitizeSensitiveText(line))
   };
 }

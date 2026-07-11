@@ -174,7 +174,9 @@ function safeFileName(name) {
 function normalizeRemotePath(value) {
   const input = cleanText(value || "/");
   if (input.includes("\0")) throw new Error("invalid path");
-  return path.posix.normalize(input.startsWith("/") ? input : `/${input}`);
+  const normalized = path.posix.normalize(input.startsWith("/") ? input : `/${input}`);
+  if (normalized.includes("..")) throw new Error("path traversal not allowed");
+  return normalized;
 }
 
 function parseCookies(req) {
@@ -202,12 +204,19 @@ function appendSetCookie(res, cookieValue) {
   res.setHeader("Set-Cookie", [current, cookieValue]);
 }
 
+function isSecureContext(req) {
+  const proto = cleanText(req.headers["x-forwarded-proto"] || req.protocol);
+  return proto === "https";
+}
+
 function setSessionCookie(res, sessionId) {
-  appendSetCookie(res, `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; Path=/; HttpOnly; SameSite=Lax`);
+  const secureFlag = isSecureContext(res.req || {}) ? "; Secure" : "";
+  appendSetCookie(res, `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; Path=/; HttpOnly; SameSite=Lax${secureFlag}`);
 }
 
 function clearSessionCookie(res) {
-  appendSetCookie(res, `${SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
+  const secureFlag = isSecureContext(res.req || {}) ? "; Secure" : "";
+  appendSetCookie(res, `${SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax${secureFlag}`);
 }
 
 function sanitizeAuditDetail(detail) {
@@ -307,8 +316,13 @@ function writePreRestoreSnapshot() {
 }
 
 function restoreBackupPayload(payload) {
-  const preRestorePath = writePreRestoreSnapshot();
-  let restoredBytes = 0;
+  if (payload.files.length > 500) throw new Error("backup file count exceeds limit");
+  let totalSize = 0;
+  for (const file of payload.files) {
+    totalSize += Number(file.size || 0);
+  }
+  if (totalSize > backupMaxBytes * 2) throw new Error("backup total size exceeds limit");
+
   for (const file of payload.files) {
     const relative = safeBackupRelativePath(file.path);
     const target = path.resolve(dataDir, relative);
@@ -318,21 +332,39 @@ function restoreBackupPayload(payload) {
     }
     const content = Buffer.from(String(file.content || ""), "base64");
     if (Number(file.size || content.length) !== content.length) throw new Error(`backup file size mismatch: ${relative}`);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content);
-    if (file.mtimeMs) {
-      const mtime = new Date(Number(file.mtimeMs));
-      fs.utimesSync(target, mtime, mtime);
-    }
-    restoredBytes += content.length;
+    if (content.length > backupMaxBytes) throw new Error(`backup file exceeds size limit: ${relative}`);
   }
-  state = storage.loadState();
-  return {
-    fileCount: payload.files.length,
-    bytes: restoredBytes,
-    preRestoreBackup: path.basename(preRestorePath),
-    createdAt: payload.createdAt || ""
-  };
+
+  const preRestorePath = writePreRestoreSnapshot();
+  const writtenFiles = [];
+  let restoredBytes = 0;
+  try {
+    for (const file of payload.files) {
+      const relative = safeBackupRelativePath(file.path);
+      const target = path.resolve(dataDir, relative);
+      const content = Buffer.from(String(file.content || ""), "base64");
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+      writtenFiles.push(target);
+      if (file.mtimeMs) {
+        const mtime = new Date(Number(file.mtimeMs));
+        fs.utimesSync(target, mtime, mtime);
+      }
+      restoredBytes += content.length;
+    }
+    state = storage.loadState();
+    return {
+      fileCount: payload.files.length,
+      bytes: restoredBytes,
+      preRestoreBackup: path.basename(preRestorePath),
+      createdAt: payload.createdAt || ""
+    };
+  } catch (error) {
+    for (const written of writtenFiles) {
+      try { fs.rmSync(written, { force: true }); } catch {}
+    }
+    throw new Error(`restore failed: ${error.message} — written files removed, pre-restore snapshot saved`);
+  }
 }
 
 function normalizeAdminRecord(record) {
@@ -955,13 +987,14 @@ function agentSummary(agent) {
     osPretty: agent.osPretty || "",
     osVersion: agent.osVersion || "",
     osVersionId: agent.osVersionId || "",
+    version: agent.version || "-",
     tags: asset.tags || agent.tags || [],
     group: asset.group || "",
     region: asset.region || "",
     provider: asset.provider || "",
     singboxVersion: agent.singboxVersion || "-",
     singboxStatus: agent.singboxStatus || "unknown",
-    connected: clients.has(agent.id),
+    connected: clients.has(agent.id) || Boolean(agent.connected),
     lastSeen: agent.lastSeen,
     registeredAt: agent.registeredAt,
     certFingerprint: agent.certFingerprint || "-",
@@ -1386,6 +1419,8 @@ function publicNode(node) {
     lastCheckAt: node.lastCheckAt || null,
     lastError: node.lastError || "",
     lastCheckStatus: node.metadata?.proxyCheck?.ok === true ? "ok" : node.metadata?.proxyCheck?.unsupported ? "unsupported" : node.metadata?.proxyCheck?.notImplemented ? "not_implemented" : node.lastCheckAt ? "failed" : "idle",
+    lastCheckErrorType: cleanText(node.metadata?.proxyCheck?.errorType),
+    lastCheckLatencyMs: Number(node.metadata?.proxyCheck?.latencyMs || 0) || 0,
     metadata: node.metadata || {},
     createdAt: node.createdAt,
     updatedAt: node.updatedAt
@@ -1434,8 +1469,13 @@ async function checkNode(node, options = {}) {
             port: node.port,
             auth: node.auth,
             password: node.password,
+            uuid: node.uuid,
             ss: node.ss,
             method: node.ss?.method,
+            tls: node.tls,
+            reality: node.reality,
+            ws: node.ws,
+            hysteria2: node.hysteria2,
             metadata: node.metadata
           }
         },
@@ -1448,6 +1488,7 @@ async function checkNode(node, options = {}) {
         latency: Number(result.latencyMs || result.latency || 0) || 0,
         latencyMs: Number(result.latencyMs || result.latency || 0) || 0,
         error: cleanText(result.error || result.output),
+        errorType: cleanText(result.errorType),
         address: node.address,
         port: node.port,
         protocol,
@@ -1527,6 +1568,7 @@ function recordNodeCheck(nodeId, result) {
     exitCountry: cleanText(result.exitCountry),
     statusCode: Number(result.statusCode || 0) || 0,
     error: cleanText(result.error),
+    errorType: cleanText(result.errorType),
     checkedAt: result.checkedAt || result.at || nowIso(),
     agentId: cleanText(result.agentId || result.checkedBy),
     nodeId,
@@ -3159,6 +3201,7 @@ wss.on("connection", (ws) => {
           latency: Number(msg.latencyMs || msg.latency || 0) || 0,
           latencyMs: Number(msg.latencyMs || msg.latency || 0) || 0,
           error: cleanText(msg.error || msg.output),
+          errorType: cleanText(msg.errorType),
           checkedBy: agentId,
           protocol: cleanText(msg.protocol),
           statusCode: Number(msg.statusCode || 0) || 0,
@@ -3206,6 +3249,21 @@ wss.on("connection", (ws) => {
     audit("agent", "agent_offline", agentId);
   });
 });
+
+const heartbeatTimeoutMs = Math.max(15000, (Number(process.env.CHIKEN_PROBE_INTERVAL || 5) || 5) * 3000);
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, agent] of Object.entries(state.agents || {})) {
+    if (clients.has(id)) continue;
+    const lastSeen = Date.parse(agent.lastSeen || agent.updatedAt) || 0;
+    if (lastSeen > 0 && now - lastSeen < heartbeatTimeoutMs) continue;
+    if (agent.connected === false) continue;
+    state.agents[id] = { ...agent, connected: false, lastSeen: agent.lastSeen || nowIso() };
+    recordMonitorSample(id, false);
+  }
+  scheduleStateSave();
+}, Math.max(10000, Math.floor(heartbeatTimeoutMs / 2)));
 
 const port = Number(process.env.PORT || 7788);
 server.listen(port, () => console.log(`chiken-easy server listening on :${port}`));

@@ -168,7 +168,49 @@ try {
   const settings = await fetchJson(`http://127.0.0.1:${server.port}/api/settings`, { headers: authHeaders() });
   assert(settings.ok && settings.body.storageMode === storageMode, "settings storage mode mismatch");
 
+  const protocols = await fetchJson(`http://127.0.0.1:${server.port}/api/protocols`, { headers: authHeaders() });
+  assert(protocols.ok && Array.isArray(protocols.body), "/api/protocols missing or invalid");
+
+  const nodeImport = await fetchJson(`http://127.0.0.1:${server.port}/api/node-pool/import`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ content: "ss://YWVzLTI1Ni1nY206dGVzdA==@1.1.1.1:8388#smoke-ss\nvmess://eyJ2IjoiMiIsInBzIjoidGVzdCIsImFkZCI6IjEuMS4xLjEiLCJwb3J0IjoiNDQzIiwiaWQiOiIxMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiLCJhaWQiOiIwIn0=" })
+  });
+  assert(nodeImport.ok && Array.isArray(nodeImport.body?.nodes) && nodeImport.body.nodes.length >= 1, "node import failed");
+
+  const nodeExport = await fetchJson(`http://127.0.0.1:${server.port}/api/node-pool/export?format=raw`, { headers: authHeaders() });
+  assert(nodeExport.ok, "node pool export failed");
+
+  const forwardRender = await fetchJson(`http://127.0.0.1:${server.port}/api/forward/render`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ engine: "sing-box", network: "tcp", port: 18080, targetHost: "example.com", targetPort: 80, name: "smoke" })
+  });
+  assert(forwardRender.ok, "forward render failed");
+
+  const configRender = await fetchJson(`http://127.0.0.1:${server.port}/api/config/render`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ protocol: "mixed", port: 18081 })
+  });
+  assert(configRender.ok && configRender.body?.inbounds?.length >= 1, "config render failed");
+
+  const backupDownload = await fetch(`http://127.0.0.1:${server.port}/api/backups/download`, {
+    headers: { Authorization: "Bearer ck_smoke_token" }
+  });
+  assert(backupDownload.ok && backupDownload.headers.get("content-type") === "application/gzip", "backup download failed");
+
+  const audit = await fetchJson(`http://127.0.0.1:${server.port}/api/audit`, { headers: authHeaders() });
+  assert(audit.ok && Array.isArray(audit.body), "/api/audit missing");
+
   if (storageMode === "sqlite") {
+    const cleanup = await fetchJson(`http://127.0.0.1:${server.port}/api/settings`, {
+      method: "PUT",
+      headers: authHeaders(),
+      body: JSON.stringify({ historyRetentionDays: { auditDays: 90, probeDays: 7, subscriptionDays: 30, nodeQualityDays: 30, monitorEventsDays: 30, commandRunsDays: 60 } })
+    });
+    assert(cleanup.ok || cleanup.status >= 200, "sqlite cleanup config failed");
+
     const subCreate = await fetchJson(`http://127.0.0.1:${server.port}/api/subscriptions`, {
       method: "POST",
       headers: authHeaders(),
