@@ -51,7 +51,9 @@ function createResult(role, kind, name, ok, detail = {}) {
 
 async function api(url, token, options = {}) {
   const method = cleanText(options.method || "GET").toUpperCase() || "GET";
-  const attempts = method === "GET" ? 3 : 1;
+  // GET and PUT are idempotent here, so a transport failure can be retried without
+  // duplicating node imports, script runs, or other POST side effects.
+  const attempts = method === "GET" || method === "PUT" ? 3 : 1;
   let lastError = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const headers = new Headers(options.headers || {});
