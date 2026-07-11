@@ -553,14 +553,20 @@ async function verifyManagedProxyChecks(baseUrl, token, sourceAgent, checkerAgen
   const restoreVersionId = await captureRestorePoint(baseUrl, token, sourceAgent.id);
 
   const validateActiveProtocol = async (name, port, network = "tcp") => {
-    const validate = await sshExec(sourceServer, sourceAgent.name || sourceAgent.id, "docker exec chiken-singbox sh -lc 'sing-box check -c /etc/sing-box/config.json'");
+    const validate = await waitFor(
+      () => sshExec(sourceServer, sourceAgent.name || sourceAgent.id, "docker exec chiken-singbox sh -lc 'sing-box check -c /etc/sing-box/config.json'"),
+      { timeoutMs: 30000, intervalMs: 1000 }
+    );
     const listenCommand = network === "udp" ? `ss -lunp | grep ':${port} ' || true` : `ss -ltnp | grep ':${port} ' || true`;
-    const listen = await sshExec(sourceServer, sourceAgent.name || sourceAgent.id, listenCommand);
-    results.push(createResult(sourceAgent.name || sourceAgent.id, "protocol", `${name}_config_validate`, validate.ok, {
-      reason: validate.ok ? "" : safeOutput(validate.output)
+    const listen = await waitFor(async () => {
+      const response = await sshExec(sourceServer, sourceAgent.name || sourceAgent.id, listenCommand);
+      return { ...response, ok: response.ok && Boolean(cleanText(response.output)) };
+    }, { timeoutMs: 30000, intervalMs: 1000 });
+    results.push(createResult(sourceAgent.name || sourceAgent.id, "protocol", `${name}_config_validate`, Boolean(validate?.ok), {
+      reason: validate?.ok ? "" : safeOutput(validate?.output)
     }));
-    results.push(createResult(sourceAgent.name || sourceAgent.id, "protocol", `${name}_listen`, Boolean(cleanText(listen.output)), {
-      reason: cleanText(listen.output) ? "" : `${network}_listen_not_found`
+    results.push(createResult(sourceAgent.name || sourceAgent.id, "protocol", `${name}_listen`, Boolean(listen?.ok), {
+      reason: listen?.ok ? "" : `${network}_listen_not_found`
     }));
   };
 
@@ -819,8 +825,14 @@ async function verifyRealityServer(baseUrl, token, agent, server, clientServer) 
   if (!applyOk) return serverChecks;
 
   await sleep(5000);
-  const validate = await sshExec(server, agent.name || agent.id, "docker exec chiken-singbox sh -lc 'sing-box check -c /etc/sing-box/config.json'");
-  const listen = await sshExec(server, agent.name || agent.id, `ss -ltnp | grep ':${port} ' || true`);
+  const validate = await waitFor(
+    () => sshExec(server, agent.name || agent.id, "docker exec chiken-singbox sh -lc 'sing-box check -c /etc/sing-box/config.json'"),
+    { timeoutMs: 30000, intervalMs: 1000 }
+  );
+  const listen = await waitFor(async () => {
+    const response = await sshExec(server, agent.name || agent.id, `ss -ltnp | grep ':${port} ' || true`);
+    return { ...response, ok: response.ok && Boolean(cleanText(response.output)) };
+  }, { timeoutMs: 30000, intervalMs: 1000 });
   const logs = await sshExec(server, agent.name || agent.id, "docker logs --tail 80 chiken-singbox 2>&1");
   const configRead = await sshExec(server, agent.name || agent.id, "docker exec chiken-singbox sh -lc 'cat /etc/sing-box/config.json'");
   const configHasReality = /"reality"\s*:\s*\{|"type"\s*:\s*"vless"/.test(configRead.output);
@@ -829,9 +841,9 @@ async function verifyRealityServer(baseUrl, token, agent, server, clientServer) 
     reason: validate.ok ? "" : safeOutput(validate.output),
     output: safeOutput(validate.output)
   }));
-  serverChecks.push(createResult(agent.name || agent.id, "reality", "listen", Boolean(cleanText(listen.output)), {
-    reason: cleanText(listen.output) ? "" : "listen_not_found",
-    output: safeOutput(listen.output)
+  serverChecks.push(createResult(agent.name || agent.id, "reality", "listen", Boolean(listen?.ok), {
+    reason: listen?.ok ? "" : "listen_not_found",
+    output: safeOutput(listen?.output)
   }));
   serverChecks.push(createResult(agent.name || agent.id, "reality", "logs", logs.ok, {
     reason: logs.ok ? "" : "log_fetch_failed",
