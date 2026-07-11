@@ -52,7 +52,8 @@ async function waitForHealth(port) {
 
 function startServer(extraEnv = {}) {
   const port = extraEnv.PORT || String(17000 + Math.floor(Math.random() * 1000));
-  const child = spawn(process.execPath, ["server/index.js"], {
+  const args = ["--experimental-sqlite", "server/index.js"];
+  const child = spawn(process.execPath, args, {
     cwd: root,
     env: {
       ...process.env,
@@ -193,7 +194,7 @@ try {
     headers: authHeaders(),
     body: JSON.stringify({ protocol: "mixed", port: 18081 })
   });
-  assert(configRender.ok && configRender.body?.inbounds?.length >= 1, "config render failed");
+  assert(configRender.ok && configRender.body?.config?.inbounds?.length >= 1, "config render failed");
 
   const backupDownload = await fetch(`http://127.0.0.1:${server.port}/api/backups/download`, {
     headers: { Authorization: "Bearer ck_smoke_token" }
