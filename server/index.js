@@ -3324,6 +3324,7 @@ const heartbeatTimeoutMs = Math.max(15000, (Number(process.env.CHIKEN_PROBE_INTE
 
 setInterval(() => {
   const now = Date.now();
+  let changed = false;
   for (const [id, agent] of Object.entries(state.agents || {})) {
     if (clients.has(id)) continue;
     const lastSeen = Date.parse(agent.lastSeen || agent.updatedAt) || 0;
@@ -3331,8 +3332,9 @@ setInterval(() => {
     if (agent.connected === false) continue;
     state.agents[id] = { ...agent, connected: false, lastSeen: agent.lastSeen || nowIso() };
     recordMonitorSample(id, false);
+    changed = true;
   }
-  scheduleStateSave();
+  if (changed) scheduleStateSave();
 }, Math.max(10000, Math.floor(heartbeatTimeoutMs / 2)));
 
 const port = Number(process.env.PORT || 7788);
