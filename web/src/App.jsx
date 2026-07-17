@@ -330,7 +330,15 @@ function Field({ label, value, onChange, random, type = "text", placeholder = ""
 function AccessTokenBar({ tokenDraft, setTokenDraft, saveToken, clearToken, hasToken }) {
   return (
     <div className="token-access">
-      <input value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="API Token (ck_xxx)" />
+      <input
+        type="password"
+        value={tokenDraft}
+        onChange={(event) => setTokenDraft(event.target.value)}
+        placeholder="API Token (ck_xxx)"
+        aria-label="API Token"
+        autoComplete="off"
+        spellCheck={false}
+      />
       <button className="primary" onClick={saveToken}>
         <Save size={15} />
         使用令牌
