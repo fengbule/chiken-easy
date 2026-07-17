@@ -15,11 +15,13 @@ function Panel({ title, right, children }) {
   );
 }
 
-function Card({ label, value, green, blue }) {
+function Card({ label, value, tone = "default", hint }) {
   return (
-    <div className="stat">
+    <div className={`stat stat-${tone}`}>
+      <span className="stat-accent" />
       <span>{label}</span>
-      <b className={green ? "green" : blue ? "blue" : ""}>{value}</b>
+      <b>{value}</b>
+      {hint ? <small>{hint}</small> : null}
     </div>
   );
 }
@@ -51,7 +53,8 @@ function AgentTable({ agents, openAgent, openSsh }) {
   }
 
   return (
-    <table>
+    <div className="table-scroll">
+    <table className="agent-table">
       <thead>
         <tr>
           <th>名称</th>
@@ -106,6 +109,7 @@ function AgentTable({ agents, openAgent, openSsh }) {
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 
@@ -119,20 +123,31 @@ function Dashboard({ openAgent, openSsh }) {
     return () => clearInterval(timer);
   }, []);
 
-  if (!data) return <Panel title="Dashboard"><div className="empty">Loading dashboard data...</div></Panel>;
+  if (!data) return <section className="dashboard-page"><Panel title="仪表盘"><div className="empty dashboard-loading"><span className="loading-orbit" />正在同步控制面数据...</div></Panel></section>;
 
   return (
-    <section>
-      <div className="stats">
-        <Card label="服务器总数" value={data.total} />
-        <Card label="在线" value={data.online} green />
-        <Card label="离线" value={data.offline} />
-        <Card label="sing-box 活跃" value={data.activeSingbox} blue />
-        <Card label="平均 CPU" value={formatPercent(data.averageCpu)} />
-        <Card label="总下行" value={formatSpeed(data.totalRxRate)} />
-        <Card label="总上行" value={formatSpeed(data.totalTxRate)} />
+    <section className="dashboard-page">
+      <div className="dashboard-hero">
+        <div>
+          <span className="hero-kicker">INFRASTRUCTURE OVERVIEW</span>
+          <h1>基础设施总览</h1>
+          <p>集中查看 Agent 在线状态、资源负载与实时网络吞吐。</p>
+        </div>
+        <div className={`health-summary ${data.offline ? "health-warning" : ""}`}>
+          <span className="health-pulse" />
+          <span><strong>{data.offline ? `${data.offline} 个节点待检查` : "所有节点运行正常"}</strong><small>{data.online} / {data.total} Agent 在线</small></span>
+        </div>
       </div>
-      <Panel title="最近接入">
+      <div className="stats">
+        <Card label="服务器总数" value={data.total} hint="已纳管节点" />
+        <Card label="在线 Agent" value={data.online} tone="success" hint="连接正常" />
+        <Card label="离线 Agent" value={data.offline} tone={data.offline ? "danger" : "success"} hint={data.offline ? "需要检查" : "无异常"} />
+        <Card label="sing-box 活跃" value={data.activeSingbox} tone="primary" hint="服务实例" />
+        <Card label="平均 CPU" value={formatPercent(data.averageCpu)} tone="violet" hint="实时负载" />
+        <Card label="总下行" value={formatSpeed(data.totalRxRate)} tone="cyan" hint="接收速率" />
+        <Card label="总上行" value={formatSpeed(data.totalTxRate)} tone="amber" hint="发送速率" />
+      </div>
+      <Panel title="节点运行状态" right={<span className="panel-meta">每 5 秒自动刷新</span>}>
         <AgentTable agents={data.recent} openAgent={openAgent} openSsh={openSsh} />
       </Panel>
     </section>

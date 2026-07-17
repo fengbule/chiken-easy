@@ -50,13 +50,26 @@ function createResult(role, kind, name, ok, detail = {}) {
 }
 
 async function api(url, token, options = {}) {
-  const headers = new Headers(options.headers || {});
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const response = await fetch(url, { ...options, headers });
-  const contentType = response.headers.get("content-type") || "";
-  const body = contentType.includes("application/json") ? await response.json() : await response.text();
-  return { ok: response.ok, status: response.status, body, headers: response.headers };
+  const method = cleanText(options.method || "GET").toUpperCase() || "GET";
+  // GET and PUT are idempotent here, so a transport failure can be retried without
+  // duplicating node imports, script runs, or other POST side effects.
+  const attempts = method === "GET" || method === "PUT" ? 3 : 1;
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const headers = new Headers(options.headers || {});
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    try {
+      const response = await fetch(url, { ...options, method, headers, signal: options.signal || AbortSignal.timeout(30000) });
+      const contentType = response.headers.get("content-type") || "";
+      const body = contentType.includes("application/json") ? await response.json() : await response.text();
+      return { ok: response.ok, status: response.status, body, headers: response.headers };
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) await sleep(500 * attempt);
+    }
+  }
+  throw new Error(`${method} ${new URL(url).pathname} failed: ${lastError?.message || "unknown fetch error"}`);
 }
 
 function tcpPortCheck(server, timeoutMs = 8000) {
@@ -91,6 +104,7 @@ function sshBannerCheck(server, timeoutMs = 8000) {
     socket.setTimeout(timeoutMs);
     socket.once("timeout", () => finish(false, "ssh_handshake_failed"));
     socket.once("error", (error) => finish(false, cleanText(error.message) || "unknown"));
+    socket.once("close", () => finish(false, "ssh_handshake_closed"));
     socket.on("data", (chunk) => {
       banner += chunk.toString();
       if (banner.includes("\n")) finish(true, "", { banner: banner.split(/\r?\n/)[0] });
@@ -229,7 +243,7 @@ async function waitForAgentsOnline(baseUrl, token, expected = 3) {
     const rows = Array.isArray(response.body) ? response.body : [];
     const connected = rows.filter((item) => item.connected).length;
     return { ok: response.ok && connected >= expected, count: rows.length, connected, rows };
-  }, { timeoutMs: 120000, intervalMs: 3000 });
+  }, { timeoutMs: Math.max(15000, Number(process.env.CHIKEN_REMOTE_AGENT_WAIT_MS || 45000) || 45000), intervalMs: 3000 });
   return result || { ok: false, count: 0, connected: 0, rows: [] };
 }
 
@@ -243,7 +257,8 @@ async function verifySftp(baseUrl, token, agent) {
     method: "POST",
     body: JSON.stringify({ path: directory })
   });
-  const mkdirOk = mkdirResponse.ok || String(mkdirResponse.body?.error || "").toLowerCase().includes("failure");
+  const mkdirError = String(mkdirResponse.body?.error || "").toLowerCase();
+  let mkdirOk = mkdirResponse.ok || mkdirError.includes("already exists");
 
   const boundary = `----remote-verify-${Date.now()}`;
   const multipartBody = Buffer.concat([
@@ -268,6 +283,12 @@ async function verifySftp(baseUrl, token, agent) {
   } catch {}
   const uploadResponse = { ok: uploadRaw.ok, status: uploadRaw.status, body: uploadBody };
   const listResponse = await api(`${baseUrl}/api/agents/${agent.id}/sftp?path=${encodeURIComponent(directory)}`, token);
+  const listOk = listResponse.ok
+    && Array.isArray(listResponse.body?.entries)
+    && listResponse.body.entries.some((item) => item.name === "probe.txt");
+  // Some SFTP servers return only the generic SSH_FX_FAILURE when mkdir targets an
+  // existing directory. A successful upload and listing proves the directory is usable.
+  mkdirOk ||= uploadResponse.ok && listOk;
   const downloadResponse = await fetch(`${baseUrl}/api/agents/${agent.id}/sftp/download?path=${encodeURIComponent(remotePath)}`, {
     headers: { Authorization: `Bearer ${token}` }
   });
@@ -275,6 +296,10 @@ async function verifySftp(baseUrl, token, agent) {
   const deleteResponse = await api(`${baseUrl}/api/agents/${agent.id}/sftp?path=${encodeURIComponent(remotePath)}`, token, {
     method: "DELETE",
     body: JSON.stringify({ path: remotePath })
+  });
+  const cleanupResponse = await api(`${baseUrl}/api/agents/${agent.id}/sftp?path=${encodeURIComponent(directory)}`, token, {
+    method: "DELETE",
+    body: JSON.stringify({ path: directory })
   });
 
   return [
@@ -286,7 +311,7 @@ async function verifySftp(baseUrl, token, agent) {
       status: uploadResponse.status,
       reason: uploadResponse.ok ? "" : cleanText(uploadResponse.body?.error || uploadResponse.body)
     }),
-    createResult(role, "sftp", "list", listResponse.ok && Array.isArray(listResponse.body?.entries) && listResponse.body.entries.some((item) => item.name === "probe.txt"), {
+    createResult(role, "sftp", "list", listOk, {
       status: listResponse.status,
       reason: listResponse.ok ? "" : cleanText(listResponse.body?.error || listResponse.body)
     }),
@@ -297,6 +322,10 @@ async function verifySftp(baseUrl, token, agent) {
     createResult(role, "sftp", "delete", deleteResponse.ok, {
       status: deleteResponse.status,
       reason: deleteResponse.ok ? "" : cleanText(deleteResponse.body?.error || deleteResponse.body)
+    }),
+    createResult(role, "sftp", "cleanup_directory", cleanupResponse.ok, {
+      status: cleanupResponse.status,
+      reason: cleanupResponse.ok ? "" : cleanText(cleanupResponse.body?.error || cleanupResponse.body)
     })
   ];
 }
@@ -538,9 +567,42 @@ function proxyResultToCheck(name, result) {
   });
 }
 
-async function verifyManagedProxyChecks(baseUrl, token, sourceAgent, checkerAgent) {
+async function verifyManagedProxyChecks(baseUrl, token, sourceAgent, checkerAgent, sourceServer, checkerServer) {
   const results = [];
   const restoreVersionId = await captureRestorePoint(baseUrl, token, sourceAgent.id);
+
+  const validateActiveProtocol = async (name, port, network = "tcp") => {
+    const validate = await waitFor(
+      () => sshExec(sourceServer, sourceAgent.name || sourceAgent.id, "docker exec chiken-singbox sh -lc 'sing-box check -c /etc/sing-box/config.json'"),
+      { timeoutMs: 30000, intervalMs: 1000 }
+    );
+    const listenCommand = network === "udp" ? `ss -lunp | grep ':${port} ' || true` : `ss -ltnp | grep ':${port} ' || true`;
+    const listen = await waitFor(async () => {
+      const response = await sshExec(sourceServer, sourceAgent.name || sourceAgent.id, listenCommand);
+      return { ...response, ok: response.ok && Boolean(cleanText(response.output)) };
+    }, { timeoutMs: 30000, intervalMs: 1000 });
+    results.push(createResult(sourceAgent.name || sourceAgent.id, "protocol", `${name}_config_validate`, Boolean(validate?.ok), {
+      reason: validate?.ok ? "" : safeOutput(validate?.output)
+    }));
+    results.push(createResult(sourceAgent.name || sourceAgent.id, "protocol", `${name}_listen`, Boolean(listen?.ok), {
+      reason: listen?.ok ? "" : `${network}_listen_not_found`
+    }));
+  };
+
+  const assertTemporaryProxyCleanup = async (name) => {
+    if (!checkerServer) return;
+    await sleep(1000);
+    const cleanup = await sshExec(checkerServer, checkerAgent.name || checkerAgent.id, "docker ps -a --filter name=chiken-proxy-check- --format '{{.Names}}'");
+    results.push(createResult(checkerAgent.name || checkerAgent.id, "cleanup", `${name}_temporary_proxy`, cleanup.ok && !cleanText(cleanup.output), {
+      reason: cleanup.ok && !cleanText(cleanup.output) ? "" : safeOutput(cleanup.output || cleanup.reason)
+    }));
+  };
+
+  const checkImportedNode = async (name, node) => {
+    const checks = await runNodeCheck(baseUrl, token, checkerAgent.id, [node.id]);
+    results.push(proxyResultToCheck(name, checks[0]));
+    await assertTemporaryProxyCleanup(name);
+  };
 
   try {
     const mixedPort = 19079;
@@ -566,6 +628,22 @@ async function verifyManagedProxyChecks(baseUrl, token, sourceAgent, checkerAgen
       });
       const checks = await runNodeCheck(baseUrl, token, checkerAgent.id, [mixedNode.id]);
       results.push(proxyResultToCheck("mixed_protocol", checks[0]));
+      await assertTemporaryProxyCleanup("mixed_protocol");
+
+      const httpName = `remote-verify-http-${Date.now()}`;
+      const httpImport = await api(`${baseUrl}/api/node-pool/import`, token, {
+        method: "POST",
+        body: JSON.stringify({ content: `http://${sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host}:${mixedPort}#${httpName}`, source: "remote-verify" })
+      });
+      const httpNode = (await fetchNodePool(baseUrl, token)).find((item) => item.name === httpName);
+      results.push(createResult("panel", "node-import", "http_import", httpImport.ok && Boolean(httpNode), {
+        reason: httpImport.ok && httpNode ? "" : cleanText(httpImport.body?.error || "imported HTTP node not found")
+      }));
+      if (httpNode) {
+        await checkImportedNode("http_protocol", httpNode);
+        await api(`${baseUrl}/api/node-pool/${httpNode.id}`, token, { method: "DELETE" });
+      }
+      await validateActiveProtocol("mixed", mixedPort);
     }
 
     const ssPort = 19080;
@@ -594,22 +672,109 @@ async function verifyManagedProxyChecks(baseUrl, token, sourceAgent, checkerAgen
       });
       const checks = await runNodeCheck(baseUrl, token, checkerAgent.id, [ssNode.id]);
       results.push(proxyResultToCheck("ss_protocol", checks[0]));
+      await assertTemporaryProxyCleanup("ss_protocol");
+      await validateActiveProtocol("shadowsocks", ssPort);
     }
 
-    const unsupportedSource = await findNode(baseUrl, token, (item) => item.protocol === "vless" || item.protocol === "trojan" || item.protocol === "hysteria2");
-    if (unsupportedSource) {
-      const checks = await runNodeCheck(baseUrl, token, checkerAgent.id, [unsupportedSource.id]);
-      const result = checks[0];
-      results.push(createResult("panel", "proxy-check", "vless_unsupported", Boolean(result?.unsupported || result?.notImplemented), {
-        reason: cleanText(result?.error),
-        protocol: result?.protocol,
-        unsupported: Boolean(result?.unsupported),
-        notImplemented: Boolean(result?.notImplemented)
+    const wizardCases = [
+      {
+        name: "vmess_ws",
+        body: {
+          protocol: "vmess-ws",
+          port: 19081,
+          uuid: "22222222-2222-4222-8222-222222222222",
+          path: "/remote-verify",
+          exportName: "remote-verify-vmess",
+          exportHost: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host
+        }
+      },
+      {
+        name: "trojan_tls",
+        body: {
+          protocol: "trojan",
+          port: 19082,
+          password: `rv-trojan-${Date.now()}`,
+          serverName: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host,
+          exportName: "remote-verify-trojan",
+          exportHost: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host
+        }
+      },
+      {
+        name: "hysteria2",
+        network: "udp",
+        body: {
+          protocol: "hysteria2",
+          port: 19083,
+          password: `rv-hy2-${Date.now()}`,
+          serverName: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host,
+          exportName: "remote-verify-hysteria2",
+          exportHost: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host
+        }
+      }
+    ];
+
+    for (const testCase of wizardCases) {
+      const applied = await applyConfigWizard(baseUrl, token, sourceAgent, testCase.body);
+      results.push(createResult(sourceAgent.name || sourceAgent.id, "config", `${testCase.name}_apply`, applied.ok, {
+        reason: applied.ok ? "" : cleanText(applied.body?.error || applied.body)
       }));
-    } else {
-      results.push(createResult("panel", "proxy-check", "vless_unsupported", true, {
-        reason: "no unsupported protocol node found for explicit live check"
+      if (!applied.ok) continue;
+      await sleep(5000);
+      await validateActiveProtocol(testCase.name, testCase.body.port, testCase.network || "tcp");
+      const node = await importLocalNode(baseUrl, token, sourceAgent.id);
+      await api(`${baseUrl}/api/node-pool/${node.id}`, token, {
+        method: "PUT",
+        body: JSON.stringify({ address: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host, port: testCase.body.port, enabled: true })
+      });
+      await checkImportedNode(`${testCase.name}_protocol`, node);
+    }
+
+    const vlessTlsPort = 19084;
+    const vlessTlsUuid = "33333333-3333-4333-8333-333333333333";
+    const vlessTlsConfig = {
+      log: { level: "info" },
+      inbounds: [
+        {
+          type: "vless",
+          tag: "remote-verify-vless-tls",
+          listen: "::",
+          listen_port: vlessTlsPort,
+          users: [{ uuid: vlessTlsUuid }],
+          tls: {
+            enabled: true,
+            server_name: sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host,
+            certificate_path: "/etc/sing-box/tls/remote-verify-vless-tls.crt",
+            key_path: "/etc/sing-box/tls/remote-verify-vless-tls.key"
+          }
+        }
+      ],
+      outbounds: [{ type: "direct", tag: "direct" }],
+      route: { final: "direct" }
+    };
+    const vlessTlsApply = await api(`${baseUrl}/api/agents/${sourceAgent.id}/config`, token, {
+      method: "POST",
+      body: JSON.stringify({ config: vlessTlsConfig, restart: true })
+    });
+    results.push(createResult(sourceAgent.name || sourceAgent.id, "config", "vless_tls_apply", vlessTlsApply.ok, {
+      reason: vlessTlsApply.ok ? "" : cleanText(vlessTlsApply.body?.error || vlessTlsApply.body)
+    }));
+    if (vlessTlsApply.ok) {
+      await sleep(5000);
+      await validateActiveProtocol("vless_tls", vlessTlsPort);
+      const vlessTlsName = `remote-verify-vless-tls-${Date.now()}`;
+      const vlessTlsUri = `vless://${vlessTlsUuid}@${sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host}:${vlessTlsPort}?security=tls&sni=${encodeURIComponent(sourceAgent.publicHost || sourceAgent.ip || sourceAgent.host)}#${vlessTlsName}`;
+      const imported = await api(`${baseUrl}/api/node-pool/import`, token, {
+        method: "POST",
+        body: JSON.stringify({ content: vlessTlsUri, source: "remote-verify" })
+      });
+      const vlessTlsNode = (await fetchNodePool(baseUrl, token)).find((item) => item.name === vlessTlsName);
+      results.push(createResult("panel", "node-import", "vless_tls_import", imported.ok && Boolean(vlessTlsNode), {
+        reason: imported.ok && vlessTlsNode ? "" : cleanText(imported.body?.error || "imported VLESS TLS node not found")
       }));
+      if (vlessTlsNode) {
+        await checkImportedNode("vless_tls_protocol", vlessTlsNode);
+        await api(`${baseUrl}/api/node-pool/${vlessTlsNode.id}`, token, { method: "DELETE" });
+      }
     }
 
     const eligibleNodes = (await fetchNodePool(baseUrl, token)).filter((item) => item.enabled !== false && item.health === "healthy");
@@ -639,6 +804,7 @@ async function verifyForwardImage(baseUrl, token, agentId, engine) {
 }
 
 async function verifyRealityServer(baseUrl, token, agent, server, clientServer) {
+  const restoreVersionId = await captureRestorePoint(baseUrl, token, agent.id);
   const keypair = await sshExec(server, agent.name || agent.id, "docker exec chiken-singbox sh -lc 'sing-box generate reality-keypair'");
   if (!keypair.ok) {
     return [createResult(agent.name || agent.id, "reality", "keypair", false, { reason: safeOutput(keypair.output) })];
@@ -678,8 +844,14 @@ async function verifyRealityServer(baseUrl, token, agent, server, clientServer) 
   if (!applyOk) return serverChecks;
 
   await sleep(5000);
-  const validate = await sshExec(server, agent.name || agent.id, "docker exec chiken-singbox sh -lc 'sing-box check -c /etc/sing-box/config.json'");
-  const listen = await sshExec(server, agent.name || agent.id, `ss -ltnp | grep ':${port} ' || true`);
+  const validate = await waitFor(
+    () => sshExec(server, agent.name || agent.id, "docker exec chiken-singbox sh -lc 'sing-box check -c /etc/sing-box/config.json'"),
+    { timeoutMs: 30000, intervalMs: 1000 }
+  );
+  const listen = await waitFor(async () => {
+    const response = await sshExec(server, agent.name || agent.id, `ss -ltnp | grep ':${port} ' || true`);
+    return { ...response, ok: response.ok && Boolean(cleanText(response.output)) };
+  }, { timeoutMs: 30000, intervalMs: 1000 });
   const logs = await sshExec(server, agent.name || agent.id, "docker logs --tail 80 chiken-singbox 2>&1");
   const configRead = await sshExec(server, agent.name || agent.id, "docker exec chiken-singbox sh -lc 'cat /etc/sing-box/config.json'");
   const configHasReality = /"reality"\s*:\s*\{|"type"\s*:\s*"vless"/.test(configRead.output);
@@ -688,9 +860,9 @@ async function verifyRealityServer(baseUrl, token, agent, server, clientServer) 
     reason: validate.ok ? "" : safeOutput(validate.output),
     output: safeOutput(validate.output)
   }));
-  serverChecks.push(createResult(agent.name || agent.id, "reality", "listen", Boolean(cleanText(listen.output)), {
-    reason: cleanText(listen.output) ? "" : "listen_not_found",
-    output: safeOutput(listen.output)
+  serverChecks.push(createResult(agent.name || agent.id, "reality", "listen", Boolean(listen?.ok), {
+    reason: listen?.ok ? "" : "listen_not_found",
+    output: safeOutput(listen?.output)
   }));
   serverChecks.push(createResult(agent.name || agent.id, "reality", "logs", logs.ok, {
     reason: logs.ok ? "" : "log_fetch_failed",
@@ -738,7 +910,7 @@ async function verifyRealityServer(baseUrl, token, agent, server, clientServer) 
       ],
       route: { final: "proxy" }
     }, null, 2)).toString("base64");
-    const clientCommand = `sh -lc 'docker run -d --rm --network host --name chiken-reality-probe --entrypoint sh ghcr.io/sagernet/sing-box:latest -lc \"echo ${tmpConfigB64} | base64 -d >/tmp/reality.json && sing-box run -c /tmp/reality.json\" >/tmp/chiken-reality-container.id 2>/tmp/chiken-reality-container.err && sleep 4 && if command -v curl >/dev/null 2>&1; then curl -x http://127.0.0.1:11080 -I https://www.gstatic.com/generate_204 -m 20 -sS -o /tmp/chiken-reality-body -D -; else wget -e use_proxy=yes -e https_proxy=http://127.0.0.1:11080 -S --spider -T 20 https://www.gstatic.com/generate_204 2>&1; fi; status=$?; echo ---RUNTIME---; docker logs --tail 80 chiken-reality-probe 2>&1 || true; docker rm -f chiken-reality-probe >/dev/null 2>&1 || true; exit $status'`;
+    const clientCommand = `sh -lc 'docker run -d --rm --network host --name chiken-verify-reality-probe --entrypoint sh ghcr.io/sagernet/sing-box:latest -lc \"echo ${tmpConfigB64} | base64 -d >/tmp/reality.json && sing-box run -c /tmp/reality.json\" >/tmp/chiken-verify-reality-container.id 2>/tmp/chiken-verify-reality-container.err && sleep 4 && if command -v curl >/dev/null 2>&1; then curl -x http://127.0.0.1:11080 -I https://www.gstatic.com/generate_204 -m 20 -sS -o /tmp/chiken-verify-reality-body -D -; else wget -e use_proxy=yes -e https_proxy=http://127.0.0.1:11080 -S --spider -T 20 https://www.gstatic.com/generate_204 2>&1; fi; status=$?; echo ---RUNTIME---; docker logs --tail 80 chiken-verify-reality-probe 2>&1 || true; docker rm -f chiken-verify-reality-probe >/dev/null 2>&1 || true; exit $status'`;
     const clientProbe = await sshExec(clientServer, "agent-3", clientCommand, { execOptions: { pty: true } });
     const endToEndOk = clientProbe.ok && (/HTTP\/[0-9.]+\s+204/i.test(clientProbe.output) || /status code 204/i.test(clientProbe.output)) && !/invalid connection|panic|failed|error:/i.test(clientProbe.output);
     serverChecks.push(createResult("agent-3", "reality", "client_probe", endToEndOk, {
@@ -751,7 +923,80 @@ async function verifyRealityServer(baseUrl, token, agent, server, clientServer) 
     }));
   }
 
+  const restored = await restoreConfigVersion(baseUrl, token, agent.id, restoreVersionId);
+  serverChecks.push(createResult(agent.name || agent.id, "config", "reality_restore_previous", restored.ok, {
+    reason: restored.reason || ""
+  }));
+  if (restored.ok) await sleep(5000);
+
+  if (clientServer) {
+    const cleanup = await sshExec(clientServer, "agent-3", "docker ps -a --filter name=chiken-verify-reality-probe --format '{{.Names}}'");
+    serverChecks.push(createResult("agent-3", "cleanup", "reality_temporary_proxy", cleanup.ok && !cleanText(cleanup.output), {
+      reason: cleanup.ok && !cleanText(cleanup.output) ? "" : safeOutput(cleanup.output || cleanup.reason)
+    }));
+  }
+
   return serverChecks;
+}
+
+async function verifyCommandReliability(baseUrl, token, agent, server) {
+  const results = [];
+  const start = await api(`${baseUrl}/api/agents/${agent.id}/exec`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      command: "sh -c 'echo $$ >/tmp/chiken-verify-cancel.pid; sleep 60'",
+      timeoutMs: 120000
+    })
+  });
+  results.push(createResult(agent.name || agent.id, "command", "cancel_start", start.ok && Boolean(start.body?.commandId), {
+    reason: start.ok ? "" : cleanText(start.body?.error || start.body)
+  }));
+
+  if (start.ok && start.body?.commandId) {
+    await sleep(1500);
+    const cancel = await api(`${baseUrl}/api/agents/${agent.id}/commands/${start.body.commandId}/cancel`, token, { method: "POST" });
+    results.push(createResult(agent.name || agent.id, "command", "cancel_request", cancel.ok, {
+      reason: cancel.ok ? "" : cleanText(cancel.body?.error || cancel.body)
+    }));
+    const cancelled = await waitFor(async () => {
+      const response = await api(`${baseUrl}/api/command-runs`, token);
+      const run = Array.isArray(response.body) ? response.body.find((item) => item.id === start.body.commandId) : null;
+      return { ok: response.ok && run?.status === "cancelled", run };
+    }, { timeoutMs: 15000, intervalMs: 500 });
+    results.push(createResult(agent.name || agent.id, "command", "cancel_state", Boolean(cancelled?.ok), {
+      reason: cancelled?.ok ? "" : cleanText(cancelled?.run?.status || "cancelled state not observed")
+    }));
+    const processCheck = await sshExec(server, agent.name || agent.id, "docker exec chiken-agent sh -lc 'if [ -f /tmp/chiken-verify-cancel.pid ] && kill -0 $(cat /tmp/chiken-verify-cancel.pid) 2>/dev/null; then exit 1; fi; rm -f /tmp/chiken-verify-cancel.pid'");
+    results.push(createResult(agent.name || agent.id, "command", "cancel_process_cleanup", processCheck.ok, {
+      reason: processCheck.ok ? "" : safeOutput(processCheck.output)
+    }));
+  }
+
+  const timeoutStart = await api(`${baseUrl}/api/agents/${agent.id}/exec`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      command: "sh -c 'echo $$ >/tmp/chiken-verify-timeout.pid; sleep 60'",
+      timeoutMs: 1500
+    })
+  });
+  results.push(createResult(agent.name || agent.id, "command", "timeout_start", timeoutStart.ok && Boolean(timeoutStart.body?.commandId), {
+    reason: timeoutStart.ok ? "" : cleanText(timeoutStart.body?.error || timeoutStart.body)
+  }));
+  if (timeoutStart.ok && timeoutStart.body?.commandId) {
+    const timedOut = await waitFor(async () => {
+      const response = await api(`${baseUrl}/api/command-runs`, token);
+      const run = Array.isArray(response.body) ? response.body.find((item) => item.id === timeoutStart.body.commandId) : null;
+      return { ok: response.ok && run?.status === "timeout", run };
+    }, { timeoutMs: 15000, intervalMs: 500 });
+    results.push(createResult(agent.name || agent.id, "command", "timeout_state", Boolean(timedOut?.ok), {
+      reason: timedOut?.ok ? "" : cleanText(timedOut?.run?.status || "timeout state not observed")
+    }));
+    const processCheck = await sshExec(server, agent.name || agent.id, "docker exec chiken-agent sh -lc 'if [ -f /tmp/chiken-verify-timeout.pid ] && kill -0 $(cat /tmp/chiken-verify-timeout.pid) 2>/dev/null; then exit 1; fi; rm -f /tmp/chiken-verify-timeout.pid'");
+    results.push(createResult(agent.name || agent.id, "command", "timeout_process_cleanup", processCheck.ok, {
+      reason: processCheck.ok ? "" : safeOutput(processCheck.output)
+    }));
+  }
+  return results;
 }
 
 async function verifyAudit(baseUrl, token, expectedActions = []) {
@@ -859,15 +1104,29 @@ async function main() {
   ]);
 
   for (const agent of agentRows) {
+    if (!agent.connected) {
+      for (const name of ["mkdir", "upload", "list", "download", "delete", "cleanup_directory"]) {
+        summary.checks.push(createResult(agent.name || agent.id, "sftp", name, false, { reason: "agent_offline" }));
+      }
+      continue;
+    }
     const sftpChecks = await verifySftp(baseUrl, apiToken, agent);
     summary.checks.push(...sftpChecks);
   }
 
-  summary.checks.push(await verifyBatchCommand(baseUrl, apiToken, agentRows));
+  summary.checks.push(await verifyBatchCommand(baseUrl, apiToken, agentRows.filter((agent) => agent.connected)));
+  if (mainAgent && servers[0]) summary.checks.push(...(await verifyCommandReliability(baseUrl, apiToken, mainAgent, servers[0])));
   summary.checks.push(...(await verifySubscription(baseUrl, apiToken)));
 
   if (mainAgent && checkerAgent) {
-    const proxyChecks = await verifyManagedProxyChecks(baseUrl, apiToken, mainAgent, checkerAgent);
+    const proxyChecks = await verifyManagedProxyChecks(
+      baseUrl,
+      apiToken,
+      mainAgent,
+      checkerAgent,
+      serverByAgentId.get(mainAgent.id) || servers[0],
+      serverByAgentId.get(checkerAgent.id) || servers[1]
+    );
     summary.checks.push(...proxyChecks);
 
     const realityChecks = await verifyRealityServer(
