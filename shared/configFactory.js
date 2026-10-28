@@ -95,7 +95,7 @@ export function buildInbound(input) {
       tag,
       listen,
       listen_port: port,
-      users: [{ uuid, alterId: 0 }],
+      users: [{ uuid }],
       transport: { type: "ws", path: String(input.path || "/ws").trim() || "/ws" }
     };
   }

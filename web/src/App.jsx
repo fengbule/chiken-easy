@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
+import "./workspace.css";
 import {
   TOKEN_KEY,
   api,
@@ -57,6 +58,8 @@ import WorkspacePage from "./pages/WorkspacePage";
 import SettingsPage from "./pages/SettingsPage";
 import Audit from "./pages/Audit";
 import Tutorial from "./pages/Tutorial";
+import useAgents from "./hooks/useAgents";
+import ServerInventory from "./components/ServerInventory";
 
 const URL_TOKEN_PARAM = "token";
 
@@ -65,9 +68,9 @@ function isPanelApiToken(token) {
 }
 
 const nav = [
-  ["dashboard", Activity, "仪表盘"],
+  ["dashboard", Activity, "工作台"],
   ["servers", Monitor, "服务器"],
-  ["console", PlugZap, "终端 / SFTP"],
+  ["console", PlugZap, "文件传输"],
   ["nodes", Code2, "节点配置"],
   ["node-pool", Code2, "节点池"],
   ["subscriptions", Link2, "订阅聚合"],
@@ -330,7 +333,15 @@ function Field({ label, value, onChange, random, type = "text", placeholder = ""
 function AccessTokenBar({ tokenDraft, setTokenDraft, saveToken, clearToken, hasToken }) {
   return (
     <div className="token-access">
-      <input value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="API Token (ck_xxx)" />
+      <input
+        type="password"
+        value={tokenDraft}
+        onChange={(event) => setTokenDraft(event.target.value)}
+        placeholder="API Token (ck_xxx)"
+        aria-label="API Token"
+        autoComplete="off"
+        spellCheck={false}
+      />
       <button className="primary" onClick={saveToken}>
         <Save size={15} />
         使用令牌
@@ -704,29 +715,12 @@ function TokenButton() {
 }
 
 function Servers({ openAgent, openSsh }) {
-  const [agents, setAgents] = useState([]);
-  const [query, setQuery] = useState("");
-
-  useEffect(() => {
-    const load = () => api("/api/agents").then(setAgents).catch(() => {});
-    load();
-    const timer = setInterval(load, 5000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const filtered = agents.filter((agent) =>
-    [agent.name, agent.host, agent.ip, agent.sshHost, ...(agent.tags || [])].join(" ").toLowerCase().includes(query.toLowerCase())
-  );
+  const state = useAgents();
 
   return (
-    <section>
-      <div className="toolbar">
-        <input placeholder="按名称 / 主机 / IP / 标签筛选" value={query} onChange={(event) => setQuery(event.target.value)} />
-        <TokenButton />
-      </div>
-      <Panel title="服务器">
-        <AgentTable agents={filtered} openAgent={openAgent} openSsh={openSsh} />
-      </Panel>
+    <section className="servers-page">
+      <div className="workbench-title"><div><div className="page-overline"><span />连接你的基础设施</div><h1>服务器<span>Servers</span></h1><p>搜索、筛选并管理全部服务器，直接进入终端或查看详情。</p></div><TokenButton /></div>
+      <ServerInventory {...state} openAgent={openAgent} openSsh={openSsh} action={<button onClick={state.refresh} disabled={state.pending}><RefreshCw size={15} className={state.pending ? "is-spinning" : ""} />刷新</button>} />
     </section>
   );
 }
@@ -2124,7 +2118,7 @@ function App() {
   };
 
   const content = useMemo(() => {
-    if (page === "dashboard") return <Dashboard openAgent={openAgent} openSsh={openSsh} />;
+    if (page === "dashboard") return <Dashboard openAgent={openAgent} openSsh={openSsh} navigate={setPage} />;
     if (page === "servers") return <Servers openAgent={openAgent} openSsh={openSsh} />;
     if (page === "console") return <ConsolePage agents={agents} agentId={agentId} setAgentId={setAgentId} openSsh={openSsh} />;
     if (page === "nodes") return <NodeWizard agents={agents} />;

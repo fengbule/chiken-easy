@@ -11,6 +11,7 @@ import { WebSocketServer } from "ws";
 import { Client as SshClient } from "ssh2";
 import { nanoid } from "nanoid";
 import { fileURLToPath } from "url";
+import { uploadFileName } from "./fileNames.js";
 import { buildConfig, buildForwardConfig, buildForwardRule, forwardCatalog, protocolCatalog } from "./configFactory.js";
 import { buildAgentInstallScript, buildInstallCommand, createInstallBundle, pruneInstallBundles, resolvePublicBaseUrl, resolvePublicWsUrl } from "./installers.js";
 import { buildNodeProfile, buildSubscriptionProfile, defaultSubscriptionTemplateId, listSubscriptionNodes, renderSubscription, subscriptionTemplateCatalog } from "./subscriptions.js";
@@ -47,6 +48,7 @@ const uploadMaxBytes = Math.max(1024 * 1024, (Number(process.env.CHIKEN_UPLOAD_M
 const backupMaxBytes = Math.max(8 * 1024 * 1024, (Number(process.env.CHIKEN_BACKUP_MAX_MB || 128) || 128) * 1024 * 1024);
 const proxyCheckUrl = cleanText(process.env.CHIKEN_PROXY_CHECK_URL || "https://www.gstatic.com/generate_204") || "https://www.gstatic.com/generate_204";
 const stateFlushMs = Math.max(250, Number(process.env.CHIKEN_STATE_FLUSH_MS || 1500) || 1500);
+const heartbeatStateFlushMs = Math.max(60000, Number(process.env.CHIKEN_HEARTBEAT_STATE_FLUSH_MS || 300000) || 300000);
 const allowedUploadTypes = new Set(
   String(process.env.CHIKEN_UPLOAD_TYPES || "image/png,image/jpeg,image/webp,text/plain,application/pdf")
     .split(",")
@@ -114,10 +116,12 @@ const logStreams = new Map();
 const commandWaiters = new Map();
 const configCommandRefs = new Map();
 const forwardCommandRefs = new Map();
+const asyncCommandRefs = new Map();
 const browserSessions = new Map();
 const clients = new Map();
 let stateSaveTimer = null;
 let stateSavePending = false;
+let stateSaveDueAt = 0;
 
 function cleanText(value) {
   return String(value ?? "").trim();
@@ -140,6 +144,7 @@ function flushScheduledStateSave() {
     clearTimeout(stateSaveTimer);
     stateSaveTimer = null;
   }
+  stateSaveDueAt = 0;
   if (!stateSavePending) return;
   stateSavePending = false;
   saveState();
@@ -147,10 +152,14 @@ function flushScheduledStateSave() {
 
 function scheduleStateSave(delayMs = stateFlushMs) {
   stateSavePending = true;
-  if (stateSaveTimer) return;
+  const delay = Math.max(0, Number(delayMs) || 0);
+  const dueAt = Date.now() + delay;
+  if (stateSaveTimer && stateSaveDueAt <= dueAt) return;
+  if (stateSaveTimer) clearTimeout(stateSaveTimer);
+  stateSaveDueAt = dueAt;
   stateSaveTimer = setTimeout(() => {
     flushScheduledStateSave();
-  }, Math.max(0, Number(delayMs) || 0));
+  }, delay);
   stateSaveTimer.unref?.();
 }
 
@@ -168,14 +177,14 @@ function ensureCollection(rootObject, key, factory) {
 }
 
 function safeFileName(name) {
-  return cleanText(name).replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "file";
+  return uploadFileName(name);
 }
 
 function normalizeRemotePath(value) {
   const input = cleanText(value || "/");
   if (input.includes("\0")) throw new Error("invalid path");
+  if (input.split("/").includes("..")) throw new Error("path traversal not allowed");
   const normalized = path.posix.normalize(input.startsWith("/") ? input : `/${input}`);
-  if (normalized.includes("..")) throw new Error("path traversal not allowed");
   return normalized;
 }
 
@@ -1342,7 +1351,7 @@ function publicFile(file) {
 
 function saveUploadedFile(file, options = {}) {
   const record = normalizeFileRecord({
-    name: file.originalname,
+    name: safeFileName(file.originalname),
     diskName: `${nanoid(8)}-${safeFileName(file.originalname)}`,
     mimeType: file.mimetype,
     size: file.size,
@@ -1897,7 +1906,7 @@ const upload = multer({
   limits: { fileSize: uploadMaxBytes },
   fileFilter: (_, file, callback) => {
     if (!allowedUploadTypes.size || allowedUploadTypes.has(file.mimetype)) callback(null, true);
-    else callback(new Error(`file type not allowed: ${file.mimetype}`));
+    else callback(Object.assign(new Error(`不支持此附件类型：${file.mimetype}`), { status: 415 }));
   }
 });
 
@@ -1905,6 +1914,10 @@ const backupUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: backupMaxBytes }
 });
+
+// Remote files are data, not memo attachments: allow arbitrary MIME types while
+// retaining the same authenticated, bounded upload path. Never execute uploads.
+const sftpUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: uploadMaxBytes, files: 1, fields: 8 } });
 
 const app = express();
 app.use(express.json({ limit: "8mb" }));
@@ -2650,6 +2663,52 @@ app.post("/api/agents/:id/commands/:commandId", (req, res) => {
   }
 });
 
+app.post("/api/agents/:id/exec", (req, res) => {
+  const command = cleanText(req.body?.command);
+  const timeoutMs = Math.max(1000, Math.min(300000, Number(req.body?.timeoutMs || 30000) || 30000));
+  if (!command) return res.status(400).json({ error: "command required" });
+  try {
+    const commandId = sendCommand(req.params.id, "exec", { command, timeoutMs });
+    const run = {
+      id: commandId,
+      commandId,
+      agentId: req.params.id,
+      command,
+      timeoutMs,
+      status: "running",
+      ok: false,
+      output: "",
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+    state.commandRuns ||= {};
+    state.commandRuns[commandId] = run;
+    asyncCommandRefs.set(commandId, { agentId: req.params.id });
+    scheduleStateSave();
+    audit("admin", "remote_command_start", req.params.id, { commandId, timeoutMs, command: command.slice(0, 120) });
+    res.status(202).json({ ok: true, commandId, status: run.status });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.post("/api/agents/:id/commands/:commandId/cancel", (req, res) => {
+  const targetCommandId = cleanText(req.params.commandId);
+  const run = state.commandRuns?.[targetCommandId];
+  if (!run || run.agentId !== req.params.id) return res.status(404).json({ error: "running command not found" });
+  if (run.status !== "running") return res.status(409).json({ error: `command is ${run.status}` });
+  try {
+    const cancelCommandId = sendCommand(req.params.id, "cancel", { commandId: targetCommandId });
+    run.status = "cancelling";
+    run.updatedAt = nowIso();
+    scheduleStateSave();
+    audit("admin", "remote_command_cancel", req.params.id, { commandId: targetCommandId, cancelCommandId });
+    res.status(202).json({ ok: true, commandId: targetCommandId, cancelCommandId, status: run.status });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
 app.post("/api/agents/:id/ssh", async (req, res) => {
   const command = cleanText(req.body?.command);
   if (!command) return res.status(400).json({ error: "command required" });
@@ -2711,7 +2770,7 @@ app.get("/api/agents/:id/sftp", async (req, res) => {
   }
 });
 
-app.post("/api/agents/:id/sftp/upload", upload.single("file"), async (req, res) => {
+app.post("/api/agents/:id/sftp/upload", sftpUpload.single("file"), async (req, res) => {
   if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
   if (!req.file) return res.status(400).json({ error: "file required" });
   try {
@@ -2731,8 +2790,8 @@ app.get("/api/agents/:id/sftp/download", async (req, res) => {
     const remotePath = normalizeRemotePath(req.query.path || "/tmp/test.txt");
     const buffer = await withSftp(req.params.id, {}, async (sftp) => readSftpStream(sftp.createReadStream(remotePath)));
     audit("admin", "sftp_download", req.params.id, { path: remotePath, size: buffer.length });
+    res.attachment(path.posix.basename(remotePath));
     res.setHeader("Content-Type", "application/octet-stream");
-    res.setHeader("Content-Disposition", `attachment; filename="${path.posix.basename(remotePath)}"`);
     res.send(buffer);
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -2744,7 +2803,10 @@ app.delete("/api/agents/:id/sftp", async (req, res) => {
   try {
     const remotePath = normalizeRemotePath(req.query.path || req.body?.path || "");
     await withSftp(req.params.id, {}, (sftp) => new Promise((resolve, reject) => {
-      sftp.unlink(remotePath, (error) => (error ? reject(error) : resolve()));
+      sftp.unlink(remotePath, (unlinkError) => {
+        if (!unlinkError) return resolve();
+        sftp.rmdir(remotePath, (rmdirError) => (rmdirError ? reject(unlinkError) : resolve()));
+      });
     }));
     audit("admin", "sftp_delete", req.params.id, { path: remotePath });
     res.json({ ok: true });
@@ -3052,6 +3114,12 @@ app.get("/sub/:token", (req, res) => {
   }
 });
 
+app.use((error, req, res, next) => {
+  if (!req.path.startsWith("/api/")) return next(error);
+  const status = error.code === "LIMIT_FILE_SIZE" ? 413 : error instanceof multer.MulterError ? 400 : Number(error.status) || 500;
+  const message = error.code === "LIMIT_FILE_SIZE" ? "文件超过允许的上传大小" : error.type === "entity.parse.failed" ? "请求内容不是有效的 JSON" : status >= 500 ? "服务器处理请求失败" : sanitizeSensitiveText(error.message);
+  res.status(status).json({ error: message });
+});
 if (fs.existsSync(webDist)) app.use(express.static(webDist));
 app.get("*", (_, res, next) => {
   const index = path.join(webDist, "index.html");
@@ -3151,7 +3219,7 @@ wss.on("connection", (ws) => {
     if (msg.type === "heartbeat") {
       Object.assign(state.agents[agentId], msg.status, { lastSeen: nowIso() });
       recordMonitorSample(agentId, true);
-      scheduleStateSave();
+      scheduleStateSave(heartbeatStateFlushMs);
     }
 
     if (msg.type === "log") pushLog(agentId, { at: nowIso(), line: sanitizeSensitiveText(msg.line) });
@@ -3191,6 +3259,26 @@ wss.on("connection", (ws) => {
         }
         scheduleStateSave();
         forwardCommandRefs.delete(msg.commandId);
+      }
+
+      if (asyncCommandRefs.has(msg.commandId)) {
+        const run = state.commandRuns?.[msg.commandId];
+        if (run) {
+          const wasCancelling = run.status === "cancelling";
+          Object.assign(run, {
+            status: wasCancelling ? "cancelled" : msg.timeout ? "timeout" : msg.ok ? "completed" : "failed",
+            ok: Boolean(msg.ok) && !wasCancelling,
+            cancelled: wasCancelling,
+            timeout: Boolean(msg.timeout),
+            output: sanitizeSensitiveText(String(msg.output || "")).slice(0, 20000),
+            updatedAt: nowIso(),
+            completedAt: nowIso()
+          });
+          const rows = Object.values(state.commandRuns || {}).sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
+          for (const stale of rows.slice(500)) delete state.commandRuns[stale.id];
+          scheduleStateSave();
+        }
+        asyncCommandRefs.delete(msg.commandId);
       }
 
       if (msg.command === "proxy_check" && msg.nodeId) {
@@ -3254,6 +3342,7 @@ const heartbeatTimeoutMs = Math.max(15000, (Number(process.env.CHIKEN_PROBE_INTE
 
 setInterval(() => {
   const now = Date.now();
+  let changed = false;
   for (const [id, agent] of Object.entries(state.agents || {})) {
     if (clients.has(id)) continue;
     const lastSeen = Date.parse(agent.lastSeen || agent.updatedAt) || 0;
@@ -3261,8 +3350,9 @@ setInterval(() => {
     if (agent.connected === false) continue;
     state.agents[id] = { ...agent, connected: false, lastSeen: agent.lastSeen || nowIso() };
     recordMonitorSample(id, false);
+    changed = true;
   }
-  scheduleStateSave();
+  if (changed) scheduleStateSave();
 }, Math.max(10000, Math.floor(heartbeatTimeoutMs / 2)));
 
 const port = Number(process.env.PORT || 7788);

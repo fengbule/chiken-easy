@@ -196,6 +196,14 @@ try {
   });
   assert(configRender.ok && configRender.body?.config?.inbounds?.length >= 1, "config render failed");
 
+  const vmessRender = await fetchJson(`http://127.0.0.1:${server.port}/api/config/render`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ protocol: "vmess-ws", port: 18082, uuid: "44444444-4444-4444-8444-444444444444", path: "/smoke" })
+  });
+  assert(vmessRender.ok, "vmess config render failed");
+  assert(!JSON.stringify(vmessRender.body?.config || {}).includes("alterId"), "vmess sing-box config contains removed alterId field");
+
   const backupDownload = await fetch(`http://127.0.0.1:${server.port}/api/backups/download`, {
     headers: { Authorization: "Bearer ck_smoke_token" }
   });
@@ -203,6 +211,17 @@ try {
 
   const audit = await fetchJson(`http://127.0.0.1:${server.port}/api/audit`, { headers: authHeaders() });
   assert(audit.ok && Array.isArray(audit.body), "/api/audit missing");
+
+  const invalidJson = await fetchJson(`http://127.0.0.1:${server.port}/api/settings`, {
+    method: "PUT", headers: authHeaders(), body: "{broken"
+  });
+  assert(invalidJson.status === 400 && typeof invalidJson.body.error === "string", "invalid JSON must return a structured error");
+  const disallowedFile = new FormData();
+  disallowedFile.append("file", new Blob(["test"], { type: "application/octet-stream" }), "test.bin");
+  const invalidUpload = await fetchJson(`http://127.0.0.1:${server.port}/api/files/upload`, {
+    method: "POST", headers: { Authorization: "Bearer ck_smoke_token" }, body: disallowedFile
+  });
+  assert(invalidUpload.status === 415 && typeof invalidUpload.body.error === "string", "unsupported memo attachments must return JSON, not a stack trace");
 
   if (storageMode === "sqlite") {
     const cleanup = await fetchJson(`http://127.0.0.1:${server.port}/api/settings`, {

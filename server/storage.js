@@ -48,34 +48,32 @@ function mergeObjects(base, patch) {
   return next;
 }
 
-function pathMatches(rule, pathParts) {
-  if (rule.length !== pathParts.length) return false;
-  return rule.every((part, index) => part === "*" || part === pathParts[index]);
+function transformAtPath(target, rule, index, transform) {
+  if (index >= rule.length) return transform(target);
+  if (!target || typeof target !== "object") return target;
+  const segment = rule[index];
+  if (segment === "*") {
+    if (Array.isArray(target)) return target.map((value) => transformAtPath(value, rule, index + 1, transform));
+    return Object.fromEntries(Object.entries(target).map(([key, value]) => [key, transformAtPath(value, rule, index + 1, transform)]));
+  }
+  if (!(segment in target)) return target;
+  const next = Array.isArray(target) ? [...target] : { ...target };
+  next[segment] = transformAtPath(target[segment], rule, index + 1, transform);
+  return next;
 }
 
-function walkSecrets(target, pathParts, transform) {
-  if (Array.isArray(target)) {
-    return target.map((item, index) => walkSecrets(item, [...pathParts, String(index)], transform));
-  }
-  if (!target || typeof target !== "object") return target;
-  const next = { ...target };
-  for (const [key, value] of Object.entries(next)) {
-    const currentPath = [...pathParts, key];
-    if (SENSITIVE_PATHS.some((rule) => pathMatches(rule, currentPath.map((segment, idx) => (Number.isInteger(Number(segment)) && rule[idx] === "*" ? "*" : segment))))) {
-      next[key] = transform(value);
-      continue;
-    }
-    next[key] = walkSecrets(value, currentPath, transform);
-  }
+function transformSecrets(state, transform) {
+  let next = { ...(state || {}) };
+  for (const rule of SENSITIVE_PATHS) next = transformAtPath(next, rule, 0, transform);
   return next;
 }
 
 function maybeEncryptSecrets(state, masterKey) {
-  return walkSecrets(state, [], (value) => encryptSecret(value, masterKey));
+  return transformSecrets(state, (value) => encryptSecret(value, masterKey));
 }
 
 function maybeDecryptSecrets(state, masterKey) {
-  return walkSecrets(state, [], (value) => {
+  return transformSecrets(state, (value) => {
     try {
       return decryptSecret(value, masterKey);
     } catch {
@@ -360,7 +358,7 @@ export function saveState(state, { dataDir, masterKey, backupLimit = DEFAULT_BAC
   const stateFilePath = path.join(rootDir, STATE_FILE);
   backupState(rootDir, stateFilePath, backupLimit);
   const payload = maybeEncryptSecrets(migrateState(state), masterKey);
-  atomicWrite(stateFilePath, `${JSON.stringify(payload, null, 2)}\n`);
+  atomicWrite(stateFilePath, `${JSON.stringify(payload)}\n`);
   return stateFilePath;
 }
 
