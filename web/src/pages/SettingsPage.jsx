@@ -50,33 +50,45 @@ function Field({ label, value, onChange, random, type = "text", placeholder = ""
 function SettingsPage() {
   const [settings, setSettings] = useState(null);
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
 
-  const load = () => api("/api/settings").then(setSettings).catch((error) => setMessage(error.message));
+  const load = async () => {
+    setLoading(true);
+    setMessage("");
+    try { setSettings(await api("/api/settings")); }
+    catch (error) { setMessage(error.message); }
+    finally { setLoading(false); }
+  };
 
   useEffect(() => {
     load().catch(() => {});
   }, []);
 
   const save = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
       const response = await api("/api/settings", { method: "PUT", body: JSON.stringify(settings) });
       setSettings(response);
       setMessage("设置已保存。");
     } catch (error) {
       setMessage(error.message);
-    }
+    } finally { setBusy(false); }
   };
 
   const testNotification = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
       await api("/api/settings/notifications/test", { method: "POST" });
       setMessage("测试通知已发送。");
     } catch (error) {
       setMessage(error.message);
-    }
+    } finally { setBusy(false); }
   };
 
-  if (!settings) return null;
+  if (!settings) return <Panel title="设置"><div className="empty" role={loading ? "status" : "alert"}>{loading ? "正在加载设置…" : <><p>无法加载设置：{message}</p><button onClick={load}>重新加载</button></>}</div></Panel>;
 
   return (
     <section>
@@ -91,8 +103,8 @@ function SettingsPage() {
             <Field label="Telegram Chat ID" value={settings.telegramChatId || ""} onChange={(value) => setSettings((current) => ({ ...current, telegramChatId: value }))} />
           </div>
           <div className="actions">
-            <button className="primary" onClick={save}>保存设置</button>
-            <button onClick={testNotification}>测试通知</button>
+            <button className="primary" disabled={busy} onClick={save}>{busy ? "正在处理…" : "保存设置"}</button>
+            <button disabled={busy} onClick={testNotification}>测试通知</button>
           </div>
         </Panel>
 

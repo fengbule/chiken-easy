@@ -18,7 +18,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - run: npm run test:files
       - run: npm run build
+      - run: npx playwright-core install --with-deps chromium
+      - run: npm run test:ui
 
   node-compatibility:
     name: Node ${{ matrix.node }} Compatibility
