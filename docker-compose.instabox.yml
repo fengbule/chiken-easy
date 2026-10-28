@@ -1,0 +1,76 @@
+name: chiken-test-instabox
+services:
+  control:
+    build: .
+    image: chiken-test-instabox:current
+    container_name: chiken-test-control
+    restart: unless-stopped
+    environment:
+      PORT: "7788"
+      CHIKEN_STORAGE: sqlite
+      CHIKEN_REQUIRE_API_TOKEN: "1"
+      CHIKEN_ALLOW_QUERY_TOKEN: "0"
+      CHIKEN_BOOTSTRAP_TOKEN: "${CHIKEN_BOOTSTRAP_TOKEN:?required}"
+      CHIKEN_API_TOKEN: "${CHIKEN_API_TOKEN:?required}"
+      CHIKEN_MASTER_KEY: "${CHIKEN_MASTER_KEY:?required}"
+      CHIKEN_ADMIN_PASSWORD: "${CHIKEN_ADMIN_PASSWORD:?required}"
+      CHIKEN_PUBLIC_BASE_URL: "${CHIKEN_PUBLIC_BASE_URL:?required}"
+      CHIKEN_PUBLIC_WS_URL: "${CHIKEN_PUBLIC_WS_URL:?required}"
+    ports: ["127.0.0.1:8088:7788"]
+    volumes: ["./data/control:/app/data"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:7788/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  singbox:
+    image: ghcr.io/sagernet/sing-box:v1.12.0
+    container_name: chiken-test-singbox
+    restart: unless-stopped
+    network_mode: host
+    command: ["run", "-c", "/etc/sing-box/config.json"]
+    volumes: ["./data/sing-box:/etc/sing-box"]
+  agent:
+    build:
+      context: .
+      dockerfile: deploy/instabox-agent.Dockerfile
+    image: chiken-test-instabox-agent:current
+    container_name: chiken-test-agent
+    restart: unless-stopped
+    command:
+      [
+        "sh",
+        "-c",
+        "/usr/sbin/sshd -f /etc/chiken/sshd_config && exec node agent/index.js",
+      ]
+    depends_on:
+      control: { condition: service_healthy }
+      singbox: { condition: service_started }
+    environment:
+      CHIKEN_SERVER: ws://control:7788/agent
+      CHIKEN_TOKEN: "${CHIKEN_BOOTSTRAP_TOKEN:?required}"
+      CHIKEN_AGENT_NAME: InstaBox · 主节点
+      CHIKEN_AGENT_HOST: instabox
+      CHIKEN_SERVICE_MODE: docker
+      CHIKEN_AGENT_STATE: /app/agent-state
+      SINGBOX_CONTAINER: chiken-test-singbox
+      SINGBOX_IMAGE: ghcr.io/sagernet/sing-box:v1.12.0
+      SINGBOX_CONFIG: /etc/sing-box/config.json
+      SINGBOX_CONFIG_VOLUME: "${PWD}/data/sing-box"
+      CHIKEN_FORWARDER_DIR: /app/forwarders
+      CHIKEN_FORWARDER_HOST_DIR: "${PWD}/data/forwarders"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /proc:/host/proc:ro
+      - /etc/os-release:/host/etc/os-release:ro
+      - ./data/agent-state:/app/agent-state
+      - ./data/sing-box:/etc/sing-box
+      - ./data/forwarders:/app/forwarders
+      - ./data/files:/workspace
+      - ./data/ssh/authorized_keys:/etc/chiken/authorized_keys:ro
