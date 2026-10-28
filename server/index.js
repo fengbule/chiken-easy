@@ -11,6 +11,7 @@ import { WebSocketServer } from "ws";
 import { Client as SshClient } from "ssh2";
 import { nanoid } from "nanoid";
 import { fileURLToPath } from "url";
+import { uploadFileName } from "./fileNames.js";
 import { buildConfig, buildForwardConfig, buildForwardRule, forwardCatalog, protocolCatalog } from "./configFactory.js";
 import { buildAgentInstallScript, buildInstallCommand, createInstallBundle, pruneInstallBundles, resolvePublicBaseUrl, resolvePublicWsUrl } from "./installers.js";
 import { buildNodeProfile, buildSubscriptionProfile, defaultSubscriptionTemplateId, listSubscriptionNodes, renderSubscription, subscriptionTemplateCatalog } from "./subscriptions.js";
@@ -176,14 +177,14 @@ function ensureCollection(rootObject, key, factory) {
 }
 
 function safeFileName(name) {
-  return cleanText(name).replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "file";
+  return uploadFileName(name);
 }
 
 function normalizeRemotePath(value) {
   const input = cleanText(value || "/");
   if (input.includes("\0")) throw new Error("invalid path");
+  if (input.split("/").includes("..")) throw new Error("path traversal not allowed");
   const normalized = path.posix.normalize(input.startsWith("/") ? input : `/${input}`);
-  if (normalized.includes("..")) throw new Error("path traversal not allowed");
   return normalized;
 }
 
@@ -1350,7 +1351,7 @@ function publicFile(file) {
 
 function saveUploadedFile(file, options = {}) {
   const record = normalizeFileRecord({
-    name: file.originalname,
+    name: safeFileName(file.originalname),
     diskName: `${nanoid(8)}-${safeFileName(file.originalname)}`,
     mimeType: file.mimetype,
     size: file.size,
@@ -1905,7 +1906,7 @@ const upload = multer({
   limits: { fileSize: uploadMaxBytes },
   fileFilter: (_, file, callback) => {
     if (!allowedUploadTypes.size || allowedUploadTypes.has(file.mimetype)) callback(null, true);
-    else callback(new Error(`file type not allowed: ${file.mimetype}`));
+    else callback(Object.assign(new Error(`不支持此附件类型：${file.mimetype}`), { status: 415 }));
   }
 });
 
@@ -1913,6 +1914,10 @@ const backupUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: backupMaxBytes }
 });
+
+// Remote files are data, not memo attachments: allow arbitrary MIME types while
+// retaining the same authenticated, bounded upload path. Never execute uploads.
+const sftpUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: uploadMaxBytes, files: 1, fields: 8 } });
 
 const app = express();
 app.use(express.json({ limit: "8mb" }));
@@ -2765,7 +2770,7 @@ app.get("/api/agents/:id/sftp", async (req, res) => {
   }
 });
 
-app.post("/api/agents/:id/sftp/upload", upload.single("file"), async (req, res) => {
+app.post("/api/agents/:id/sftp/upload", sftpUpload.single("file"), async (req, res) => {
   if (!getAgent(req.params.id)) return res.status(404).json({ error: "agent not found" });
   if (!req.file) return res.status(400).json({ error: "file required" });
   try {
@@ -2785,8 +2790,8 @@ app.get("/api/agents/:id/sftp/download", async (req, res) => {
     const remotePath = normalizeRemotePath(req.query.path || "/tmp/test.txt");
     const buffer = await withSftp(req.params.id, {}, async (sftp) => readSftpStream(sftp.createReadStream(remotePath)));
     audit("admin", "sftp_download", req.params.id, { path: remotePath, size: buffer.length });
+    res.attachment(path.posix.basename(remotePath));
     res.setHeader("Content-Type", "application/octet-stream");
-    res.setHeader("Content-Disposition", `attachment; filename="${path.posix.basename(remotePath)}"`);
     res.send(buffer);
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -3109,6 +3114,12 @@ app.get("/sub/:token", (req, res) => {
   }
 });
 
+app.use((error, req, res, next) => {
+  if (!req.path.startsWith("/api/")) return next(error);
+  const status = error.code === "LIMIT_FILE_SIZE" ? 413 : error instanceof multer.MulterError ? 400 : Number(error.status) || 500;
+  const message = error.code === "LIMIT_FILE_SIZE" ? "文件超过允许的上传大小" : error.type === "entity.parse.failed" ? "请求内容不是有效的 JSON" : status >= 500 ? "服务器处理请求失败" : sanitizeSensitiveText(error.message);
+  res.status(status).json({ error: message });
+});
 if (fs.existsSync(webDist)) app.use(express.static(webDist));
 app.get("*", (_, res, next) => {
   const index = path.join(webDist, "index.html");

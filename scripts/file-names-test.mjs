@@ -1,0 +1,12 @@
+import assert from "node:assert/strict";
+import { uploadFileName } from "../server/fileNames.js";
+assert.equal(uploadFileName("中文文件.txt"), "中文文件.txt");
+assert.equal(uploadFileName(Buffer.from("中文文件.txt").toString("latin1")), "中文文件.txt");
+assert.equal(uploadFileName("café.txt"), "café.txt");
+assert.equal(uploadFileName("../../secret.txt"), "secret.txt");
+assert.equal(uploadFileName("C:\\temp\\中文.txt"), "中文.txt");
+assert.equal(uploadFileName("bad\r\nname.txt"), "bad__name.txt");
+assert.equal(uploadFileName(".."), "file");
+assert.equal(uploadFileName(""), "file");
+assert.ok(Buffer.byteLength(uploadFileName("中".repeat(500))) <= 200);
+console.log("File names passed: 9 assertions, Unicode + multipart + path sanitization.");

@@ -212,6 +212,17 @@ try {
   const audit = await fetchJson(`http://127.0.0.1:${server.port}/api/audit`, { headers: authHeaders() });
   assert(audit.ok && Array.isArray(audit.body), "/api/audit missing");
 
+  const invalidJson = await fetchJson(`http://127.0.0.1:${server.port}/api/settings`, {
+    method: "PUT", headers: authHeaders(), body: "{broken"
+  });
+  assert(invalidJson.status === 400 && typeof invalidJson.body.error === "string", "invalid JSON must return a structured error");
+  const disallowedFile = new FormData();
+  disallowedFile.append("file", new Blob(["test"], { type: "application/octet-stream" }), "test.bin");
+  const invalidUpload = await fetchJson(`http://127.0.0.1:${server.port}/api/files/upload`, {
+    method: "POST", headers: { Authorization: "Bearer ck_smoke_token" }, body: disallowedFile
+  });
+  assert(invalidUpload.status === 415 && typeof invalidUpload.body.error === "string", "unsupported memo attachments must return JSON, not a stack trace");
+
   if (storageMode === "sqlite") {
     const cleanup = await fetchJson(`http://127.0.0.1:${server.port}/api/settings`, {
       method: "PUT",
