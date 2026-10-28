@@ -12,6 +12,7 @@ const headers = { Authorization: `Bearer ${token}` };
 let browser;
 let id;
 let file;
+let completed = false;
 async function request(path, options = {}) {
   const response = await fetch(base + path, { ...options, headers: { ...headers, ...(options.body instanceof FormData ? {} : options.body ? { "Content-Type": "application/json" } : {}), ...options.headers }, signal: AbortSignal.timeout(45000) });
   const body = await response.text();
@@ -22,8 +23,13 @@ function passed(name) { results.push({ name, ok: true }); console.log(`PASS ${na
 try {
   assert.equal((await fetch(base + "/api/agents")).status, 401);
   passed("public management API requires authentication");
-  const agents = await request("/api/agents");
-  const agent = agents.find((item) => item.connected);
+  let agent;
+  for (let attempt = 0; attempt < 45; attempt++) {
+    const agents = await request("/api/agents");
+    agent = agents.find((item) => item.connected && item.metrics && item.singboxStatus === "active");
+    if (agent) break;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
   assert.ok(agent?.metrics && agent.singboxStatus === "active");
   id = agent.id;
   passed("real agent, metrics and sing-box service online");
@@ -76,6 +82,7 @@ try {
   await page.getByRole("heading", { name: /工作台.*Overview/ }).waitFor();
   await page.getByRole("button", { name: agent.name, exact: true }).first().waitFor();
   await fs.mkdir(".local/ui-live", { recursive: true });
+  await page.locator(".server-address").evaluateAll((elements) => elements.forEach((element) => { element.textContent = element.textContent.replace(/(\d+\.\d+\.\d+)\.\d+/, "$1.xxx"); }));
   await page.screenshot({ path: ".local/ui-live/desktop.png", fullPage: true });
   const navigation = page.getByRole("navigation", { name: "主导航" });
   for (const name of ["服务器", "监控告警", "文件传输", "节点配置", "节点池", "订阅聚合", "端口转发", "资产 / 凭据 / 脚本", "Memos / 文件", "审计日志", "设置"]) {
@@ -101,6 +108,7 @@ try {
   passed("browser WebSocket terminal executes a real SSH command");
   await navigation.getByRole("button", { name: "工作台", exact: true }).click();
   await page.setViewportSize({ width: 390, height: 1000 });
+  await page.locator(".server-address").evaluateAll((elements) => elements.forEach((element) => { element.textContent = element.textContent.replace(/(\d+\.\d+\.\d+)\.\d+/, "$1.xxx"); }));
   await page.screenshot({ path: ".local/ui-live/mobile.png", fullPage: true });
   await page.getByRole("button", { name: "打开导航" }).click();
   await page.getByRole("navigation", { name: "移动端导航" }).getByRole("button", { name: "文件传输", exact: true }).click();
@@ -110,9 +118,10 @@ try {
   assert.deepEqual(errors, [], "browser runtime errors");
   assert.deepEqual(apiErrors, [], "browser API errors");
   passed("zero browser exceptions and zero failed management API requests");
+  completed = true;
 } finally {
   if (file && id) await request(`/api/agents/${id}/sftp?path=${encodeURIComponent(file)}`, { method: "DELETE" });
   await browser?.close();
   await fs.mkdir(".local/ui-live", { recursive: true });
-  await fs.writeFile(".local/ui-live/results.json", JSON.stringify({ at: new Date().toISOString(), results }, null, 2));
+  await fs.writeFile(".local/ui-live/results.json", JSON.stringify({ ok: completed, at: new Date().toISOString(), results }, null, 2));
 }
